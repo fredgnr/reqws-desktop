@@ -31,6 +31,7 @@ describe('preload ReqwsAPI contract', () => {
     expect(Object.keys(api)).toEqual([
       'repositories',
       'workspaces',
+      'settings',
       'dialogs',
       'editors',
       'operations',
@@ -64,9 +65,20 @@ describe('preload ReqwsAPI contract', () => {
       'ws_1',
     );
 
-    await api.workspaces.getSettings();
+    await api.settings.get();
     expect(electronMock.invoke).toHaveBeenLastCalledWith(
-      IPC_CHANNELS.workspaces.getSettings,
+      IPC_CHANNELS.settings.get,
+    );
+
+    const settings = {
+      localePreference: 'system' as const,
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    };
+    await api.settings.save(settings);
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(
+      IPC_CHANNELS.settings.save,
+      settings,
     );
 
     await api.editors.openCursorRoot('ws_1');

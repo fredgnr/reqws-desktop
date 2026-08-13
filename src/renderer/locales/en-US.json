@@ -1,0 +1,333 @@
+{
+  "common": {
+    "actions": "Actions",
+    "add": "Add",
+    "available": "Available",
+    "cancel": "Cancel",
+    "chooseDirectory": "Choose…",
+    "clear": "Clear",
+    "close": "Close",
+    "completed": "Complete",
+    "dismissNotification": "Dismiss notification",
+    "editorNotFound": "{{editor}} was not found",
+    "failure": "Failed",
+    "gitNotFound": "Git was not found",
+    "inProgress": "In progress",
+    "labelSeparator": ":",
+    "pressKeyToClose": "Press {{key}} to close",
+    "processing": "Processing…",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing…",
+    "remove": "Remove",
+    "repository": "Repository",
+    "repositoryCount": "{{count}} repositories",
+    "repositoryCount_one": "{{count}} repository",
+    "repositoryCount_other": "{{count}} repositories",
+    "saving": "Saving…",
+    "success": "Successful",
+    "unavailable": "Unavailable",
+    "updatedAt": "Updated {{date}}",
+    "status": {
+      "ready": "Ready",
+      "missing": "Missing",
+      "error": "Error"
+    }
+  },
+  "navigation": {
+    "main": "Main navigation",
+    "workspaces": "Workspaces",
+    "repositories": "Repositories",
+    "settings": "Settings"
+  },
+  "shell": {
+    "brandSubtitle": "Isolated workspace manager",
+    "localOnly": {
+      "title": "Stored locally",
+      "description": "Repository details, paths, and operation logs stay on this Mac."
+    },
+    "workspaces": {
+      "subtitle": "Create, manage, and open isolated multi-repository workspaces"
+    },
+    "repositories": {
+      "subtitle": "Manage the Git repositories available to new workspaces"
+    },
+    "settings": {
+      "subtitle": "Manage the interface language and default locations for new workspaces"
+    }
+  },
+  "confirmDialog": {
+    "localFilesPreserved": "No local files or folders will be deleted."
+  },
+  "createWorkspace": {
+    "title": "Create workspace",
+    "description": "ReqWS clones each selected repository into an isolated directory and switches them to the same feature branch.",
+    "name": {
+      "label": "Workspace name",
+      "help": "Used to generate the default folder and .code-workspace file names."
+    },
+    "branch": {
+      "label": "Feature branch",
+      "help": "If the branch exists on the remote, ReqWS tracks it. Otherwise, it creates the branch from each repository’s default branch."
+    },
+    "rootPath": {
+      "label": "Workspace code folder",
+      "help": "After you choose a parent folder, ReqWS generates the final path from the workspace name. You can also enter an absolute path."
+    },
+    "workspaceFileDirectory": {
+      "label": ".code-workspace file folder",
+      "help": "File to create: {{filename}}"
+    },
+    "repositories": {
+      "label": "Select repositories",
+      "selectedCount": "{{count}} selected",
+      "selectedCount_one": "{{count}} selected",
+      "selectedCount_other": "{{count}} selected",
+      "searchLabel": "Search available repositories",
+      "searchPlaceholder": "Search repositories…",
+      "noMatches": "No matching repositories",
+      "required": "Select at least one repository."
+    },
+    "rules": {
+      "title": "How creation works: ",
+      "description": "Selected repositories are cloned one at a time. If any step fails, ReqWS cleans up temporary files and does not save an incomplete workspace. It never pushes automatically or shares Git metadata between repositories."
+    },
+    "creating": "Creating…",
+    "submit": "Create workspace"
+  },
+  "repositories": {
+    "summary": {
+      "total": { "label": "Repositories", "description": "Available when creating a workspace" },
+      "inUse": { "label": "In use", "description": "Used by at least one workspace" },
+      "git": { "available": "Detected; Git operations are available", "unavailable": "Not detected; Git operations are unavailable" }
+    },
+    "gitUnavailable": "Git was not found. You can still edit the repository list, but connection tests, workspace creation, and adding repositories to workspaces are unavailable.",
+    "search": { "label": "Search repositories", "placeholder": "Search by name, Git URL, or default branch…" },
+    "resultCount": "{{count}} repositories",
+    "resultCount_one": "{{count}} repository",
+    "resultCount_other": "{{count}} repositories",
+    "loading": "Loading repositories…",
+    "table": { "name": "Name", "url": "Git URL", "defaultBranch": "Default branch", "usage": "Workspaces" },
+    "workspaceUsageCount": "{{count}} workspaces",
+    "workspaceUsageCount_one": "{{count}} workspace",
+    "workspaceUsageCount_other": "{{count}} workspaces",
+    "test": "Test",
+    "edit": "Edit {{name}}",
+    "empty": {
+      "noMatches": { "title": "No matching repositories", "description": "Try a repository name, Git URL, or default branch." },
+      "initial": { "title": "No repositories yet", "description": "Add a repository to make it available when creating workspaces." }
+    }
+  },
+  "repositoryDialog": {
+    "createTitle": "Add repository",
+    "editTitle": "Edit repository",
+    "description": "Saving stores the repository settings; it does not clone the repository. You can save even if the connection test fails.",
+    "url": { "label": "Git repository URL", "help": "Supports credential-free HTTPS and SSH URLs. The name is filled from the URL when you add a repository." },
+    "name": "Name",
+    "defaultBranch": "Default branch",
+    "gitUnavailable": "Git was not found, so connection testing is unavailable. You can still save the repository settings.",
+    "test": {
+      "resultLabel": "Connection test: ",
+      "remoteDefaultBranch": "Remote default branch: {{branch}}",
+      "failureDoesNotBlockSave": "A failed connection test does not prevent saving.",
+      "testing": "Testing…",
+      "action": "Test connection"
+    },
+    "editWarning": "Changing the URL or default branch does not update repositories in existing workspaces.",
+    "remove": "Delete repository record",
+    "create": "Add repository",
+    "save": "Save changes"
+  },
+  "workspaces": {
+    "summary": {
+      "total": { "label": "Workspaces", "description": "All workspaces" },
+      "ready": { "label": "Ready", "description": "Code folders and workspace files are available" },
+      "repositories": { "label": "Repositories", "description": "Records in the repository list" }
+    },
+    "editorsUnavailable": "These editors are unavailable: {{editors}}",
+    "search": { "label": "Search workspaces", "placeholder": "Search by name, branch, repository, or path…" },
+    "resultCount": "{{count}} workspaces",
+    "resultCount_one": "{{count}} workspace",
+    "resultCount_other": "{{count}} workspaces",
+    "loading": "Loading workspaces…",
+    "table": { "workspace": "Workspace", "repositories": "Repositories", "rootPath": "Code folder", "status": "Status" },
+    "pathIncomplete": "The workspace paths are incomplete",
+    "viewDetails": "View details for {{name}}",
+    "empty": {
+      "noMatches": { "title": "No matching workspaces", "description": "Try a name, branch, repository, or path." },
+      "initial": { "title": "No workspaces yet", "description": "Select at least one repository to create your first isolated workspace." }
+    }
+  },
+  "workspaceDetail": {
+    "openCursorRoot": "Open code folder in Cursor",
+    "revealInFinder": "Show in Finder",
+    "editorDisabledPathIncomplete": "The workspace paths are incomplete, so it cannot be opened in an editor.",
+    "editorsUnavailable": "These editors are unavailable: {{editors}}",
+    "rootPath": "Code folder",
+    "workspaceFile": "Workspace file",
+    "updatedAt": "Updated",
+    "pathsMissing": "Some workspace paths or files no longer exist.",
+    "statusError": "This workspace currently has an error.",
+    "managedFileNotice": "ReqWS manages this .code-workspace file. Adding, removing, or syncing repositories regenerates the file and overwrites manual changes.",
+    "syncAndRestore": "Regenerate workspace file",
+    "repositories": {
+      "count": "Repositories · {{count}}",
+      "count_one": "Repository · {{count}}",
+      "count_other": "Repositories · {{count}}",
+      "branch": "All use branch {{branch}}",
+      "empty": "No repositories",
+      "removeNotice": "Removing a repository from the workspace only updates its manifest and .code-workspace file. It does not delete the local repository folder."
+    },
+    "addRepository": {
+      "title": "Add repository",
+      "description": "Choose from the repository list",
+      "label": "Choose a repository to add",
+      "empty": "No other repositories are available"
+    },
+    "forget": {
+      "title": "Remove workspace record",
+      "description": "This only removes the record from the ReqWS workspace list. The code folder, workspace manifest, and .code-workspace file remain on disk.",
+      "action": "Remove workspace record"
+    }
+  },
+  "operation": {
+    "description": "Keep ReqWS open until the operation finishes. Other Git operations are unavailable in the meantime.",
+    "progressLabel": "Operation progress",
+    "titles": {
+      "create-workspace": "Creating workspace",
+      "add-repository": "Adding repository",
+      "remove-repository": "Removing repository",
+      "test-repository": "Testing repository connection",
+      "sync-workspace": "Syncing workspace"
+    },
+    "stages": {
+      "validating": "Checking input…",
+      "cloning": "Cloning repository…",
+      "fetching": "Fetching remote data…",
+      "switching": "Switching branch…",
+      "writing": "Writing workspace files…",
+      "rolling-back": "Safely cleaning up the incomplete operation…",
+      "ls-remote": "Checking the remote repository…",
+      "done": "Operation complete",
+      "error": "Operation failed",
+      "preparing": "Preparing…",
+      "launching": "Opening…"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "generalSection": "General",
+    "language": {
+      "label": "Interface language",
+      "description": "Choose the language ReqWS uses.",
+      "system": "Follow system",
+      "zhCN": "简体中文",
+      "enUS": "English"
+    },
+    "workspaceSection": "Workspace defaults",
+    "workspaceParentDirectory": {
+      "label": "Default workspace parent folder",
+      "description": "New workspaces are created in this folder by default."
+    },
+    "workspaceFileDirectory": {
+      "label": ".code-workspace file folder",
+      "description": "Generated .code-workspace files are stored here by default."
+    },
+    "emptyDirectory": "Not set",
+    "directoryUnavailable": "The previously selected folder no longer exists or cannot be accessed. Choose another folder.",
+    "selectDirectory": "Choose",
+    "selectDirectoryFor": "Choose a folder for {{name}}",
+    "clearDirectory": "Clear",
+    "clearDirectoryFor": "Clear {{name}}",
+    "save": "Save settings",
+    "saving": "Saving…",
+    "saved": "Settings saved.",
+    "loading": "Loading settings…"
+  },
+  "app": {
+    "toasts": {
+      "operationFailed": "{{code}} · The operation failed",
+      "repositoryUpdated": "Updated repository “{{name}}”.",
+      "repositoryCreated": "Added repository “{{name}}”.",
+      "repositoryTestSucceeded": "Connected to repository “{{name}}”.",
+      "repositoryTestFailed": "Could not connect to repository “{{name}}”. You can still edit and save it.",
+      "workspaceCreated": "Created workspace “{{name}}”.",
+      "repositoryRecordRemoved": "Removed “{{name}}” from the repository list. Its local clone was not deleted.",
+      "workspaceRepositoryRemoved": "Removed “{{name}}” from the workspace. Its local folder was not deleted.",
+      "workspaceRecordRemoved": "Removed “{{name}}” from ReqWS. Files on disk were not deleted.",
+      "repositoryAdded": "Repository added to the workspace.",
+      "workspaceSynced": "Regenerated the workspace file.",
+      "openedVSCode": "Opened the workspace in VS Code.",
+      "openedCursor": "Opened the workspace in Cursor.",
+      "openedCursorRoot": "Opened the code folder in Cursor.",
+      "revealedFinder": "Revealed the code folder in Finder."
+    },
+    "confirmations": {
+      "removeRepository": {
+        "title": "Delete repository record “{{name}}”?",
+        "referenced": "“{{name}}” is still used by these workspaces: {{workspaces}}. Deleting the record does not change existing workspaces or delete local clones.",
+        "unreferenced": "Deleting the record does not delete any local clones.",
+        "action": "Delete repository record"
+      },
+      "removeWorkspaceRepository": {
+        "title": "Remove “{{name}}” from the workspace?",
+        "description": "ReqWS updates the workspace manifest and .code-workspace file, but does not delete the local repository folder.",
+        "action": "Remove repository"
+      },
+      "forgetWorkspace": {
+        "title": "Remove workspace record “{{name}}”?",
+        "description": "This only removes the record from the ReqWS workspace list. The code folder, workspace manifest, and .code-workspace file are preserved.",
+        "action": "Remove workspace record"
+      }
+    },
+    "directoryDialogs": {
+      "workspaceParent": "Choose where to store workspaces",
+      "workspaceFile": "Choose where to store .code-workspace files"
+    },
+    "loadingWorkspaceDetail": "Loading workspace details"
+  },
+  "errors": {
+    "fallback": "The operation failed. Try again.",
+    "copyLog": "Copy error log",
+    "stage": "Stage",
+    "technicalMessage": "Technical information",
+    "technicalDetails": "Technical details",
+    "settingsLoadFailed": "Settings could not be loaded.",
+    "settingsSaveFailed": "Settings could not be saved.",
+    "settingsDirectoryInvalid": "The selected folder is invalid or no longer exists.",
+    "codes": {
+      "GIT_NOT_FOUND": "Git could not be found.",
+      "GIT_PROCESS_FAILED": "The Git operation failed.",
+      "GIT_PROCESS_TIMEOUT": "The Git operation timed out.",
+      "INVALID_INPUT": "The input is invalid.",
+      "INVALID_REPOSITORY_NAME": "The repository name is invalid.",
+      "DUPLICATE_REPOSITORY_NAME": "That repository name already exists.",
+      "INVALID_BRANCH_NAME": "The branch name is invalid.",
+      "REPOSITORY_UNREACHABLE": "The repository could not be reached.",
+      "REPOSITORY_IN_USE": "The repository is still used by a workspace.",
+      "WORKSPACE_ROOT_EXISTS": "The workspace folder already exists.",
+      "WORKSPACE_FILE_EXISTS": "The workspace file already exists.",
+      "CLONE_FAILED": "The repository could not be cloned.",
+      "DEFAULT_BRANCH_NOT_FOUND": "The default branch could not be found.",
+      "FEATURE_BRANCH_CHECKOUT_FAILED": "The feature branch could not be checked out.",
+      "WORKSPACE_NOT_FOUND": "The workspace could not be found.",
+      "WORKSPACE_PATH_MISSING": "A workspace path is missing.",
+      "REPOSITORY_NOT_FOUND": "The repository could not be found.",
+      "REPOSITORY_ALREADY_ADDED": "The repository is already in this workspace.",
+      "REPOSITORY_PATH_CONFLICT": "The repository folder conflicts with an existing folder.",
+      "EDITOR_NOT_FOUND": "The requested editor could not be found.",
+      "STATE_READ_FAILED": "Application data could not be read.",
+      "STATE_WRITE_FAILED": "Application data could not be saved.",
+      "STATE_CORRUPT": "The application data file is corrupt.",
+      "SETTINGS_INVALID_LOCALE": "The selected interface language is not supported.",
+      "SETTINGS_DIRECTORY_NOT_FOUND": "The selected folder does not exist or cannot be accessed.",
+      "SETTINGS_DIRECTORY_NOT_DIRECTORY": "The selected path is not a folder.",
+      "SETTINGS_READ_FAILED": "Settings could not be loaded.",
+      "SETTINGS_WRITE_FAILED": "Settings could not be saved.",
+      "MANIFEST_READ_FAILED": "The workspace manifest could not be read.",
+      "MANIFEST_WRITE_FAILED": "The workspace manifest could not be saved.",
+      "WORKSPACE_FILE_WRITE_FAILED": "The workspace file could not be written.",
+      "OPERATION_IN_PROGRESS": "Another operation is already in progress.",
+      "UNKNOWN": "An unknown error occurred."
+    }
+  }
+}

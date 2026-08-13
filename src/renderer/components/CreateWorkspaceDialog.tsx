@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { CreateWorkspaceInput, Repository } from '../../shared/types';
 import { defaultFeatureBranch, matchesRepository, workspaceSlug } from '../utils';
 import { CloseButton, Dialog } from './Dialog';
@@ -25,6 +26,7 @@ export function CreateWorkspaceDialog({
   onPickDirectory,
   onCreate,
 }: CreateWorkspaceDialogProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [featureBranch, setFeatureBranch] = useState('feature/');
   const [branchEdited, setBranchEdited] = useState(false);
@@ -107,8 +109,8 @@ export function CreateWorkspaceDialog({
     <Dialog dismissible={!locked} onClose={onClose} titleId="create-workspace-title">
       <div className="dialog-header">
         <div>
-          <h2 className="dialog-title" id="create-workspace-title">创建 Feature Workspace</h2>
-          <div className="dialog-description">每个仓库都会完整 clone 到需求独立目录，并切换到同一个 feature 分支。</div>
+          <h2 className="dialog-title" id="create-workspace-title">{t('createWorkspace.title')}</h2>
+          <div className="dialog-description">{t('createWorkspace.description')}</div>
         </div>
         {!locked && <CloseButton onClick={onClose} />}
       </div>
@@ -116,44 +118,45 @@ export function CreateWorkspaceDialog({
         <div className="dialog-body">
           <div className="form-grid">
             <label className="field">
-              <span className="field-label">Workspace 名称 <span className="required">*</span></span>
-              <input autoFocus className="field-input" onChange={(event) => handleName(event.target.value)} required value={name} />
-              <span className="field-help">用于默认文件夹名和 `.code-workspace` 文件名。</span>
+              <span className="field-label">{t('createWorkspace.name.label')} <span className="required">*</span></span>
+              <input aria-label={t('createWorkspace.name.label')} autoFocus className="field-input" onChange={(event) => handleName(event.target.value)} required value={name} />
+              <span className="field-help">{t('createWorkspace.name.help')}</span>
             </label>
             <label className="field">
-              <span className="field-label">Feature 分支 <span className="required">*</span></span>
+              <span className="field-label">{t('createWorkspace.branch.label')} <span className="required">*</span></span>
               <input
+                aria-label={t('createWorkspace.branch.label')}
                 className="field-input mono"
                 onChange={(event) => { setFeatureBranch(event.target.value); setBranchEdited(true); }}
                 required
                 value={featureBranch}
               />
-              <span className="field-help">远端存在则 tracking；否则从各 repo 默认分支创建。</span>
+              <span className="field-help">{t('createWorkspace.branch.help')}</span>
             </label>
             <DirectoryPickerField
-              help="选择按钮用于选择父目录；最终路径会自动拼接上方名称，也可手动输入绝对路径。"
-              label="代码目录（最终目录）"
+              help={t('createWorkspace.rootPath.help')}
+              label={t('createWorkspace.rootPath.label')}
               onChange={(value) => { setRootPath(value); setRootEdited(true); }}
               onPick={() => void pickRoot()}
               value={rootPath}
             />
             <DirectoryPickerField
-              help={<>将生成：<strong>{filename}</strong></>}
-              label="Workspace 文件目录"
+              help={t('createWorkspace.workspaceFileDirectory.help', { filename })}
+              label={t('createWorkspace.workspaceFileDirectory.label')}
               onChange={setWorkspaceFileDirectory}
               onPick={() => void pickWorkspaceFile()}
               value={workspaceFileDirectory}
             />
           </div>
           <div className="section-title-row">
-            <div className="section-title">选择仓库 <span className="required">*</span></div>
-            <div className="section-meta">已选择 {selectedIds.size} 个</div>
+            <div className="section-title">{t('createWorkspace.repositories.label')} <span className="required">*</span></div>
+            <div className="section-meta">{t('createWorkspace.repositories.selectedCount', { count: selectedIds.size })}</div>
           </div>
           <div className="repo-picker">
             <div className="repo-picker-search">
               <label>
-                <span className="sr-only">搜索可选仓库</span>
-                <input className="field-input" onChange={(event) => setRepoSearch(event.target.value)} placeholder="搜索仓库…" value={repoSearch} />
+                <span className="sr-only">{t('createWorkspace.repositories.searchLabel')}</span>
+                <input className="field-input" onChange={(event) => setRepoSearch(event.target.value)} placeholder={t('createWorkspace.repositories.searchPlaceholder')} value={repoSearch} />
               </label>
             </div>
             <div className="repo-picker-list">
@@ -171,21 +174,21 @@ export function CreateWorkspaceDialog({
                   </span>
                   <span className="branch-pill">{repository.defaultBranch}</span>
                 </label>
-              )) : <div className="empty-state">没有匹配的仓库</div>}
+              )) : <div className="empty-state">{t('createWorkspace.repositories.noMatches')}</div>}
             </div>
           </div>
-          {selectionError && <span className="field-error" role="alert">请至少选择一个 Repository。</span>}
+          {selectionError && <span className="field-error" role="alert">{t('createWorkspace.repositories.required')}</span>}
           <div className="summary-box">
-            <strong>创建规则：</strong>顺序 clone；任一仓库失败会清理 staging，不登记半成品；不会自动 push，也不会共享 `.git`。
+            <strong>{t('createWorkspace.rules.title')}</strong>{t('createWorkspace.rules.description')}
           </div>
           {error && <ErrorNotice error={error} />}
         </div>
         <div className="dialog-footer">
-          <span className="muted">快捷键 <span className="kbd">Esc</span> 关闭</span>
+          <span className="muted">{t('common.pressKeyToClose', { key: 'Esc' })}</span>
           <div className="dialog-actions">
-            <button className="button" disabled={locked} onClick={onClose} type="button">取消</button>
+            <button className="button" disabled={locked} onClick={onClose} type="button">{t('common.cancel')}</button>
             <button className="button primary" disabled={locked || repositories.length === 0} type="submit">
-              {locked ? '创建中…' : '创建 Workspace'}
+              {locked ? t('createWorkspace.creating') : t('createWorkspace.submit')}
             </button>
           </div>
         </div>

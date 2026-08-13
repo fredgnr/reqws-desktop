@@ -2,7 +2,7 @@
 
 ReqWS 是一个只在本机运行的 macOS Electron 应用，用来把多个 Git 仓库组织成彼此物理隔离的 feature workspace。每个 workspace 对每个仓库都使用完整 clone 和独立 `.git`，再把它们写入一个由 ReqWS 管理的 `.code-workspace` 文件。
 
-本仓库是技术方案 1.0 的完整源码实现。它提供本机 `.app` 的一键构建、打包、安装，以及从当前 checkout 重新构建并覆盖更新本机安装，但不包含 DMG、Developer ID 发布签名、公证、在线自动更新、账号、云同步、遥测、push、PR/MR 或 Git worktree。
+本仓库是[技术方案 1.0](docs/reference/reqws-desktop-mvp-technical-design.md) 的完整源码实现。它提供本机 `.app` 的一键构建、打包、安装，以及从当前 checkout 重新构建并覆盖更新本机安装，但不包含 DMG、Developer ID 发布签名、公证、在线自动更新、账号、云同步、遥测、push、PR/MR 或 Git worktree。
 
 ## 已实现功能
 
@@ -67,7 +67,7 @@ Makefile/npm 入口会先检查当前 Node；若当前 shell 仍在 Node 22 等�
 该命令会按顺序完成：
 
 1. `npm ci` 重建锁定依赖；
-2. `npm run check` 执行 typecheck、ESLint 和测试；
+2. `npm run check` 执行 typecheck、ESLint、i18n、文档检查和测试；
 3. 为当前 Mac 架构生成并验证 `out/ReqWS-darwin-<arch>/ReqWS.app`；
 4. 在 `/Applications` 内创建同卷 staging，将旧版临时备份后整体切换；
 5. 再次验证 bundle ID、版本、CPU 架构和代码签名；对脚本可捕获的复制、发布或校验错误，尽力恢复旧版；
@@ -184,8 +184,10 @@ scripts/
   run-install-macos.mjs  兼容旧 shell Node 的 Node 24 启动器
   install-macos.mts      macOS clean build、package 与本机安装脚手架
 docs/
-  reference/             原始技术方案、HTML 原型、预览图与 handoff
-  VERIFICATION.md        验证证据与 macOS smoke checklist
+  README.md              文档总索引与搜索入口
+  changes/               按需求聚合方案、测试和交付材料
+  standards/             文档规范与精简模板
+  reference/             冻结的原始方案、原型与 handoff
 ```
 
 ## 已知范围限制
@@ -198,4 +200,4 @@ docs/
 - 不生成 DMG 等公开分发安装包；本机 `.app` 使用 ad-hoc 签名，不包含 Developer ID 发布签名、公证或在线自动更新。
 - Node.js 没有暴露 macOS 的目录 `RENAME_NOREPLACE`/fd-relative file API；因此在恶意本地进程恰好于检查与 rename/open 之间交换一个空目录或父路径时，仍存在极窄 TOCTOU 窗口。正常并发、非空目标和已存在文件均会被拒绝；ReqWS 对已公开工件不做自动删除以优先保护用户数据。
 
-原始方案和原型保存在 `docs/reference/`，实现验证详情见 `docs/VERIFICATION.md`。
+完整导航见[项目文档索引](docs/README.md)。原始方案和原型保存在[历史参考](docs/reference/README.md)，MVP 实现验证快照见[2026-08-13 验证记录](docs/changes/mvp/testing/verification-2026-08-13.md)。

@@ -1,4 +1,13 @@
+---
+title: MVP 需求覆盖矩阵
+type: requirements
+status: archived
+updated: 2026-08-13
+---
+
 # MVP 需求覆盖矩阵
+
+本文追踪 MVP 1.0 需求条目与当时的实现、验证位置，是 2026-08-13 的历史覆盖快照。
 
 | 方案条目 | 实现位置 | 验证 |
 |---|---|---|
@@ -28,4 +37,4 @@
 | 不 push、不 worktree、不删除 repo | Git/Workspace service 命令范围 | integration tests + code audit |
 | 本机 package/install/update 脚手架 | `scripts/install-macos.mts`、Forge app identity/signing、npm scripts | catchable-failure transaction、interrupted-artifact fail-closed tests + target Mac package/install smoke |
 
-macOS GUI、Finder、已安装编辑器、SSH Agent 与公开 HTTPS transport 已在目标机完成 smoke，证据列在 `VERIFICATION.md`。由于目标机没有一个已由 credential helper 无交互授权、且不会被 Git 配置改写为 SSH 的私有 HTTPS fixture，私有 HTTPS helper 认证仍标记为外部证据缺口。
+macOS GUI、Finder、已安装编辑器、SSH Agent 与公开 HTTPS transport 已在目标机完成 smoke，证据列在[验证记录](testing/verification-2026-08-13.md)。由于目标机没有一个已由 credential helper 无交互授权、且不会被 Git 配置改写为 SSH 的私有 HTTPS fixture，私有 HTTPS helper 认证仍标记为外部证据缺口。

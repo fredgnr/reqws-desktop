@@ -106,6 +106,7 @@ export class EditorLauncher {
     } catch {
       return {
         available: false,
+        reasonCode: 'NOT_FOUND',
         reason: 'Git was not found in PATH or a supported macOS location.',
       };
     }
@@ -123,6 +124,7 @@ export class EditorLauncher {
 
     return {
       available: false,
+      reasonCode: 'NOT_FOUND',
       reason: `${appName} was not found in /Applications or ~/Applications.`,
     };
   }
@@ -219,4 +221,3 @@ export class EditorLauncher {
     );
   }
 }
-

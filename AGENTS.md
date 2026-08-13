@@ -4,13 +4,29 @@
 
 ReqWS is a macOS-only Electron app written in TypeScript and React. `src/main/` owns lifecycle, IPC, security, and privileged Git/state/workspace services. `src/preload/` exposes the typed bridge used by `src/renderer/`, which contains pages, components, and `styles/app.css`. Cross-process types, Zod schemas, IPC channels, errors, and pure utilities belong in `src/shared/`.
 
-Tests mirror these boundaries under `tests/unit/`, `tests/integration/`, and `tests/renderer/`; setup is in `tests/setup.ts`. Build/install tooling lives in `scripts/`. `docs/reference/` contains historical designs and prototype assets. Do not edit generated `node_modules/`, `.vite/`, `out/`, `dist/`, or `coverage/` content.
+Tests mirror these boundaries under `tests/unit/`, `tests/integration/`, and `tests/renderer/`; setup is in `tests/setup.ts`. Build/install tooling lives in `scripts/`. `docs/README.md` is the documentation entry point; `docs/reference/` contains frozen historical inputs. Do not edit generated `node_modules/`, `.vite/`, `out/`, `dist/`, or `coverage/` content.
+
+## Documentation Workflow
+
+Start every documentation search at `docs/README.md`, then read the matching category and requirement `README.md` files before opening leaf documents. Indexes state scope and authority; do not treat `docs/reference/` as current requirements.
+
+Search indexes first, then full text, using business terms, requirement IDs, IPC channels, schema names, or modules:
+
+```bash
+rg -n -i --glob 'README.md' '<keyword|requirement-id|module>' docs
+rg -n -i --glob '*.md' '<keyword|requirement-id|module>' docs
+rg --files docs | sort
+```
+
+For requirement work and behavior-changing fixes, use the project [reqws-documentation skill](.agents/skills/reqws-documentation/SKILL.md) and follow [the documentation standard](docs/standards/documentation-standard.md). Before implementation, assess whether requirements, technical design, test material, and delivery notes each need to be created, updated, or left unchanged. Produce only materially useful documents; never create empty four-document sets.
+
+Whenever a document is added, moved, renamed, deleted, or its status or one-line summary changes, update the nearest `README.md` in the same change. Update parent indexes when their direct entries or summaries change. Use relative Markdown links and concise descriptions. Run `npm run docs:check` after documentation changes and include documentation impact in the final handoff.
 
 ## Build, Test, and Development Commands
 
 - `nvm use && npm ci`: select Node 24 and install locked dependencies.
 - `npm start`: run Electron Forge with Vite for local development.
-- `npm run check`: run TypeScript checks, ESLint, and the complete Vitest suite.
+- `npm run check`: run TypeScript, ESLint, i18n, documentation, and the complete Vitest suite checks.
 - `npm run test:unit`, `npm run test:integration`, or `npm run test:renderer`: run one layer; use `npm run test:watch` while iterating.
 - `npm run package:macos`: create `out/ReqWS-darwin-<arch>/ReqWS.app` without installing it.
 - `npm run install:macos` (or `make install`): clean, check, package, and install locally. Never run the whole command with `sudo`.

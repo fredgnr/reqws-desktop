@@ -1,6 +1,15 @@
+---
+title: ReqWS Desktop MVP 交付说明
+type: delivery
+status: archived
+updated: 2026-08-13
+---
+
 # ReqWS Desktop MVP 交付说明
 
-本目录包含可从零安装的完整源码、测试、锁文件、文档和原始参考资源。交付 ZIP 不包含 `node_modules`、Vite/Forge 构建缓存、覆盖率或预先构建的 `.app`；可在目标 Mac 上用仓库脚手架生成。
+本文记录 2026-08-13 的 ReqWS Desktop MVP 源码交付范围、验证基线和本机安装方式。
+
+本仓库包含可从零安装的完整源码、测试、锁文件、文档和原始参考资源。交付 ZIP 不包含 `node_modules`、Vite/Forge 构建缓存、覆盖率或预先构建的 `.app`；可在目标 Mac 上用仓库脚手架生成。
 
 ## 交付内容
 
@@ -11,7 +20,7 @@
 - `tests`：unit、真实本地 Git integration、renderer/jsdom 测试。
 - `scripts/run-install-macos.mjs`：从旧 shell Node 自动定位并切换到项目要求的 Node 24。
 - `scripts/install-macos.mts`：macOS clean build、package、安全替换安装、可捕获错误回滚与启动脚手架。
-- `docs/reference`：原始技术方案、HTML 原型、UI 预览图和原 handoff ZIP。
+- [历史参考](../../reference/README.md)：原始技术方案、HTML 原型、UI 预览图和原 handoff ZIP。
 - `package-lock.json`：精确依赖图；请使用 `npm ci`，不要删除锁文件。
 
 ## 已验证基线
@@ -23,7 +32,7 @@
 - Forge renderer/main/preload development bundles 构建并启动通过。
 - `electron-forge package` 生成 arm64 `ReqWS.app`，asar 中的 main、preload 和 renderer 产物完整；打包应用启动通过。
 - `npm run install:macos` 已在隔离目录和真实 `/Applications` 完成端到端验证；bundle ID、架构、可严格校验的本机 ad-hoc 签名、Hardened Runtime 兼容性、staging 整体替换、可捕获失败恢复和启动存活探针均已验证。
-- macOS GUI smoke 已完成；结果、隔离工件和唯一未补齐的私有 HTTPS credential-helper 证据见 `VERIFICATION.md`。
+- macOS GUI smoke 已完成；结果、隔离工件和唯一未补齐的私有 HTTPS credential-helper 证据见[验证记录](testing/verification-2026-08-13.md)。
 
 ## 运行
 
@@ -34,7 +43,7 @@ npm run check
 npm start
 ```
 
-应用目标平台为 macOS。本次已在目标 Mac 验证 Finder、LaunchServices、VS Code/Cursor、SSH Agent、公开 HTTPS transport 和主要状态恢复流程；逐项证据见 `VERIFICATION.md`。
+应用目标平台为 macOS。本次已在目标 Mac 验证 Finder、LaunchServices、VS Code/Cursor、SSH Agent、公开 HTTPS transport 和主要状态恢复流程；逐项证据见[验证记录](testing/verification-2026-08-13.md)。
 
 ## 本机安装与更新
 

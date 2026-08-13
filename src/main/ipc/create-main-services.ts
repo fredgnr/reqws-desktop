@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  app,
   BrowserWindow,
   dialog,
   type IpcMainInvokeEvent,
@@ -12,6 +13,7 @@ import { EditorLauncher } from '../services/editor-launcher';
 import { GitRunner } from '../services/git-runner';
 import { OperationReporter } from '../services/operation-reporter';
 import { RepositoryService } from '../services/repository-service';
+import { DefaultSettingsService } from '../services/settings-service';
 import { WorkspaceFileWriter } from '../services/workspace-file-writer';
 import {
   WorkspaceMutationCoordinator,
@@ -56,6 +58,7 @@ function normalizeGitUnavailable(error: unknown): ReqwsError {
 
 export interface MainServiceFactoryOptions {
   resolveGit?: () => Promise<GitRunner>;
+  getPreferredSystemLanguages?: () => readonly string[];
 }
 
 export async function createMainServices(
@@ -66,6 +69,10 @@ export async function createMainServices(
     path.join(userDataPath, STATE_FILE_RELATIVE_PATH),
   );
   const repositoryService = new RepositoryService(stateStore);
+  const settingsService = new DefaultSettingsService(
+    stateStore,
+    options.getPreferredSystemLanguages ?? (() => app.getPreferredSystemLanguages()),
+  );
   const workspaceFiles = new WorkspaceFileWriter();
 
   let git: GitRunner | null = null;
@@ -110,6 +117,7 @@ export async function createMainServices(
 
   return {
     repositoryService,
+    settingsService,
     git,
     gitAvailable: git !== null,
     gitUnavailableError,

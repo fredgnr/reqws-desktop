@@ -1,4 +1,5 @@
 import { Check, LoaderCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Dialog } from './Dialog';
 import type { DisplayError } from '../error-utils';
 import { ErrorNotice } from './ErrorNotice';
@@ -14,6 +15,7 @@ export interface OperationView {
 }
 
 export function OperationDialog({ operation, onClose }: { operation: OperationView; onClose: () => void }): React.JSX.Element {
+  const { t } = useTranslation();
   const done = !operation.error && (operation.done || (operation.total > 0 && operation.current >= operation.total));
   const percent = operation.total > 0 ? Math.min(100, Math.round((operation.current / operation.total) * 100)) : 0;
   return (
@@ -21,7 +23,7 @@ export function OperationDialog({ operation, onClose }: { operation: OperationVi
       <div className="dialog-header">
         <div>
           <h2 className="dialog-title" id="operation-title">{operation.title}</h2>
-          <div className="dialog-description">Git 操作进行时不能重复提交，请保持应用打开。</div>
+          <div className="dialog-description">{t('operation.description')}</div>
         </div>
       </div>
       <div className="dialog-body">
@@ -30,10 +32,12 @@ export function OperationDialog({ operation, onClose }: { operation: OperationVi
             {done ? <Check aria-hidden="true" size={12} /> : <LoaderCircle aria-hidden="true" size={12} />}
           </span>
           <span className="progress-name">{operation.repositoryName ? `${operation.message} · ${operation.repositoryName}` : operation.message}</span>
-          <span className="progress-state">{operation.error ? '失败' : done ? '完成' : '进行中'}</span>
+          <span className="progress-state">
+            {operation.error ? t('common.failure') : done ? t('common.completed') : t('common.inProgress')}
+          </span>
         </div>
         <div
-          aria-label="操作进度"
+          aria-label={t('operation.progressLabel')}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={percent}
@@ -46,7 +50,7 @@ export function OperationDialog({ operation, onClose }: { operation: OperationVi
       {(operation.error || done) && (
         <div className="dialog-footer">
           <span />
-          <button className="button primary" onClick={onClose} type="button">关闭</button>
+          <button className="button primary" onClick={onClose} type="button">{t('common.close')}</button>
         </div>
       )}
     </Dialog>

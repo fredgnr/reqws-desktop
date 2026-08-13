@@ -17,7 +17,11 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:renderer": "vitest run tests/renderer",
-    "check": "npm run typecheck && npm run lint && npm test",
+    "i18n:scan": "node scripts/check-i18n.mjs --scan",
+    "i18n:apply": "node scripts/check-i18n.mjs --apply",
+    "i18n:check": "node scripts/check-i18n.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
+    "check": "npm run typecheck && npm run lint && npm run i18n:check && npm run docs:check && npm test",
     "package:macos": "node scripts/run-install-macos.mjs --package-only",
     "install:macos": "node scripts/run-install-macos.mjs"
   },
@@ -35,9 +39,11 @@
     "tmp": "0.2.7"
   },
   "dependencies": {
+    "i18next": "26.2.0",
     "lucide-react": "1.31.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-i18next": "17.0.10",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -9,11 +9,7 @@ import {
   idSchema,
   removeWorkspaceRepositoryInputSchema,
 } from '../../shared/schemas';
-import type {
-  AppSettings,
-  WorkspaceDetail,
-  WorkspaceSummary,
-} from '../../shared/types';
+import type { WorkspaceDetail, WorkspaceSummary } from '../../shared/types';
 import type { WorkspaceService } from '../services/workspace-service';
 import type { IpcHandlerMap } from './repository-handlers';
 import { toIpcResult } from './ipc-result';
@@ -21,7 +17,6 @@ import { toIpcResult } from './ipc-result';
 type WorkspaceServicePort = Pick<
   WorkspaceService,
   | 'list'
-  | 'getSettings'
   | 'get'
   | 'create'
   | 'addRepository'
@@ -56,11 +51,6 @@ export function createWorkspaceHandlers(
       toIpcResult<WorkspaceSummary[]>(() => {
         noArgumentsSchema.parse(args);
         return dependencies.createWorkspaceService(event).list();
-      }),
-    [IPC_CHANNELS.workspaces.getSettings]: (event, ...args) =>
-      toIpcResult<AppSettings>(() => {
-        noArgumentsSchema.parse(args);
-        return dependencies.createWorkspaceService(event).getSettings();
       }),
     [IPC_CHANNELS.workspaces.get]: (event, ...args) =>
       toIpcResult<WorkspaceDetail>(() => {

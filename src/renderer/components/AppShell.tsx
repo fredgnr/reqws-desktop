@@ -1,7 +1,8 @@
-import { Boxes, FolderGit2, RefreshCw } from 'lucide-react';
+import { Boxes, FolderGit2, RefreshCw, Settings } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
-export type PageName = 'workspaces' | 'repositories';
+export type PageName = 'workspaces' | 'repositories' | 'settings';
 
 interface AppShellProps {
   page: PageName;
@@ -10,21 +11,26 @@ interface AppShellProps {
   refreshing: boolean;
   primaryDisabled?: boolean;
   onNavigate: (page: PageName) => void;
-  onRefresh: () => void;
-  onPrimary: () => void;
+  onRefresh?: () => void;
+  onPrimary?: () => void;
   children: ReactNode;
 }
 
 const pageCopy = {
   workspaces: {
-    title: 'Workspaces',
-    subtitle: '按需求搜索、管理并打开隔离的多仓库工作区',
-    action: '＋ 创建 Workspace',
+    title: 'navigation.workspaces',
+    subtitle: 'shell.workspaces.subtitle',
+    action: 'createWorkspace.submit',
   },
   repositories: {
-    title: 'Repositories',
-    subtitle: '维护可被 feature workspace 选择的 Git 仓库目录',
-    action: '＋ 录入 Repository',
+    title: 'navigation.repositories',
+    subtitle: 'shell.repositories.subtitle',
+    action: 'repositoryDialog.createTitle',
+  },
+  settings: {
+    title: 'navigation.settings',
+    subtitle: 'shell.settings.subtitle',
+    action: null,
   },
 } as const;
 
@@ -39,7 +45,10 @@ export function AppShell({
   onPrimary,
   children,
 }: AppShellProps): React.JSX.Element {
+  const { t } = useTranslation();
   const copy = pageCopy[page];
+  const showToolbar = copy.action !== null;
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -47,11 +56,11 @@ export function AppShell({
           <div aria-hidden="true" className="brand-mark">RW</div>
           <div>
             <div className="brand-title">ReqWS</div>
-            <div className="brand-subtitle">Feature workspace manager</div>
+            <div className="brand-subtitle">{t('shell.brandSubtitle')}</div>
           </div>
         </div>
-        <div className="nav-label">Workspace</div>
-        <nav aria-label="主导航" className="nav">
+        <div className="nav-label">ReqWS</div>
+        <nav aria-label={t('navigation.main')} className="nav">
           <button
             aria-current={page === 'workspaces' ? 'page' : undefined}
             className={`nav-button ${page === 'workspaces' ? 'active' : ''}`}
@@ -59,7 +68,7 @@ export function AppShell({
             type="button"
           >
             <span className="nav-icon"><Boxes aria-hidden="true" size={16} /></span>
-            <span className="nav-text">Workspaces</span>
+            <span className="nav-text">{t('navigation.workspaces')}</span>
             <span className="nav-count">{workspaceCount}</span>
           </button>
           <button
@@ -69,31 +78,43 @@ export function AppShell({
             type="button"
           >
             <span className="nav-icon"><FolderGit2 aria-hidden="true" size={16} /></span>
-            <span className="nav-text">Repositories</span>
+            <span className="nav-text">{t('navigation.repositories')}</span>
             <span className="nav-count">{repositoryCount}</span>
+          </button>
+          <button
+            aria-current={page === 'settings' ? 'page' : undefined}
+            className={`nav-button ${page === 'settings' ? 'active' : ''}`}
+            onClick={() => onNavigate('settings')}
+            type="button"
+          >
+            <span className="nav-icon"><Settings aria-hidden="true" size={16} /></span>
+            <span className="nav-text">{t('navigation.settings')}</span>
           </button>
         </nav>
         <div className="sidebar-spacer" />
         <div className="sidebar-note">
-          <strong>本机私有</strong><br />
-          仓库、路径和操作日志只保存在这台 Mac 上。
+          <strong>{t('shell.localOnly.title')}</strong><br />
+          {t('shell.localOnly.description')}
         </div>
       </aside>
       <main className="content">
         <header className="topbar">
           <div>
-            <h1 className="page-title">{copy.title}</h1>
-            <div className="page-subtitle">{copy.subtitle}</div>
+            <h1 className="page-title">{t(copy.title)}</h1>
+            <div className="page-subtitle">{t(copy.subtitle)}</div>
           </div>
-          <div className="toolbar-actions">
-            <button className="button" disabled={refreshing} onClick={onRefresh} type="button">
-              <RefreshCw aria-hidden="true" className={refreshing ? 'spinner' : ''} size={14} />
-              {refreshing ? '刷新中…' : '刷新'}
-            </button>
-            <button className="button primary" disabled={primaryDisabled} onClick={onPrimary} type="button">
-              {copy.action}
-            </button>
-          </div>
+          {showToolbar && (
+            <div className="toolbar-actions">
+              <button className="button" disabled={refreshing} onClick={onRefresh} type="button">
+                <RefreshCw aria-hidden="true" className={refreshing ? 'spinner' : ''} size={14} />
+                {t(refreshing ? 'common.refreshing' : 'common.refresh')}
+              </button>
+              <button className="button primary" disabled={primaryDisabled} onClick={onPrimary} type="button">
+                <span aria-hidden="true">＋</span>
+                {copy.action ? t(copy.action) : null}
+              </button>
+            </div>
+          )}
         </header>
         {children}
       </main>

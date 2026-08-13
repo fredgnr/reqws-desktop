@@ -8,13 +8,16 @@ export const IPC_CHANNELS = {
   },
   workspaces: {
     list: 'workspaces:list',
-    getSettings: 'workspaces:get-settings',
     get: 'workspaces:get',
     create: 'workspaces:create',
     addRepository: 'workspaces:add-repository',
     removeRepository: 'workspaces:remove-repository',
     sync: 'workspaces:sync',
     forget: 'workspaces:forget',
+  },
+  settings: {
+    get: 'settings:get',
+    save: 'settings:save',
   },
   dialogs: {
     selectDirectory: 'dialogs:select-directory',

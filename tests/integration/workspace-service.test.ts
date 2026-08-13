@@ -143,6 +143,12 @@ describe('WorkspaceService integration', () => {
   });
 
   it('creates a physically independent clone, manifest, workspace file, and index', async () => {
+    stateStore.state.settings = {
+      localePreference: 'en-US',
+      workspaceParentDirectory: '/global/features',
+      workspaceFileDirectory: '/global/workspaces',
+    };
+    const settingsBeforeCreation = structuredClone(stateStore.state.settings);
     const detail = await createWorkspace();
     const repositoryPath = path.join(detail.rootPath, 'order-api');
 
@@ -153,6 +159,7 @@ describe('WorkspaceService integration', () => {
     ) as { folders: Array<{ path: string }> };
     expect(workspace.folders[0]?.path).toBe(repositoryPath);
     expect(stateStore.state.workspaces).toHaveLength(1);
+    expect(stateStore.state.settings).toEqual(settingsBeforeCreation);
     const branch = await git.run(['branch', '--show-current'], { cwd: repositoryPath });
     expect(branch.stdout.trim()).toBe('feature/FEAT-123');
   });

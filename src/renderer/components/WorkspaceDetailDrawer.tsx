@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { EditorAvailability, Repository, WorkspaceDetail } from '../../shared/types';
 import { CloseButton, Dialog } from './Dialog';
 import { ErrorNotice } from './ErrorNotice';
@@ -20,10 +21,6 @@ interface WorkspaceDetailDrawerProps {
   onForget: () => void;
 }
 
-function statusLabel(status: WorkspaceDetail['status']): string {
-  return status === 'ready' ? 'Ready' : status === 'missing' ? 'Missing' : 'Error';
-}
-
 export function WorkspaceDetailDrawer({
   workspace,
   repositories,
@@ -39,6 +36,7 @@ export function WorkspaceDetailDrawer({
   onSync,
   onForget,
 }: WorkspaceDetailDrawerProps): React.JSX.Element {
+  const { i18n, t } = useTranslation();
   const availableRepositories = repositories.filter((repository) => (
     !workspace.repositories.some((item) => item.catalogRepositoryId === repository.id)
   ));
@@ -47,11 +45,18 @@ export function WorkspaceDetailDrawer({
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
   const vscodeReason = !ready
-    ? 'Workspace 路径不完整'
-    : availability?.vscode.reason ?? '未找到 Visual Studio Code';
+    ? t('workspaces.pathIncomplete')
+    : t('common.editorNotFound', { editor: 'Visual Studio Code' });
   const cursorReason = !ready
-    ? 'Workspace 路径不完整'
-    : availability?.cursor.reason ?? '未找到 Cursor';
+    ? t('workspaces.pathIncomplete')
+    : t('common.editorNotFound', { editor: 'Cursor' });
+  const unavailableEditors = [
+    !vscodeAvailable ? 'Visual Studio Code' : undefined,
+    !cursorAvailable ? 'Cursor' : undefined,
+  ].filter((editor): editor is string => Boolean(editor));
+  const unavailableEditorList = new Intl.ListFormat(
+    i18n.resolvedLanguage ?? i18n.language,
+  ).format(unavailableEditors);
 
   return (
     <Dialog dismissible={!busy} drawer onClose={onClose} titleId="workspace-detail-title">
@@ -59,7 +64,7 @@ export function WorkspaceDetailDrawer({
         <div>
           <div className="drawer-title-row">
             <h2 className="drawer-title" id="workspace-detail-title">{workspace.name}</h2>
-            <span className={`status ${workspace.status}`}>{statusLabel(workspace.status)}</span>
+            <span className={`status ${workspace.status}`}>{t(`common.status.${workspace.status}`)}</span>
           </div>
           <div className="drawer-branch">{workspace.featureBranch}</div>
         </div>
@@ -69,39 +74,39 @@ export function WorkspaceDetailDrawer({
         <div className="detail-actions">
           <button aria-describedby={!ready || !vscodeAvailable ? 'workspace-editor-status' : undefined} className="button primary" disabled={!ready || !vscodeAvailable} onClick={onOpenVSCode} title={!ready || !vscodeAvailable ? vscodeReason : undefined} type="button">VS Code</button>
           <button aria-describedby={!ready || !cursorAvailable ? 'workspace-editor-status' : undefined} className="button" disabled={!ready || !cursorAvailable} onClick={onOpenCursor} title={!ready || !cursorAvailable ? cursorReason : undefined} type="button">Cursor</button>
-          <button aria-describedby={!ready || !cursorAvailable ? 'workspace-editor-status' : undefined} className="button" disabled={!ready || !cursorAvailable} onClick={onOpenCursorRoot} title={!ready || !cursorAvailable ? cursorReason : undefined} type="button">Cursor 打开根目录</button>
-          <button className="button" onClick={onRevealFinder} type="button">Finder</button>
+          <button aria-describedby={!ready || !cursorAvailable ? 'workspace-editor-status' : undefined} className="button" disabled={!ready || !cursorAvailable} onClick={onOpenCursorRoot} title={!ready || !cursorAvailable ? cursorReason : undefined} type="button">{t('workspaceDetail.openCursorRoot')}</button>
+          <button className="button" onClick={onRevealFinder} type="button">{t('workspaceDetail.revealInFinder')}</button>
         </div>
         {(!ready || !vscodeAvailable || !cursorAvailable) && (
           <p className="muted" id="workspace-editor-status">
             {!ready
-              ? 'Workspace 路径不完整，编辑器打开操作已禁用。'
-              : [
-                  !vscodeAvailable ? vscodeReason : undefined,
-                  !cursorAvailable ? cursorReason : undefined,
-                ].filter(Boolean).join('；')}
+              ? t('workspaceDetail.editorDisabledPathIncomplete')
+              : t('workspaceDetail.editorsUnavailable', {
+                  editors: unavailableEditorList,
+                })}
           </p>
         )}
         <div className="detail-grid">
-          <div className="detail-label">代码目录</div>
+          <div className="detail-label">{t('workspaceDetail.rootPath')}</div>
           <div className="detail-value" title={workspace.rootPath}>{workspace.rootPath}</div>
-          <div className="detail-label">Workspace 文件</div>
+          <div className="detail-label">{t('workspaceDetail.workspaceFile')}</div>
           <div className="detail-value" title={workspace.workspaceFilePath}>{workspace.workspaceFilePath}</div>
-          <div className="detail-label">更新时间</div>
-          <div className="detail-value">{formatUpdatedAt(workspace.updatedAt)}</div>
+          <div className="detail-label">{t('workspaceDetail.updatedAt')}</div>
+          <div className="detail-value">{formatUpdatedAt(workspace.updatedAt, i18n.resolvedLanguage ?? i18n.language)}</div>
         </div>
-        {workspace.statusDetail && <div className="notice warning">{workspace.statusDetail}</div>}
+        {workspace.status === 'missing' && <div className="notice warning">{t('workspaceDetail.pathsMissing')}</div>}
+        {workspace.status === 'error' && !workspace.lastError && <div className="notice warning">{t('workspaceDetail.statusError')}</div>}
         {workspace.lastError && <ErrorNotice error={workspace.lastError} />}
-        <div className="notice">该 `.code-workspace` 文件由 ReqWS 管理；同步、增加或移除仓库时会重写，手工编辑不会被合并。</div>
+        <div className="notice">{t('workspaceDetail.managedFileNotice')}</div>
         {workspace.status !== 'ready' && (
           <div className="detail-actions" style={{ marginTop: 12 }}>
-            <button className="button" disabled={busy} onClick={onSync} type="button">同步并恢复 Workspace 文件</button>
+            <button className="button" disabled={busy} onClick={onSync} type="button">{t('workspaceDetail.syncAndRestore')}</button>
           </div>
         )}
 
         <div className="section-title-row">
-          <div className="section-title">Repositories · {workspace.repositories.length}</div>
-          <div className="section-meta">全部使用 {workspace.featureBranch}</div>
+          <div className="section-title">{t('workspaceDetail.repositories.count', { count: workspace.repositories.length })}</div>
+          <div className="section-meta">{t('workspaceDetail.repositories.branch', { branch: workspace.featureBranch })}</div>
         </div>
         <div className="repo-manage-list">
           {workspace.repositories.length > 0 ? workspace.repositories.map((repository) => (
@@ -110,30 +115,30 @@ export function WorkspaceDetailDrawer({
                 <div className="repo-manage-title">{repository.name}</div>
                 <div className="repo-manage-path">{workspace.rootPath}/{repository.relativePath}</div>
               </div>
-              <button className="button small danger" disabled={busy} onClick={() => onRemoveRepository(repository)} type="button">移除</button>
+              <button className="button small danger" disabled={busy} onClick={() => onRemoveRepository(repository)} type="button">{t('common.remove')}</button>
             </div>
-          )) : <div className="empty-state">暂无 Repository</div>}
+          )) : <div className="empty-state">{t('workspaceDetail.repositories.empty')}</div>}
         </div>
-        <div className="notice warning">“移除”只会更新 manifest 和 `.code-workspace`，本地 repo 目录会保留。</div>
+        <div className="notice warning">{t('workspaceDetail.repositories.removeNotice')}</div>
 
         <div className="section-title-row">
-          <div className="section-title">增加 Repository</div>
-          <div className="section-meta">从仓库目录选择</div>
+          <div className="section-title">{t('workspaceDetail.addRepository.title')}</div>
+          <div className="section-meta">{t('workspaceDetail.addRepository.description')}</div>
         </div>
         <div className="add-inline">
-          <label className="sr-only" htmlFor="add-workspace-repository">选择要增加的 Repository</label>
+          <label className="sr-only" htmlFor="add-workspace-repository">{t('workspaceDetail.addRepository.label')}</label>
           <select className="field-select" disabled={busy || availableRepositories.length === 0} id="add-workspace-repository" onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
             {availableRepositories.length > 0
               ? availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.defaultBranch}</option>)
-              : <option value="">没有可增加的仓库</option>}
+              : <option value="">{t('workspaceDetail.addRepository.empty')}</option>}
           </select>
-          <button className="button" disabled={busy || !repositoryId || !availability?.git.available} onClick={() => onAddRepository(repositoryId)} title={!availability?.git.available ? availability?.git.reason ?? '未找到 Git' : undefined} type="button">＋ 增加</button>
+          <button className="button" disabled={busy || !repositoryId || !availability?.git.available} onClick={() => onAddRepository(repositoryId)} title={!availability?.git.available ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
         </div>
 
         <div className="danger-zone">
-          <div className="section-title">从 ReqWS 中遗忘</div>
-          <p className="muted">仅从全局索引移除。代码目录、manifest 和 Workspace 文件仍保留在磁盘。</p>
-          <button className="button danger" disabled={busy} onClick={onForget} type="button">遗忘 Workspace</button>
+          <div className="section-title">{t('workspaceDetail.forget.title')}</div>
+          <p className="muted">{t('workspaceDetail.forget.description')}</p>
+          <button className="button danger" disabled={busy} onClick={onForget} type="button">{t('workspaceDetail.forget.action')}</button>
         </div>
       </div>
     </Dialog>

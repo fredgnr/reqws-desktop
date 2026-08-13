@@ -12,7 +12,6 @@ import {
 } from '../../shared/repository-utils';
 import type {
   AddWorkspaceRepositoryInput,
-  AppSettings,
   AppState,
   CreateWorkspaceInput,
   OperationProgress,
@@ -191,10 +190,6 @@ export class WorkspaceService {
       new WorkspaceMutationCoordinator(),
   ) {}
 
-  async getSettings(): Promise<AppSettings> {
-    return (await this.stateStore.read()).settings;
-  }
-
   async list(): Promise<WorkspaceSummary[]> {
     const state = await this.stateStore.read();
     return Promise.all(
@@ -247,7 +242,6 @@ export class WorkspaceService {
       const {
         repositories,
         rootPath,
-        workspaceFileDirectory: validatedWorkspaceFileDirectory,
         workspaceFilePath,
       } = await this.validateCreate(input);
       await this.branches.validateBranch(input.featureBranch);
@@ -313,14 +307,9 @@ export class WorkspaceService {
       current += 1;
 
       report('writing', '正在更新 ReqWS 索引');
-      await this.stateStore.update((state) => ({
-        ...replaceSummary(state, summaryFromManifest(manifest)),
-        settings: {
-          ...state.settings,
-          lastWorkspaceParentDirectory: path.dirname(manifest.rootPath),
-          lastWorkspaceFileDirectory: validatedWorkspaceFileDirectory,
-        },
-      }));
+      await this.stateStore.update((state) =>
+        replaceSummary(state, summaryFromManifest(manifest)),
+      );
       current = total;
       report('done', 'Workspace 创建完成');
       return { ...manifest, status: 'ready' };
@@ -637,7 +626,6 @@ export class WorkspaceService {
   private async validateCreate(input: CreateWorkspaceInput): Promise<{
     repositories: Repository[];
     rootPath: string;
-    workspaceFileDirectory: string;
     workspaceFilePath: string;
   }> {
     assertAbsolutePath(input.rootPath, 'Workspace root');
@@ -743,7 +731,6 @@ export class WorkspaceService {
     return {
       repositories: repositories as Repository[],
       rootPath,
-      workspaceFileDirectory,
       workspaceFilePath,
     };
   }

@@ -28,7 +28,11 @@ describe('AppStateStore', () => {
     const { store } = await createStore();
     expect(await store.read()).toEqual({
       schemaVersion: 1,
-      settings: {},
+      settings: {
+        localePreference: 'system',
+        workspaceParentDirectory: null,
+        workspaceFileDirectory: null,
+      },
       repositories: [],
       workspaces: [],
     });
@@ -38,21 +42,67 @@ describe('AppStateStore', () => {
     const { store } = await createStore();
     const first = store.update(async (state) => {
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      return { ...state, settings: { lastWorkspaceParentDirectory: '/first' } };
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          workspaceParentDirectory: '/first',
+        },
+      };
     });
     const second = store.update((state) => ({
       ...state,
       settings: {
         ...state.settings,
-        lastWorkspaceFileDirectory: '/second',
+        workspaceFileDirectory: '/second',
       },
     }));
 
     await Promise.all([first, second]);
 
     expect((await store.read()).settings).toEqual({
-      lastWorkspaceParentDirectory: '/first',
-      lastWorkspaceFileDirectory: '/second',
+      localePreference: 'system',
+      workspaceParentDirectory: '/first',
+      workspaceFileDirectory: '/second',
+    });
+  });
+
+  it('defaults a missing settings subtree without blocking startup', async () => {
+    const { store, filePath } = await createStore();
+    await writeFile(
+      filePath,
+      JSON.stringify({ schemaVersion: 1, repositories: [], workspaces: [] }),
+      'utf8',
+    );
+
+    expect((await store.read()).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    });
+  });
+
+  it('normalizes invalid settings fields and migrates valid legacy paths', async () => {
+    const { store, filePath } = await createStore();
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        settings: {
+          localePreference: 'fr-FR',
+          workspaceParentDirectory: 42,
+          lastWorkspaceFileDirectory: '/legacy/workspace-files',
+        },
+        repositories: [],
+        workspaces: [],
+      }),
+      'utf8',
+    );
+
+    expect((await store.read()).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: '/legacy/workspace-files',
     });
   });
 

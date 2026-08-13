@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { CloseButton, Dialog } from './Dialog';
 
 interface ConfirmDialogProps {
@@ -20,6 +21,8 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
 }: ConfirmDialogProps): React.JSX.Element {
+  const { t } = useTranslation();
+
   return (
     <Dialog className="small" dismissible={!busy} onClose={onCancel} titleId="confirm-dialog-title">
       <div className="dialog-header">
@@ -31,15 +34,15 @@ export function ConfirmDialog({
       </div>
       <div className="dialog-body">
         <div className="notice warning">
-          <AlertTriangle aria-hidden="true" size={15} /> 这项操作不会自动删除任何本地目录或文件。
+          <AlertTriangle aria-hidden="true" size={15} /> {t('confirmDialog.localFilesPreserved')}
         </div>
       </div>
       <div className="dialog-footer">
         <span />
         <div className="dialog-actions">
-          <button className="button" disabled={busy} onClick={onCancel} type="button">取消</button>
+          <button className="button" disabled={busy} onClick={onCancel} type="button">{t('common.cancel')}</button>
           <button className={`button ${danger ? 'danger' : 'primary'}`} disabled={busy} onClick={onConfirm} type="button">
-            {busy ? '处理中…' : confirmLabel}
+            {busy ? t('common.processing') : confirmLabel}
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import {
   appStateSchema,
   createRepositoryInputSchema,
   createWorkspaceInputSchema,
+  globalSettingsSchema,
   testRepositoryInputSchema,
   workspaceManifestSchema,
 } from '../../src/shared/schemas';
@@ -98,14 +99,58 @@ describe('IPC and state schemas', () => {
   });
 
   it('accepts the empty schema-v1 state', () => {
-    expect(
-      appStateSchema.parse({
-        schemaVersion: 1,
-        settings: {},
-        repositories: [],
-        workspaces: [],
-      }),
-    ).toBeTruthy();
+    expect(appStateSchema.parse({
+      schemaVersion: 1,
+      settings: {},
+      repositories: [],
+      workspaces: [],
+    }).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    });
+  });
+
+  it('normalizes missing, malformed, and legacy persisted settings', () => {
+    const base = { schemaVersion: 1 as const, repositories: [], workspaces: [] };
+    expect(appStateSchema.parse(base).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    });
+    expect(appStateSchema.parse({
+      ...base,
+      settings: {
+        localePreference: 'unknown',
+        workspaceParentDirectory: '../relative',
+        lastWorkspaceFileDirectory: '/legacy/workspaces',
+      },
+    }).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: '/legacy/workspaces',
+    });
+  });
+
+  it('uses a strict schema for settings save requests', () => {
+    const settings = {
+      localePreference: 'zh-CN',
+      workspaceParentDirectory: '/features',
+      workspaceFileDirectory: null,
+    };
+    expect(globalSettingsSchema.safeParse(settings).success).toBe(true);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      localePreference: 'fr-FR',
+    }).success).toBe(false);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      stateFilePath: '/tmp/attacker-state.json',
+    }).success).toBe(false);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      workspaceParentDirectory: 'relative/path',
+    }).success).toBe(false);
   });
 
   it('rejects duplicate semantic identities in state', () => {
