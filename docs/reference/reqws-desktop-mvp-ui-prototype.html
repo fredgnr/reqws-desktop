@@ -1,0 +1,1251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ReqWS Desktop MVP · UI Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f7;
+      --panel: rgba(255, 255, 255, 0.94);
+      --panel-solid: #ffffff;
+      --sidebar: #eef0f4;
+      --text: #17191d;
+      --muted: #6e737d;
+      --muted-2: #9398a2;
+      --line: #e1e4e9;
+      --line-strong: #d4d8df;
+      --accent: #4f65ee;
+      --accent-hover: #4057de;
+      --accent-soft: #eef0ff;
+      --success: #177c49;
+      --success-bg: #e9f7ef;
+      --warning: #9a6411;
+      --warning-bg: #fff6df;
+      --danger: #c43c3c;
+      --danger-bg: #fff0ef;
+      --shadow: 0 18px 55px rgba(32, 37, 46, 0.13);
+      --small-shadow: 0 8px 24px rgba(32, 37, 46, 0.08);
+      --radius: 13px;
+      --radius-sm: 9px;
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, system-ui, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      min-width: 1040px;
+      background:
+        radial-gradient(circle at 22% -10%, rgba(112, 132, 255, 0.18), transparent 28%),
+        radial-gradient(circle at 95% 12%, rgba(100, 203, 181, 0.13), transparent 24%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+
+    .app-window {
+      position: relative;
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      width: calc(100vw - 38px);
+      height: calc(100vh - 38px);
+      margin: 19px;
+      overflow: hidden;
+      background: rgba(255,255,255,.72);
+      border: 1px solid rgba(190, 195, 205, .72);
+      border-radius: 18px;
+      box-shadow: 0 28px 90px rgba(34, 40, 52, .19);
+      backdrop-filter: blur(24px);
+    }
+
+    .sidebar {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      padding: 18px 14px 14px;
+      background: rgba(235, 238, 243, .91);
+      border-right: 1px solid rgba(210, 214, 222, .88);
+    }
+
+    .traffic-lights {
+      display: flex;
+      gap: 8px;
+      padding: 1px 0 17px 3px;
+    }
+
+    .traffic-light { width: 12px; height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+    .traffic-light.red { background: #ff5f57; }
+    .traffic-light.yellow { background: #febc2e; }
+    .traffic-light.green { background: #28c840; }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 3px 8px 20px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      color: white;
+      font-weight: 760;
+      letter-spacing: -.6px;
+      background: linear-gradient(145deg, #6678f4, #4053d9);
+      border-radius: 10px;
+      box-shadow: 0 8px 17px rgba(79, 101, 238, .26);
+    }
+
+    .brand-title { font-size: 16px; font-weight: 720; letter-spacing: -.2px; }
+    .brand-subtitle { margin-top: 1px; color: var(--muted); font-size: 11px; }
+
+    .nav-label {
+      padding: 0 10px 7px;
+      color: var(--muted-2);
+      font-size: 10.5px;
+      font-weight: 760;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 10px 11px;
+      color: #4c515b;
+      background: transparent;
+      border: 0;
+      border-radius: 9px;
+      text-align: left;
+      transition: .16s ease;
+    }
+
+    .nav-button:hover { background: rgba(255,255,255,.58); }
+    .nav-button.active { color: #2738a8; background: rgba(255,255,255,.9); box-shadow: 0 1px 0 rgba(255,255,255,.8), 0 3px 10px rgba(65,70,84,.07); }
+    .nav-icon { display: grid; place-items: center; width: 19px; font-size: 16px; }
+    .nav-text { flex: 1; font-weight: 620; }
+    .nav-count { min-width: 23px; padding: 2px 6px; color: var(--muted); background: #e3e6eb; border-radius: 999px; font-size: 11px; text-align: center; }
+    .nav-button.active .nav-count { color: #4253c6; background: #eef0ff; }
+
+    .sidebar-spacer { flex: 1; }
+
+    .prototype-note {
+      padding: 11px;
+      color: var(--muted);
+      background: rgba(255,255,255,.58);
+      border: 1px solid rgba(210,214,221,.76);
+      border-radius: 10px;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .prototype-note strong { color: #4a4f59; }
+
+    .content {
+      position: relative;
+      min-width: 0;
+      overflow: auto;
+      background: rgba(250, 251, 252, .84);
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 82px;
+      padding: 18px 28px;
+      background: rgba(250, 251, 252, .88);
+      border-bottom: 1px solid rgba(222,225,231,.85);
+      backdrop-filter: blur(17px);
+    }
+
+    .page-title { margin: 0; font-size: 22px; font-weight: 760; letter-spacing: -.45px; }
+    .page-subtitle { margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+    .toolbar-actions { display: flex; align-items: center; gap: 9px; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 35px;
+      padding: 0 13px;
+      color: #333842;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      box-shadow: 0 1px 2px rgba(20, 24, 32, .03);
+      font-weight: 620;
+      white-space: nowrap;
+      transition: .15s ease;
+    }
+
+    .button:hover { background: #f7f8fa; border-color: #c8cdd6; }
+    .button.primary { color: white; background: var(--accent); border-color: var(--accent); box-shadow: 0 7px 15px rgba(79,101,238,.2); }
+    .button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .button.ghost { background: transparent; border-color: transparent; box-shadow: none; }
+    .button.ghost:hover { background: #f0f2f5; }
+    .button.danger { color: var(--danger); background: #fff; }
+    .button.danger:hover { background: var(--danger-bg); border-color: #efc1be; }
+    .button.small { min-height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+    .button:disabled { cursor: not-allowed; opacity: .46; box-shadow: none; }
+
+    .page { display: none; padding: 24px 28px 36px; }
+    .page.active { display: block; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .summary-card {
+      padding: 16px 17px;
+      background: rgba(255,255,255,.88);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 5px 16px rgba(34,39,49,.035);
+    }
+
+    .summary-label { color: var(--muted); font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .055em; }
+    .summary-value { margin-top: 7px; font-size: 24px; font-weight: 760; letter-spacing: -.45px; }
+    .summary-foot { margin-top: 4px; color: var(--muted); font-size: 11px; }
+
+    .panel {
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 6px 20px rgba(35,40,51,.04);
+      overflow: hidden;
+    }
+
+    .panel-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .search-box {
+      position: relative;
+      flex: 1;
+      max-width: 560px;
+    }
+
+    .search-box::before {
+      content: "⌕";
+      position: absolute;
+      left: 11px;
+      top: 7px;
+      color: #858b96;
+      font-size: 19px;
+      transform: rotate(-15deg);
+    }
+
+    .search-input, .field-input, .field-select {
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 10px;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      outline: none;
+      transition: .15s ease;
+    }
+
+    .search-input { padding-left: 35px; background: #f7f8fa; border-color: #e0e3e8; }
+    .search-input:focus, .field-input:focus, .field-select:focus { border-color: #8a99f5; box-shadow: 0 0 0 3px rgba(79,101,238,.12); background: #fff; }
+    .field-input.mono { font-family: var(--mono); font-size: 12px; }
+
+    .table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .table th { padding: 10px 14px; color: var(--muted); background: #fafbfc; border-bottom: 1px solid var(--line); font-size: 10.5px; font-weight: 710; letter-spacing: .045em; text-align: left; text-transform: uppercase; }
+    .table td { padding: 14px; border-bottom: 1px solid #eceef2; vertical-align: middle; }
+    .table tr:last-child td { border-bottom: 0; }
+    .table tbody tr { transition: background .12s ease; }
+    .table tbody tr:hover { background: #fafbff; }
+
+    .workspace-name { font-weight: 710; letter-spacing: -.12px; }
+    .workspace-branch { margin-top: 4px; color: #5360a8; font-family: var(--mono); font-size: 11px; }
+    .path { overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .muted { color: var(--muted); }
+
+    .tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
+    .tag { max-width: 135px; padding: 4px 7px; overflow: hidden; color: #505762; background: #f0f2f5; border: 1px solid #e4e6ea; border-radius: 6px; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .tag.more { color: #5968c9; background: var(--accent-soft); border-color: #dfe3ff; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 690;
+    }
+    .status::before { content: ""; width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+    .status.ready { color: var(--success); background: var(--success-bg); }
+    .status.missing { color: var(--warning); background: var(--warning-bg); }
+    .status.error { color: var(--danger); background: var(--danger-bg); }
+
+    .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+    .icon-button { display: grid; place-items: center; width: 31px; height: 31px; color: #555b66; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+    .icon-button:hover { background: #f5f6f8; }
+
+    .empty-state { padding: 46px 20px; color: var(--muted); text-align: center; }
+    .empty-icon { margin-bottom: 9px; font-size: 32px; opacity: .7; }
+
+    .modal-layer, .drawer-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(32, 36, 45, .34);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-layer.open, .drawer-layer.open { display: flex; }
+
+    .modal {
+      width: min(780px, calc(100vw - 80px));
+      max-height: calc(100vh - 70px);
+      overflow: auto;
+      background: var(--panel-solid);
+      border: 1px solid rgba(203,207,215,.92);
+      border-radius: 15px;
+      box-shadow: var(--shadow);
+      animation: modal-in .18s ease-out;
+    }
+
+    .modal.small-modal { width: min(520px, calc(100vw - 80px)); }
+    .modal.progress-modal { width: min(610px, calc(100vw - 80px)); }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(8px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .modal-header { display: flex; justify-content: space-between; gap: 18px; padding: 19px 21px 15px; border-bottom: 1px solid var(--line); }
+    .modal-title { margin: 0; font-size: 18px; font-weight: 740; letter-spacing: -.3px; }
+    .modal-description { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .close-button { width: 30px; height: 30px; color: #636974; background: #f2f3f5; border: 0; border-radius: 8px; font-size: 17px; }
+    .close-button:hover { background: #e8eaee; }
+
+    .modal-body { padding: 20px 21px; }
+    .modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 21px 18px; border-top: 1px solid var(--line); }
+    .modal-footer-right { display: flex; gap: 8px; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+    .field.full { grid-column: 1 / -1; }
+    .field-label { display: flex; justify-content: space-between; margin-bottom: 6px; color: #373c45; font-size: 11.5px; font-weight: 680; }
+    .required { color: var(--danger); }
+    .field-help { margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+    .path-field { display: flex; gap: 7px; }
+    .path-field .field-input { flex: 1; min-width: 0; }
+
+    .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 9px; }
+    .section-title { font-size: 12px; font-weight: 720; }
+    .section-meta { color: var(--muted); font-size: 10.5px; }
+
+    .repo-picker {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .repo-picker-search { padding: 9px; background: #fafbfc; border-bottom: 1px solid var(--line); }
+    .repo-picker-list { max-height: 218px; overflow: auto; }
+    .repo-choice { display: grid; grid-template-columns: 22px 1fr 88px; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #eef0f3; }
+    .repo-choice:last-child { border-bottom: 0; }
+    .repo-choice:hover { background: #fafbff; }
+    .repo-choice input { width: 15px; height: 15px; accent-color: var(--accent); }
+    .repo-choice-name { font-weight: 660; }
+    .repo-choice-url { margin-top: 3px; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .branch-pill { justify-self: end; padding: 4px 7px; color: #5f6671; background: #f1f3f5; border-radius: 6px; font-family: var(--mono); font-size: 10px; }
+
+    .summary-box { margin-top: 16px; padding: 12px 13px; color: #535964; background: #f7f8fb; border: 1px solid #e7e9ef; border-radius: 9px; font-size: 11px; line-height: 1.55; }
+    .summary-box strong { color: #30353d; }
+
+    .drawer-layer { justify-content: flex-end; padding: 0; background: rgba(34,38,46,.25); }
+    .drawer {
+      width: min(610px, 58vw);
+      height: 100%;
+      overflow: auto;
+      background: #fff;
+      border-left: 1px solid var(--line-strong);
+      box-shadow: -18px 0 55px rgba(33,38,48,.15);
+      animation: drawer-in .2s ease-out;
+    }
+
+    @keyframes drawer-in {
+      from { transform: translateX(24px); opacity: .75; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    .drawer-header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; gap: 16px; padding: 20px 22px 16px; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); }
+    .drawer-body { padding: 20px 22px 36px; }
+    .drawer-title-row { display: flex; align-items: center; gap: 9px; }
+    .drawer-title { margin: 0; font-size: 19px; font-weight: 750; letter-spacing: -.35px; }
+    .drawer-branch { margin-top: 5px; color: #5360a8; font-family: var(--mono); font-size: 11px; }
+
+    .detail-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 20px; }
+    .detail-grid { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 10px 14px; padding: 15px; background: #fafbfc; border: 1px solid var(--line); border-radius: 10px; }
+    .detail-label { color: var(--muted); font-size: 11px; }
+    .detail-value { min-width: 0; overflow: hidden; font-family: var(--mono); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .repo-manage-list { margin-top: 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
+    .repo-manage-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 12px 13px; border-bottom: 1px solid #eceef2; }
+    .repo-manage-row:last-child { border-bottom: 0; }
+    .repo-manage-title { font-weight: 670; }
+    .repo-manage-path { margin-top: 4px; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .notice { margin-top: 12px; padding: 10px 11px; color: #6e561c; background: var(--warning-bg); border: 1px solid #f0dfaa; border-radius: 8px; font-size: 10.5px; line-height: 1.45; }
+
+    .add-inline { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-top: 10px; }
+
+    .progress-list { display: flex; flex-direction: column; gap: 9px; }
+    .progress-item { display: grid; grid-template-columns: 23px 1fr auto; align-items: center; gap: 8px; padding: 9px 10px; background: #f8f9fb; border: 1px solid #eceef2; border-radius: 8px; }
+    .progress-symbol { display: grid; place-items: center; width: 20px; height: 20px; color: #9ba0a9; background: #e9ebef; border-radius: 99px; font-size: 11px; }
+    .progress-item.done .progress-symbol { color: white; background: var(--success); }
+    .progress-item.active .progress-symbol { color: white; background: var(--accent); animation: pulse 1.1s infinite; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(79,101,238,.12); } }
+    .progress-name { font-size: 11.5px; font-weight: 620; }
+    .progress-state { color: var(--muted); font-size: 10px; }
+
+    .progress-bar { height: 7px; margin-top: 16px; overflow: hidden; background: #e9ebf0; border-radius: 99px; }
+    .progress-fill { width: 0; height: 100%; background: linear-gradient(90deg, #6173f0, #4559de); border-radius: 99px; transition: width .35s ease; }
+    .progress-caption { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font-size: 10.5px; }
+
+    .toast {
+      position: fixed;
+      right: 30px;
+      bottom: 28px;
+      z-index: 300;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      max-width: 420px;
+      padding: 12px 14px;
+      color: white;
+      background: rgba(37, 42, 51, .95);
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 10px;
+      box-shadow: var(--small-shadow);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: .2s ease;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast-icon { display: grid; place-items: center; width: 20px; height: 20px; color: #26382d; background: #9ee1b6; border-radius: 99px; font-size: 11px; font-weight: 800; }
+    .toast-text { font-size: 11.5px; }
+
+    .kbd { padding: 2px 5px; color: #5e6470; background: #f0f2f5; border: 1px solid #dfe2e7; border-bottom-color: #cdd1d8; border-radius: 5px; font-family: var(--font); font-size: 9.5px; }
+
+    @media (max-width: 1180px) {
+      .app-window { grid-template-columns: 205px minmax(0, 1fr); }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary-grid .summary-card:last-child { display: none; }
+      .table .hide-compact { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-window">
+    <aside class="sidebar">
+      <div class="traffic-lights" aria-hidden="true">
+        <span class="traffic-light red"></span>
+        <span class="traffic-light yellow"></span>
+        <span class="traffic-light green"></span>
+      </div>
+
+      <div class="brand">
+        <div class="brand-mark">RW</div>
+        <div>
+          <div class="brand-title">ReqWS</div>
+          <div class="brand-subtitle">Feature workspace manager</div>
+        </div>
+      </div>
+
+      <div class="nav-label">Workspace</div>
+      <nav class="nav">
+        <button class="nav-button active" data-page-target="workspaces">
+          <span class="nav-icon">▦</span>
+          <span class="nav-text">Workspaces</span>
+          <span class="nav-count" id="workspaceNavCount">2</span>
+        </button>
+        <button class="nav-button" data-page-target="repositories">
+          <span class="nav-icon">⌘</span>
+          <span class="nav-text">Repositories</span>
+          <span class="nav-count" id="repositoryNavCount">4</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div class="prototype-note">
+        <strong>静态交互原型</strong><br />
+        可点击、搜索和模拟增减数据，但不会执行 Git 或文件操作。
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <h1 class="page-title" id="pageTitle">Workspaces</h1>
+          <div class="page-subtitle" id="pageSubtitle">按需求搜索、管理并打开隔离的多仓库工作区</div>
+        </div>
+        <div class="toolbar-actions">
+          <button class="button" id="refreshButton">↻ 刷新</button>
+          <button class="button primary" id="primaryAction">＋ 创建 Workspace</button>
+        </div>
+      </header>
+
+      <section class="page active" id="page-workspaces">
+        <div class="summary-grid">
+          <div class="summary-card">
+            <div class="summary-label">Workspaces</div>
+            <div class="summary-value" id="workspaceSummaryCount">2</div>
+            <div class="summary-foot">全部 feature 工作区</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">Ready</div>
+            <div class="summary-value" id="readySummaryCount">1</div>
+            <div class="summary-foot">路径和 workspace 文件完整</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">Repositories</div>
+            <div class="summary-value" id="repoSummaryCount">4</div>
+            <div class="summary-foot">已录入仓库目录</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-toolbar">
+            <div class="search-box">
+              <input class="search-input" id="workspaceSearch" placeholder="搜索名称、分支、仓库或路径…" />
+            </div>
+            <div class="muted" id="workspaceResultText">2 个 workspace</div>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width: 24%">Workspace</th>
+                <th style="width: 24%">Repositories</th>
+                <th class="hide-compact" style="width: 25%">代码目录</th>
+                <th style="width: 10%">状态</th>
+                <th style="width: 17%; text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="workspaceTableBody"></tbody>
+          </table>
+          <div class="empty-state" id="workspaceEmpty" hidden>
+            <div class="empty-icon">⌕</div>
+            没有匹配的 workspace
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="page-repositories">
+        <div class="summary-grid">
+          <div class="summary-card">
+            <div class="summary-label">Repositories</div>
+            <div class="summary-value" id="repositorySummaryCount">4</div>
+            <div class="summary-foot">可用于创建 workspace 的仓库</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">In use</div>
+            <div class="summary-value" id="repositoryInUseCount">3</div>
+            <div class="summary-foot">至少被一个 workspace 使用</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-label">Git</div>
+            <div class="summary-value" style="font-size:18px; margin-top:11px">Available</div>
+            <div class="summary-foot">/usr/bin/git · 原型模拟</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-toolbar">
+            <div class="search-box">
+              <input class="search-input" id="repositorySearch" placeholder="搜索仓库名称、Git 地址或默认分支…" />
+            </div>
+            <div class="muted" id="repositoryResultText">4 个 repository</div>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width: 20%">名称</th>
+                <th style="width: 44%">Git 地址</th>
+                <th style="width: 13%">默认分支</th>
+                <th style="width: 10%">使用中</th>
+                <th style="width: 13%; text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="repositoryTableBody"></tbody>
+          </table>
+          <div class="empty-state" id="repositoryEmpty" hidden>
+            <div class="empty-icon">⌕</div>
+            没有匹配的 repository
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-layer" id="createWorkspaceLayer" role="dialog" aria-modal="true" aria-labelledby="createWorkspaceTitle">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title" id="createWorkspaceTitle">创建 Feature Workspace</h2>
+          <div class="modal-description">每个仓库都会完整 clone 到需求独立目录，并切换到同一个 feature 分支。</div>
+        </div>
+        <button class="close-button" data-close="createWorkspaceLayer" aria-label="关闭">×</button>
+      </div>
+      <form id="createWorkspaceForm">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">Workspace 名称 <span class="required">*</span></span>
+              <input class="field-input" id="workspaceNameInput" required value="FEAT-789-invoice-export" />
+              <span class="field-help">用于目录名和 `.code-workspace` 文件名。</span>
+            </label>
+            <label class="field">
+              <span class="field-label">Feature 分支 <span class="required">*</span></span>
+              <input class="field-input mono" id="featureBranchInput" required value="feature/FEAT-789-invoice-export" />
+              <span class="field-help">远端存在则 tracking；否则从各 repo 默认分支创建。</span>
+            </label>
+            <label class="field full">
+              <span class="field-label">代码目录 <span class="required">*</span></span>
+              <span class="path-field">
+                <input class="field-input mono" id="workspaceRootInput" required value="/Users/rose/Developer/features/FEAT-789-invoice-export" />
+                <button class="button" type="button" data-browse="workspaceRootInput">选择…</button>
+              </span>
+            </label>
+            <label class="field full">
+              <span class="field-label">Workspace 文件目录 <span class="required">*</span></span>
+              <span class="path-field">
+                <input class="field-input mono" id="workspaceFileDirInput" required value="/Users/rose/Developer/vscode-workspaces" />
+                <button class="button" type="button" data-browse="workspaceFileDirInput">选择…</button>
+              </span>
+              <span class="field-help">将生成：<span id="workspaceFilenamePreview">FEAT-789-invoice-export.code-workspace</span></span>
+            </label>
+          </div>
+
+          <div class="section-title-row">
+            <div class="section-title">选择仓库 <span class="required">*</span></div>
+            <div class="section-meta" id="selectedRepoCount">已选择 2 个</div>
+          </div>
+          <div class="repo-picker">
+            <div class="repo-picker-search">
+              <input class="field-input" id="repoPickerSearch" placeholder="搜索仓库…" />
+            </div>
+            <div class="repo-picker-list" id="repoPickerList"></div>
+          </div>
+
+          <div class="summary-box">
+            <strong>创建规则：</strong>顺序 clone；任何仓库失败则清理 staging，不登记半成品；不会自动 push 分支，也不会共享 `.git`。
+          </div>
+        </div>
+        <div class="modal-footer">
+          <span class="muted">快捷键 <span class="kbd">Esc</span> 关闭</span>
+          <div class="modal-footer-right">
+            <button class="button" type="button" data-close="createWorkspaceLayer">取消</button>
+            <button class="button primary" type="submit">创建 Workspace</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="repositoryModalLayer" role="dialog" aria-modal="true" aria-labelledby="repositoryModalTitle">
+    <div class="modal small-modal">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title" id="repositoryModalTitle">录入 Repository</h2>
+          <div class="modal-description">只保存仓库目录信息，不保存凭据。</div>
+        </div>
+        <button class="close-button" data-close="repositoryModalLayer" aria-label="关闭">×</button>
+      </div>
+      <form id="repositoryForm">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field full">
+              <span class="field-label">Git 地址 <span class="required">*</span></span>
+              <input class="field-input mono" id="repoUrlInput" required value="git@gitlab.example.com:billing/invoice-api.git" />
+              <span class="field-help">支持 SSH 和 HTTPS；名称会从 URL 自动推导。</span>
+            </label>
+            <label class="field">
+              <span class="field-label">名称 <span class="required">*</span></span>
+              <input class="field-input" id="repoNameInput" required value="invoice-api" />
+            </label>
+            <label class="field">
+              <span class="field-label">默认分支 <span class="required">*</span></span>
+              <input class="field-input mono" id="repoBranchInput" required value="main" />
+            </label>
+          </div>
+          <div class="summary-box" id="connectionTestBox">
+            <strong>连接测试：</strong>未执行。真实应用会调用 `git ls-remote --symref`，测试失败仍可保存。
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="button" type="button" id="testConnectionButton">测试连接</button>
+          <div class="modal-footer-right">
+            <button class="button" type="button" data-close="repositoryModalLayer">取消</button>
+            <button class="button primary" type="submit">保存 Repository</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="progressModalLayer" role="dialog" aria-modal="true" aria-labelledby="progressModalTitle">
+    <div class="modal progress-modal">
+      <div class="modal-header">
+        <div>
+          <h2 class="modal-title" id="progressModalTitle">正在创建 Workspace</h2>
+          <div class="modal-description" id="progressDescription">请保持应用打开；当前为原型模拟。</div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="progress-list" id="progressList"></div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-caption"><span id="progressCaption">准备中…</span><span id="progressPercent">0%</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-layer" id="workspaceDrawerLayer" role="dialog" aria-modal="true" aria-labelledby="drawerWorkspaceTitle">
+    <aside class="drawer">
+      <div class="drawer-header">
+        <div>
+          <div class="drawer-title-row">
+            <h2 class="drawer-title" id="drawerWorkspaceTitle">Workspace</h2>
+            <span class="status ready" id="drawerStatus">Ready</span>
+          </div>
+          <div class="drawer-branch" id="drawerBranch"></div>
+        </div>
+        <button class="close-button" data-close="workspaceDrawerLayer" aria-label="关闭">×</button>
+      </div>
+      <div class="drawer-body" id="workspaceDrawerBody"></div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast">
+    <span class="toast-icon">✓</span>
+    <span class="toast-text" id="toastText">完成</span>
+  </div>
+
+  <script>
+    const repositories = [
+      { id: 'repo-order', name: 'order-api', url: 'git@gitlab.example.com:commerce/order-api.git', defaultBranch: 'main' },
+      { id: 'repo-payment', name: 'payment-api', url: 'git@gitlab.example.com:payment/payment-api.git', defaultBranch: 'main' },
+      { id: 'repo-account', name: 'account-sdk', url: 'git@gitlab.example.com:shared/account-sdk.git', defaultBranch: 'develop' },
+      { id: 'repo-gateway', name: 'gateway-api', url: 'git@gitlab.example.com:gateway/gateway-api.git', defaultBranch: 'main' },
+    ];
+
+    const workspaces = [
+      {
+        id: 'ws-123',
+        name: 'FEAT-123-payment-refund',
+        branch: 'feature/FEAT-123',
+        rootPath: '/Users/rose/Developer/features/FEAT-123-payment-refund',
+        workspaceFilePath: '/Users/rose/Developer/vscode-workspaces/FEAT-123-payment-refund.code-workspace',
+        repoIds: ['repo-order', 'repo-payment', 'repo-account'],
+        status: 'ready',
+        updatedAt: '今天 15:42',
+      },
+      {
+        id: 'ws-456',
+        name: 'FEAT-456-order-filter',
+        branch: 'feature/FEAT-456',
+        rootPath: '/Users/rose/Developer/features/FEAT-456-order-filter',
+        workspaceFilePath: '/Users/rose/Developer/vscode-workspaces/FEAT-456-order-filter.code-workspace',
+        repoIds: ['repo-order', 'repo-gateway'],
+        status: 'missing',
+        updatedAt: '昨天 18:10',
+      },
+    ];
+
+    const state = {
+      page: 'workspaces',
+      activeWorkspaceId: null,
+      branchManuallyEdited: false,
+      workspaceSearch: '',
+      repositorySearch: '',
+    };
+
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function repoById(id) { return repositories.find((repo) => repo.id === id); }
+    function workspaceById(id) { return workspaces.find((workspace) => workspace.id === id); }
+
+    function statusLabel(status) {
+      if (status === 'ready') return 'Ready';
+      if (status === 'missing') return 'Missing';
+      return 'Error';
+    }
+
+    function showToast(message) {
+      $('#toastText').textContent = message;
+      $('#toast').classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => $('#toast').classList.remove('show'), 2400);
+    }
+
+    function updateCounts() {
+      const ready = workspaces.filter((item) => item.status === 'ready').length;
+      const inUse = repositories.filter((repo) => workspaces.some((workspace) => workspace.repoIds.includes(repo.id))).length;
+      $('#workspaceNavCount').textContent = workspaces.length;
+      $('#repositoryNavCount').textContent = repositories.length;
+      $('#workspaceSummaryCount').textContent = workspaces.length;
+      $('#readySummaryCount').textContent = ready;
+      $('#repoSummaryCount').textContent = repositories.length;
+      $('#repositorySummaryCount').textContent = repositories.length;
+      $('#repositoryInUseCount').textContent = inUse;
+    }
+
+    function renderWorkspaceTags(repoIds) {
+      const names = repoIds.map((id) => repoById(id)?.name).filter(Boolean);
+      const shown = names.slice(0, 3);
+      const remaining = names.length - shown.length;
+      return `<div class="tag-list">${shown.map((name) => `<span class="tag">${escapeHtml(name)}</span>`).join('')}${remaining > 0 ? `<span class="tag more">+${remaining}</span>` : ''}</div>`;
+    }
+
+    function matchesWorkspace(workspace, query) {
+      const repos = workspace.repoIds.map((id) => repoById(id)?.name || '').join(' ');
+      const haystack = [workspace.name, workspace.branch, workspace.rootPath, workspace.workspaceFilePath, repos].join(' ').toLowerCase();
+      return haystack.includes(query.trim().toLowerCase());
+    }
+
+    function renderWorkspaces() {
+      const query = state.workspaceSearch;
+      const visible = workspaces.filter((workspace) => matchesWorkspace(workspace, query));
+      $('#workspaceResultText').textContent = `${visible.length} 个 workspace`;
+      $('#workspaceEmpty').hidden = visible.length > 0;
+      $('#workspaceTableBody').innerHTML = visible.map((workspace) => `
+        <tr data-workspace-row="${workspace.id}">
+          <td>
+            <div class="workspace-name">${escapeHtml(workspace.name)}</div>
+            <div class="workspace-branch">${escapeHtml(workspace.branch)}</div>
+          </td>
+          <td>${renderWorkspaceTags(workspace.repoIds)}</td>
+          <td class="hide-compact"><div class="path" title="${escapeHtml(workspace.rootPath)}">${escapeHtml(workspace.rootPath)}</div></td>
+          <td><span class="status ${workspace.status}">${statusLabel(workspace.status)}</span></td>
+          <td>
+            <div class="row-actions">
+              <button class="button small" data-action="open-vscode" data-id="${workspace.id}" ${workspace.status !== 'ready' ? 'disabled' : ''}>VS Code</button>
+              <button class="button small" data-action="open-cursor" data-id="${workspace.id}" ${workspace.status !== 'ready' ? 'disabled' : ''}>Cursor</button>
+              <button class="icon-button" data-action="show-details" data-id="${workspace.id}" title="查看详情">⋯</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+      updateCounts();
+    }
+
+    function matchesRepository(repo, query) {
+      const haystack = [repo.name, repo.url, repo.defaultBranch].join(' ').toLowerCase();
+      return haystack.includes(query.trim().toLowerCase());
+    }
+
+    function renderRepositories() {
+      const visible = repositories.filter((repo) => matchesRepository(repo, state.repositorySearch));
+      $('#repositoryResultText').textContent = `${visible.length} 个 repository`;
+      $('#repositoryEmpty').hidden = visible.length > 0;
+      $('#repositoryTableBody').innerHTML = visible.map((repo) => {
+        const used = workspaces.filter((workspace) => workspace.repoIds.includes(repo.id)).length;
+        return `
+          <tr>
+            <td><div class="workspace-name">${escapeHtml(repo.name)}</div></td>
+            <td><div class="path" title="${escapeHtml(repo.url)}">${escapeHtml(repo.url)}</div></td>
+            <td><span class="branch-pill">${escapeHtml(repo.defaultBranch)}</span></td>
+            <td><span class="muted">${used} 个</span></td>
+            <td>
+              <div class="row-actions">
+                <button class="button small" data-action="test-repo" data-id="${repo.id}">测试</button>
+                <button class="icon-button" data-action="edit-repo" data-id="${repo.id}" title="编辑">⋯</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+      updateCounts();
+    }
+
+    function switchPage(page) {
+      state.page = page;
+      $$('.nav-button').forEach((button) => button.classList.toggle('active', button.dataset.pageTarget === page));
+      $$('.page').forEach((section) => section.classList.toggle('active', section.id === `page-${page}`));
+      const workspacePage = page === 'workspaces';
+      $('#pageTitle').textContent = workspacePage ? 'Workspaces' : 'Repositories';
+      $('#pageSubtitle').textContent = workspacePage
+        ? '按需求搜索、管理并打开隔离的多仓库工作区'
+        : '维护可被 feature workspace 选择的 Git 仓库目录';
+      $('#primaryAction').textContent = workspacePage ? '＋ 创建 Workspace' : '＋ 录入 Repository';
+    }
+
+    function openLayer(id) { document.getElementById(id).classList.add('open'); }
+    function closeLayer(id) { document.getElementById(id).classList.remove('open'); }
+
+    function slugify(value) {
+      return value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'feature-workspace';
+    }
+
+    function deriveRepoName(url) {
+      const normalized = url.trim().replace(/\/$/, '');
+      const segment = normalized.split(/[/:]/).pop() || '';
+      return segment.replace(/\.git$/i, '') || 'repository';
+    }
+
+    function renderRepoPicker() {
+      const query = $('#repoPickerSearch')?.value.toLowerCase() || '';
+      const existingSelections = new Set($$('#repoPickerList input:checked').map((input) => input.value));
+      if (!existingSelections.size) {
+        existingSelections.add('repo-order');
+        existingSelections.add('repo-payment');
+      }
+      const visible = repositories.filter((repo) => [repo.name, repo.url, repo.defaultBranch].join(' ').toLowerCase().includes(query));
+      $('#repoPickerList').innerHTML = visible.map((repo) => `
+        <label class="repo-choice">
+          <input type="checkbox" name="repoSelection" value="${repo.id}" ${existingSelections.has(repo.id) ? 'checked' : ''} />
+          <span>
+            <span class="repo-choice-name">${escapeHtml(repo.name)}</span>
+            <span class="repo-choice-url">${escapeHtml(repo.url)}</span>
+          </span>
+          <span class="branch-pill">${escapeHtml(repo.defaultBranch)}</span>
+        </label>
+      `).join('');
+      updateSelectedRepoCount();
+    }
+
+    function updateSelectedRepoCount() {
+      const count = $$('#repoPickerList input:checked').length;
+      $('#selectedRepoCount').textContent = `已选择 ${count} 个`;
+    }
+
+    function openCreateWorkspace() {
+      state.branchManuallyEdited = false;
+      renderRepoPicker();
+      openLayer('createWorkspaceLayer');
+      setTimeout(() => $('#workspaceNameInput').focus(), 30);
+    }
+
+    function openRepositoryModal(repo = null) {
+      $('#repositoryModalTitle').textContent = repo ? '编辑 Repository' : '录入 Repository';
+      $('#repositoryForm').dataset.editingId = repo?.id || '';
+      $('#repoUrlInput').value = repo?.url || 'git@gitlab.example.com:billing/invoice-api.git';
+      $('#repoNameInput').value = repo?.name || 'invoice-api';
+      $('#repoBranchInput').value = repo?.defaultBranch || 'main';
+      $('#connectionTestBox').innerHTML = '<strong>连接测试：</strong>未执行。真实应用会调用 `git ls-remote --symref`，测试失败仍可保存。';
+      openLayer('repositoryModalLayer');
+      setTimeout(() => $('#repoUrlInput').focus(), 30);
+    }
+
+    function renderWorkspaceDrawer(workspaceId) {
+      const workspace = workspaceById(workspaceId);
+      if (!workspace) return;
+      state.activeWorkspaceId = workspaceId;
+      $('#drawerWorkspaceTitle').textContent = workspace.name;
+      $('#drawerBranch').textContent = workspace.branch;
+      $('#drawerStatus').className = `status ${workspace.status}`;
+      $('#drawerStatus').textContent = statusLabel(workspace.status);
+
+      const availableRepos = repositories.filter((repo) => !workspace.repoIds.includes(repo.id));
+      const repoRows = workspace.repoIds.map((id) => repoById(id)).filter(Boolean).map((repo) => `
+        <div class="repo-manage-row">
+          <div>
+            <div class="repo-manage-title">${escapeHtml(repo.name)}</div>
+            <div class="repo-manage-path">${escapeHtml(workspace.rootPath + '/' + repo.name)}</div>
+          </div>
+          <button class="button small danger" data-action="remove-repo-from-workspace" data-repo-id="${repo.id}">移除</button>
+        </div>
+      `).join('');
+
+      $('#workspaceDrawerBody').innerHTML = `
+        <div class="detail-actions">
+          <button class="button primary" data-action="open-vscode" data-id="${workspace.id}" ${workspace.status !== 'ready' ? 'disabled' : ''}>VS Code</button>
+          <button class="button" data-action="open-cursor" data-id="${workspace.id}" ${workspace.status !== 'ready' ? 'disabled' : ''}>Cursor</button>
+          <button class="button" data-action="open-cursor-root" data-id="${workspace.id}">Cursor 打开根目录</button>
+          <button class="button" data-action="reveal-finder" data-id="${workspace.id}">Finder</button>
+        </div>
+
+        <div class="detail-grid">
+          <div class="detail-label">代码目录</div>
+          <div class="detail-value" title="${escapeHtml(workspace.rootPath)}">${escapeHtml(workspace.rootPath)}</div>
+          <div class="detail-label">Workspace 文件</div>
+          <div class="detail-value" title="${escapeHtml(workspace.workspaceFilePath)}">${escapeHtml(workspace.workspaceFilePath)}</div>
+          <div class="detail-label">更新时间</div>
+          <div class="detail-value">${escapeHtml(workspace.updatedAt)}</div>
+        </div>
+
+        <div class="section-title-row">
+          <div class="section-title">Repositories · ${workspace.repoIds.length}</div>
+          <div class="section-meta">全部使用 ${escapeHtml(workspace.branch)}</div>
+        </div>
+        <div class="repo-manage-list">${repoRows || '<div class="empty-state">暂无 repository</div>'}</div>
+        <div class="notice">MVP 中“移除”只会更新 manifest 和 <code>.code-workspace</code>，不会删除本地 repo 目录。</div>
+
+        <div class="section-title-row">
+          <div class="section-title">增加 Repository</div>
+          <div class="section-meta">从仓库目录选择</div>
+        </div>
+        <div class="add-inline">
+          <select class="field-select" id="addRepoSelect" ${availableRepos.length ? '' : 'disabled'}>
+            ${availableRepos.length
+              ? availableRepos.map((repo) => `<option value="${repo.id}">${escapeHtml(repo.name)} · ${escapeHtml(repo.defaultBranch)}</option>`).join('')
+              : '<option>没有可增加的仓库</option>'}
+          </select>
+          <button class="button" data-action="add-repo-to-workspace" ${availableRepos.length ? '' : 'disabled'}>＋ 增加</button>
+        </div>
+      `;
+      openLayer('workspaceDrawerLayer');
+    }
+
+    function simulateWorkspaceCreation(input) {
+      closeLayer('createWorkspaceLayer');
+      const selectedRepos = input.repoIds.map((id) => repoById(id)).filter(Boolean);
+      const steps = [
+        { name: '校验路径和分支', state: '等待' },
+        ...selectedRepos.map((repo) => ({ name: `Clone ${repo.name}`, state: '等待' })),
+        { name: '写入 manifest 和 Workspace 文件', state: '等待' },
+        { name: '更新本地索引', state: '等待' },
+      ];
+      let index = 0;
+
+      function renderProgress() {
+        $('#progressList').innerHTML = steps.map((step, stepIndex) => {
+          const statusClass = stepIndex < index ? 'done' : stepIndex === index ? 'active' : '';
+          const symbol = stepIndex < index ? '✓' : stepIndex === index ? '•' : '○';
+          const label = stepIndex < index ? '完成' : stepIndex === index ? '进行中' : '等待';
+          return `<div class="progress-item ${statusClass}"><span class="progress-symbol">${symbol}</span><span class="progress-name">${escapeHtml(step.name)}</span><span class="progress-state">${label}</span></div>`;
+        }).join('');
+        const percent = Math.round((index / steps.length) * 100);
+        $('#progressFill').style.width = `${percent}%`;
+        $('#progressPercent').textContent = `${percent}%`;
+        $('#progressCaption').textContent = index < steps.length ? steps[index].name : '创建完成';
+      }
+
+      renderProgress();
+      openLayer('progressModalLayer');
+      const timer = setInterval(() => {
+        index += 1;
+        renderProgress();
+        if (index >= steps.length) {
+          clearInterval(timer);
+          setTimeout(() => {
+            const nameSlug = slugify(input.name);
+            workspaces.unshift({
+              id: `ws-${Date.now()}`,
+              name: input.name,
+              branch: input.branch,
+              rootPath: input.rootPath,
+              workspaceFilePath: `${input.workspaceFileDir}/${nameSlug}.code-workspace`,
+              repoIds: input.repoIds,
+              status: 'ready',
+              updatedAt: '刚刚',
+            });
+            closeLayer('progressModalLayer');
+            state.workspaceSearch = '';
+            $('#workspaceSearch').value = '';
+            renderWorkspaces();
+            switchPage('workspaces');
+            showToast(`${input.name} 已创建（原型模拟）`);
+          }, 500);
+        }
+      }, 570);
+    }
+
+    document.addEventListener('click', (event) => {
+      const navButton = event.target.closest('[data-page-target]');
+      if (navButton) switchPage(navButton.dataset.pageTarget);
+
+      const closeButton = event.target.closest('[data-close]');
+      if (closeButton) closeLayer(closeButton.dataset.close);
+
+      const browseButton = event.target.closest('[data-browse]');
+      if (browseButton) {
+        const target = document.getElementById(browseButton.dataset.browse);
+        target.value = target.id === 'workspaceRootInput'
+          ? `/Users/rose/Developer/features/${slugify($('#workspaceNameInput').value)}`
+          : '/Users/rose/Developer/vscode-workspaces';
+        showToast('已模拟选择目录');
+      }
+
+      const action = event.target.closest('[data-action]');
+      if (!action) return;
+      const id = action.dataset.id;
+
+      if (action.dataset.action === 'show-details') renderWorkspaceDrawer(id);
+      if (action.dataset.action === 'open-vscode') showToast(`正在用 VS Code 打开 ${workspaceById(id)?.name || 'workspace'}（模拟）`);
+      if (action.dataset.action === 'open-cursor') showToast(`正在用 Cursor 打开 ${workspaceById(id)?.name || 'workspace'}（模拟）`);
+      if (action.dataset.action === 'open-cursor-root') showToast('Cursor 将打开 workspace 代码根目录（模拟）');
+      if (action.dataset.action === 'reveal-finder') showToast('已在 Finder 中显示代码目录（模拟）');
+      if (action.dataset.action === 'test-repo') showToast(`${repoById(id)?.name || 'Repository'} 连接成功（模拟）`);
+      if (action.dataset.action === 'edit-repo') openRepositoryModal(repoById(id));
+
+      if (action.dataset.action === 'add-repo-to-workspace') {
+        const workspace = workspaceById(state.activeWorkspaceId);
+        const repoId = $('#addRepoSelect')?.value;
+        if (workspace && repoId && !workspace.repoIds.includes(repoId)) {
+          workspace.repoIds.push(repoId);
+          workspace.updatedAt = '刚刚';
+          renderWorkspaces();
+          renderRepositories();
+          renderWorkspaceDrawer(workspace.id);
+          showToast(`${repoById(repoId).name} 已加入 workspace（模拟）`);
+        }
+      }
+
+      if (action.dataset.action === 'remove-repo-from-workspace') {
+        const workspace = workspaceById(state.activeWorkspaceId);
+        const repoId = action.dataset.repoId;
+        const repo = repoById(repoId);
+        if (workspace && repo && confirm(`从 ${workspace.name} 移除 ${repo.name}？\n\n本地 repo 目录会保留。`)) {
+          workspace.repoIds = workspace.repoIds.filter((item) => item !== repoId);
+          workspace.updatedAt = '刚刚';
+          renderWorkspaces();
+          renderRepositories();
+          renderWorkspaceDrawer(workspace.id);
+          showToast(`${repo.name} 已从 workspace 移除，本地目录保留`);
+        }
+      }
+    });
+
+    $('#primaryAction').addEventListener('click', () => {
+      if (state.page === 'workspaces') openCreateWorkspace();
+      else openRepositoryModal();
+    });
+
+    $('#refreshButton').addEventListener('click', () => {
+      renderWorkspaces();
+      renderRepositories();
+      showToast('数据已刷新（原型模拟）');
+    });
+
+    $('#workspaceSearch').addEventListener('input', (event) => {
+      state.workspaceSearch = event.target.value;
+      renderWorkspaces();
+    });
+
+    $('#repositorySearch').addEventListener('input', (event) => {
+      state.repositorySearch = event.target.value;
+      renderRepositories();
+    });
+
+    $('#workspaceNameInput').addEventListener('input', (event) => {
+      const slug = slugify(event.target.value);
+      $('#workspaceFilenamePreview').textContent = `${slug}.code-workspace`;
+      if (!state.branchManuallyEdited) $('#featureBranchInput').value = `feature/${slug}`;
+    });
+
+    $('#featureBranchInput').addEventListener('input', () => { state.branchManuallyEdited = true; });
+    $('#repoPickerSearch').addEventListener('input', renderRepoPicker);
+    $('#repoPickerList').addEventListener('change', updateSelectedRepoCount);
+
+    $('#createWorkspaceForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const repoIds = $$('#repoPickerList input:checked').map((input) => input.value);
+      if (!repoIds.length) {
+        showToast('请至少选择一个 repository');
+        return;
+      }
+      simulateWorkspaceCreation({
+        name: $('#workspaceNameInput').value.trim(),
+        branch: $('#featureBranchInput').value.trim(),
+        rootPath: $('#workspaceRootInput').value.trim(),
+        workspaceFileDir: $('#workspaceFileDirInput').value.trim(),
+        repoIds,
+      });
+    });
+
+    $('#repoUrlInput').addEventListener('input', (event) => {
+      if (!$('#repositoryForm').dataset.editingId) $('#repoNameInput').value = deriveRepoName(event.target.value);
+    });
+
+    $('#testConnectionButton').addEventListener('click', () => {
+      $('#connectionTestBox').innerHTML = '<strong>连接测试：</strong><span style="color:var(--success)">成功</span> · 已识别默认分支 `main`（原型模拟）。';
+      showToast('Repository 连接成功（模拟）');
+    });
+
+    $('#repositoryForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const editingId = event.currentTarget.dataset.editingId;
+      const payload = {
+        name: $('#repoNameInput').value.trim(),
+        url: $('#repoUrlInput').value.trim(),
+        defaultBranch: $('#repoBranchInput').value.trim(),
+      };
+      const duplicate = repositories.find((repo) => repo.name === payload.name && repo.id !== editingId);
+      if (duplicate) {
+        showToast('Repository 名称已经存在');
+        return;
+      }
+      if (editingId) {
+        Object.assign(repoById(editingId), payload);
+        showToast(`${payload.name} 已更新（模拟）`);
+      } else {
+        repositories.push({ id: `repo-${Date.now()}`, ...payload });
+        showToast(`${payload.name} 已录入（模拟）`);
+      }
+      closeLayer('repositoryModalLayer');
+      renderRepositories();
+      renderWorkspaces();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      $$('.modal-layer.open, .drawer-layer.open').forEach((layer) => layer.classList.remove('open'));
+    });
+
+    $$('.modal-layer, .drawer-layer').forEach((layer) => {
+      layer.addEventListener('mousedown', (event) => {
+        if (event.target === layer && layer.id !== 'progressModalLayer') closeLayer(layer.id);
+      });
+    });
+
+    renderWorkspaces();
+    renderRepositories();
+    updateCounts();
+  </script>
+</body>
+</html>
