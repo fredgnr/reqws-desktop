@@ -44,10 +44,11 @@ NPM_CONFIG_CACHE=<独立临时缓存目录> npm run package:macos
 | Bundle ID | `com.reqws.desktop` |
 | 版本 | `0.1.0` |
 | `codesign --verify --deep --strict` | 通过。 |
-| `spctl` designated requirement | 通过。 |
+| `codesign` designated requirement | 通过；产物满足自身 designated requirement。 |
+| `spctl --assess --type execute` | 未形成通过证据；对 ad hoc bundle 返回 code signing subsystem internal error。 |
 | 签名身份 | ad hoc；`TeamIdentifier` 未设置。 |
 
-ad hoc 签名只证明当前本机构建产物满足这次 package 校验，不代表 Developer ID 分发签名、公证或公开发布能力。
+ad hoc 签名和本次 GUI 启动只证明当前本机构建产物满足 package 与本机运行 smoke，不代表 Developer ID 分发签名、公证、Gatekeeper 接受或公开发布能力。
 
 ## Packaged app GUI smoke
 
