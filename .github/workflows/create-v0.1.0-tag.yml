@@ -1,0 +1,55 @@
+name: Create v0.1.0 tag
+
+on:
+  push:
+    branches:
+      - feat/global-settings-and-documentation
+
+permissions:
+  contents: write
+
+concurrency:
+  group: create-v0.1.0-tag
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    name: Create v0.1.0 at merged main commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_NAME: v0.1.0
+      TARGET_SHA: 7ea71d64d4aab9cf85fd6eaea0405222158d5bc5
+
+    steps:
+      - name: Verify target and create lightweight tag
+        run: |
+          set -euo pipefail
+
+          if resolved="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG_NAME}" --jq '.sha' 2>/dev/null)"; then
+            if [[ "$resolved" != "$TARGET_SHA" ]]; then
+              echo "::error::${TAG_NAME} already exists at ${resolved}, expected ${TARGET_SHA}."
+              exit 1
+            fi
+            echo "${TAG_NAME} already points to ${TARGET_SHA}."
+            exit 0
+          fi
+
+          relation="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_SHA}...main" --jq '.status')"
+          if [[ "$relation" != 'identical' && "$relation" != 'ahead' ]]; then
+            echo "::error::Target ${TARGET_SHA} is not contained in main (compare status: ${relation})."
+            exit 1
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${TAG_NAME}" \
+            -f sha="$TARGET_SHA"
+
+          resolved="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG_NAME}" --jq '.sha')"
+          if [[ "$resolved" != "$TARGET_SHA" ]]; then
+            echo "::error::Created tag resolves to ${resolved}, expected ${TARGET_SHA}."
+            exit 1
+          fi
+
+          echo "Created ${TAG_NAME} at ${TARGET_SHA}."
