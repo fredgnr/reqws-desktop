@@ -1,0 +1,290 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Validate tag and package versions
+        id: version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "$TAG" =~ $semver_re ]]; then
+            echo '::error::Release tag must use vMAJOR.MINOR.PATCH without leading zeroes.'
+            exit 1
+          fi
+
+          version="${TAG#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          lock_version="$(node -p "require('./package-lock.json').version")"
+          lock_root_version="$(node -p "require('./package-lock.json').packages[''].version")"
+
+          if [[ "$package_version" != "$version" \
+            || "$lock_version" != "$version" \
+            || "$lock_root_version" != "$version" ]]; then
+            echo "::error::Version mismatch: tag=$version package=$package_version lock=$lock_version lock-root=$lock_root_version"
+            exit 1
+          fi
+
+          default_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git show-ref --verify --quiet "$default_ref"; then
+            echo "::error::Default branch ref is unavailable: $default_ref"
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$tag_commit" "$default_ref"; then
+            echo "::error::Release tag must point to a commit contained in $DEFAULT_BRANCH."
+            exit 1
+          fi
+
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run project checks
+        run: npm run check
+
+  package:
+    name: Package macOS (${{ matrix.arch }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      ARCH: ${{ matrix.arch }}
+      CI: 'true'
+      VERSION: ${{ needs.validate.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Package and verify app
+        run: npm run package:macos -- --skip-ci --skip-check --arch "$ARCH"
+
+      - name: Create and verify release archive
+        run: |
+          app="out/ReqWS-darwin-${ARCH}/ReqWS.app"
+          output='dist/release'
+          archive="ReqWS-${VERSION}-macos-${ARCH}.zip"
+          verify_dir="${RUNNER_TEMP}/reqws-release-verify"
+
+          mkdir -p "$output" "$verify_dir"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "$app" "$output/$archive"
+          /usr/bin/ditto -x -k "$output/$archive" "$verify_dir"
+
+          extracted_app="$verify_dir/ReqWS.app"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$extracted_app"
+
+          bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$extracted_app/Contents/Info.plist")"
+          app_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$extracted_app/Contents/Info.plist")"
+          if [[ "$bundle_id" != 'com.reqws.desktop' || "$app_version" != "$VERSION" ]]; then
+            echo "::error::Archive identity mismatch: id=$bundle_id version=$app_version"
+            exit 1
+          fi
+
+          expected_arch="$ARCH"
+          if [[ "$ARCH" == 'x64' ]]; then expected_arch='x86_64'; fi
+          executable_arches="$(/usr/bin/lipo -archs "$extracted_app/Contents/MacOS/ReqWS")"
+          if [[ " $executable_arches " != *" $expected_arch "* ]]; then
+            echo "::error::Archive does not contain $expected_arch: $executable_arches"
+            exit 1
+          fi
+
+          (
+            cd "$output"
+            /usr/bin/shasum -a 256 "$archive" > "$archive.sha256"
+          )
+
+      - name: Upload intermediate release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/release/*.zip
+            dist/release/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - validate
+      - package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Verify release files and checksums
+        run: |
+          directory='dist/release'
+          expected_file="${RUNNER_TEMP}/expected-release-files"
+          actual_file="${RUNNER_TEMP}/actual-release-files"
+          printf '%s\n' \
+            "ReqWS-${VERSION}-macos-arm64.zip" \
+            "ReqWS-${VERSION}-macos-arm64.zip.sha256" \
+            "ReqWS-${VERSION}-macos-x64.zip" \
+            "ReqWS-${VERSION}-macos-x64.zip.sha256" \
+            | LC_ALL=C sort > "$expected_file"
+          find "$directory" -maxdepth 1 -type f -exec basename {} \; \
+            | LC_ALL=C sort > "$actual_file"
+          if ! diff -u "$expected_file" "$actual_file"; then
+            echo '::error::Downloaded release file set is incomplete or unexpected.'
+            exit 1
+          fi
+
+          cat "$directory"/*.zip.sha256 \
+            | LC_ALL=C sort -k 2 > "$directory/SHA256SUMS"
+          (
+            cd "$directory"
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Create, verify, and publish release
+        run: |
+          files=(
+            "dist/release/ReqWS-${VERSION}-macos-arm64.zip"
+            "dist/release/ReqWS-${VERSION}-macos-x64.zip"
+            'dist/release/SHA256SUMS'
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A GitHub Release already exists for $TAG; refusing to replace it."
+            exit 1
+          fi
+
+          release_creation_attempted=false
+          release_owner_marker="<!-- reqws-release-workflow:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
+          cleanup_draft() {
+            exit_code=$?
+            trap - EXIT
+            if [[ "$exit_code" -ne 0 && "$release_creation_attempted" == 'true' ]]; then
+              release_is_draft="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+              release_body="$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || true)"
+              if [[ "$release_is_draft" == 'true' && "$release_body" == *"$release_owner_marker"* ]]; then
+                echo "Removing incomplete draft release for $TAG."
+                gh release delete "$TAG" --yes \
+                  || echo "::warning::Could not remove incomplete draft release for $TAG."
+              else
+                echo "::warning::Release cleanup skipped because $TAG could not be confirmed as this run's draft."
+              fi
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup_draft EXIT
+
+          notes="$release_owner_marker
+          > [!WARNING]
+          > These macOS ZIPs use an ad-hoc signature. They are not Developer ID signed or notarized, and are not Gatekeeper-ready public-distribution artifacts."
+
+          release_creation_attempted=true
+          gh release create "$TAG" \
+            --verify-tag \
+            --draft \
+            --fail-on-no-commits \
+            --title "ReqWS $TAG" \
+            --generate-notes \
+            --notes "$notes"
+
+          gh release upload "$TAG" "${files[@]}"
+
+          if [[ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" != 'true' ]]; then
+            echo '::error::Release must remain a draft until its assets are verified.'
+            exit 1
+          fi
+
+          expected_assets_file="${RUNNER_TEMP}/expected-release-assets"
+          actual_assets_file="${RUNNER_TEMP}/actual-release-assets"
+          printf '%s\n' \
+            "ReqWS-${VERSION}-macos-arm64.zip" \
+            "ReqWS-${VERSION}-macos-x64.zip" \
+            'SHA256SUMS' \
+            | LC_ALL=C sort > "$expected_assets_file"
+          gh release view "$TAG" --json assets --jq '.assets[].name' \
+            | LC_ALL=C sort > "$actual_assets_file"
+          if ! diff -u "$expected_assets_file" "$actual_assets_file"; then
+            echo '::error::Draft release assets are incomplete or unexpected.'
+            exit 1
+          fi
+
+          if gh release view "$TAG" --json assets --jq '.assets[].size' | grep -Eq '^0$'; then
+            echo '::error::Draft release contains an empty asset.'
+            exit 1
+          fi
+
+          gh release edit "$TAG" --draft=false
+          release_creation_attempted=false
