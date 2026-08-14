@@ -50,6 +50,11 @@ export interface WorkspaceRepository {
 
 export type WorkspaceStatus = 'ready' | 'missing' | 'error';
 
+export type WorkspaceArtifact =
+  | 'workspace-root'
+  | 'manifest'
+  | 'workspace-file';
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -61,6 +66,7 @@ export interface WorkspaceSummary {
   repositoryIds?: string[];
   status: WorkspaceStatus;
   statusDetail?: string;
+  missingArtifacts?: WorkspaceArtifact[];
   lastError?: ReqwsErrorPayload;
   createdAt: string;
   updatedAt: string;
@@ -81,6 +87,7 @@ export interface WorkspaceManifest {
 export interface WorkspaceDetail extends WorkspaceManifest {
   status: WorkspaceStatus;
   statusDetail?: string;
+  missingArtifacts?: WorkspaceArtifact[];
   lastError?: ReqwsErrorPayload;
 }
 
@@ -140,6 +147,10 @@ export type OperationStage =
   | 'done'
   | 'error';
 
+export type OperationRollbackReason =
+  | 'CLEANING_STAGING'
+  | 'RETAINING_PUBLISHED_ARTIFACTS';
+
 export interface OperationProgress {
   operationId: string;
   kind: OperationKind;
@@ -148,6 +159,7 @@ export interface OperationProgress {
   current: number;
   total: number;
   message: string;
+  rollbackReason?: OperationRollbackReason;
   error?: ReqwsErrorPayload;
 }
 

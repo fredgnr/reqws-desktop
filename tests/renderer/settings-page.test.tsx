@@ -16,6 +16,7 @@ const settings: ResolvedGlobalSettings = {
 
 const saveSettings = vi.fn();
 const selectDirectory = vi.fn();
+const writeText = vi.fn();
 
 beforeAll(async () => {
   await initializeI18n('zh-CN');
@@ -25,6 +26,11 @@ beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   saveSettings.mockReset();
   selectDirectory.mockReset();
+  writeText.mockReset();
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
   Object.defineProperty(window, 'reqws', {
     configurable: true,
     value: {
@@ -132,11 +138,18 @@ describe('Settings page', () => {
 
   it('keeps unsaved values after a save failure', async () => {
     const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
     const onToast = vi.fn();
-    saveSettings.mockRejectedValue({
+    const failure = {
       code: 'SETTINGS_WRITE_FAILED',
       message: 'The state file could not be written.',
-    });
+      detail: '/private/tmp/reqws-state: EACCES',
+      stage: 'writing',
+    };
+    saveSettings.mockRejectedValue(failure);
     render(
       <SettingsPage
         loading={false}
@@ -149,9 +162,23 @@ describe('Settings page', () => {
     await user.selectOptions(screen.getByLabelText('界面语言'), 'zh-CN');
     await user.click(screen.getByRole('button', { name: '保存设置' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('无法保存设置。');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'SETTINGS_WRITE_FAILED · 无法保存设置。',
+    );
+    const details = screen.getByText('/private/tmp/reqws-state: EACCES').closest('details');
+    expect(details).not.toHaveAttribute('open');
+    await user.click(screen.getByRole('button', { name: '复制错误日志' }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(
+      '[SETTINGS_WRITE_FAILED] 无法保存设置。',
+    ));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(
+      '技术信息: The state file could not be written.',
+    ));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(
+      '/private/tmp/reqws-state: EACCES',
+    ));
     expect(screen.getByLabelText('界面语言')).toHaveValue('zh-CN');
     expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled();
-    expect(onToast).toHaveBeenCalledWith('无法保存设置。', 'error');
+    expect(onToast).not.toHaveBeenCalled();
   });
 });

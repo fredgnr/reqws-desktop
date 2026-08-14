@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 export interface ToastMessage {
   id: number;
+  errorCode?: string;
   message?: string;
   messageKey?: string;
   values?: Record<string, string | number>;
@@ -24,6 +25,7 @@ export function ToastRegion({
         <div className={`toast ${toast.tone === 'error' ? 'error' : ''}`} key={toast.id} role="status">
           <span className="toast-icon"><Check aria-hidden="true" size={12} /></span>
           <span className="toast-message">
+            {toast.errorCode && <><strong>{toast.errorCode}</strong> · </>}
             {toast.messageKey ? t(toast.messageKey, toast.values) : toast.message}
           </span>
           <button aria-label={t('common.dismissNotification')} className="toast-dismiss" onClick={() => dismiss(toast.id)} type="button">

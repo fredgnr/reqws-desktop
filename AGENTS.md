@@ -39,6 +39,10 @@ Follow two-space indentation, single quotes, semicolons, and trailing commas. Ty
 
 Use Vitest and name files `*.test.ts` or `*.test.tsx`. Write behavior-focused `describe` blocks and sentence-style `it` cases. Renderer tests use jsdom and Testing Library; integration tests use temporary local Git fixtures. Add regression coverage for behavior changes and run `npm run check` before review.
 
+## Internationalization Workflow
+
+Simplified Chinese is the source catalog and English is the reviewed translation. Whenever user-visible copy, either locale JSON file, an i18n key, placeholder, plural form, error code, workspace status, or operation message changes—or an i18n check reports stale translations—use the project [reqws-i18n skill](.agents/skills/reqws-i18n/SKILL.md). It requires a GPT-5.6 Sol/Pro translation subagent at reasoning `high` or above, structured translation output, main-agent validation, and the `i18n:scan` → review → `i18n:apply` → `i18n:check` sequence. Do not update the baseline or fall back to an ungated translation when that model requirement cannot be met.
+
 ## Commit & Pull Request Guidelines
 
 Git history and repository-specific templates are unavailable in this checkout. Use short, imperative commit subjects and keep each commit focused. Pull requests should explain the change and affected layers, link relevant issues, and list verification performed. Include screenshots for renderer changes and packaging/install evidence when modifying macOS delivery behavior.

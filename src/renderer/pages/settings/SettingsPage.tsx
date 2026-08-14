@@ -6,7 +6,8 @@ import type {
   LocalePreference,
   ResolvedGlobalSettings,
 } from '../../../shared/types';
-import { errorMessageKey, toDisplayError } from '../../error-utils';
+import { ErrorNotice } from '../../components/ErrorNotice';
+import { toDisplayError, type DisplayError } from '../../error-utils';
 
 interface SettingsPageProps {
   settings: ResolvedGlobalSettings | null;
@@ -43,7 +44,7 @@ export function SettingsPage({
     settings ? editableSettings(settings) : null,
   );
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DisplayError | null>(null);
 
   useEffect(() => {
     if (!settings) return;
@@ -78,9 +79,7 @@ export function SettingsPage({
       });
       if (selected) setForm((current) => current ? { ...current, [field]: selected } : current);
     } catch (caught) {
-      const normalized = toDisplayError(caught);
-      const key = errorMessageKey(normalized.code);
-      setError(i18n.exists(key) ? t(key) : t('errors.settingsDirectoryInvalid'));
+      setError(toDisplayError(caught));
     }
   };
 
@@ -98,12 +97,7 @@ export function SettingsPage({
       onToast(i18n.t('settings.saved'));
     } catch (caught) {
       const normalized = toDisplayError(caught);
-      const key = errorMessageKey(normalized.code);
-      const message = i18n.exists(key)
-        ? t(key)
-        : t('errors.settingsSaveFailed');
-      setError(message);
-      onToast(message, 'error');
+      setError(normalized);
     } finally {
       setSaving(false);
     }
@@ -209,7 +203,7 @@ export function SettingsPage({
             'settings.workspaceFileDirectory.description',
           )}
         </div>
-        {error && <div className="notice error settings-error" role="alert">{error}</div>}
+        {error && <div className="settings-error"><ErrorNotice error={error} /></div>}
         <div className="settings-actions">
           <button
             className="button primary"

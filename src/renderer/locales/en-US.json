@@ -91,6 +91,7 @@
       "title": "How creation works: ",
       "description": "Selected repositories are cloned one at a time. If any step fails, ReqWS cleans up temporary files and does not save an incomplete workspace. It never pushes automatically or shares Git metadata between repositories."
     },
+    "directoryUnavailable": "The previously selected folder no longer exists or cannot be accessed. Choose another folder.",
     "creating": "Creating…",
     "submit": "Create workspace"
   },
@@ -166,6 +167,12 @@
     "workspaceFile": "Workspace file",
     "updatedAt": "Updated",
     "pathsMissing": "Some workspace paths or files no longer exist.",
+    "pathsMissingDetail": "Missing: {{artifacts}}.",
+    "missingArtifacts": {
+      "workspace-root": "Code folder",
+      "manifest": "Workspace manifest",
+      "workspace-file": ".code-workspace file"
+    },
     "statusError": "This workspace currently has an error.",
     "managedFileNotice": "ReqWS manages this .code-workspace file. Adding, removing, or syncing repositories regenerates the file and overwrites manual changes.",
     "syncAndRestore": "Regenerate workspace file",
@@ -211,6 +218,10 @@
       "error": "Operation failed",
       "preparing": "Preparing…",
       "launching": "Opening…"
+    },
+    "rollbackReasons": {
+      "CLEANING_STAGING": "Creation failed. Cleaning up temporary files that were not published…",
+      "RETAINING_PUBLISHED_ARTIFACTS": "Creation failed. Generated folders and files were retained to avoid accidental deletion."
     }
   },
   "settings": {

@@ -2,7 +2,7 @@
 title: ReqWS MVP 全局配置页面增量技术方案
 type: technical-design
 status: active
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # ReqWS MVP 全局配置页面增量技术方案
@@ -764,21 +764,29 @@ void bootstrap();
 }
 ```
 
-英文翻译应基于中文源文案生成并经过人工或独立 Agent 复核，避免只复制中文占位文本。
+英文翻译应基于中文源文案生成并经过指定翻译 subagent 复核，避免只复制中文占位文本。
 
 按照仓库内可复现的 i18n 流程执行：
 
 ```text
 修改 zh-CN.json
     ↓
-生成并复核 en-US.json 翻译
+npm run i18n:scan
+    ↓
+以 GPT-5.6 Sol/Pro、reasoning high 或更高调用翻译 subagent
+    ↓
+subagent 只返回结构化翻译，不直接改文件
+    ↓
+主 Agent 校验 key、中文源文案、占位符、复数与术语并写入 en-US.json
     ↓
 npm run i18n:apply
     ↓
 npm run i18n:check
 ```
 
-`npm run i18n:apply` 会在 key、占位符和源码引用校验通过后更新同步基线；`npm run i18n:check` 确认提交内容与该基线一致。
+详细门禁和结构化输出契约以项目级 [`reqws-i18n` Skill](../../../.agents/skills/reqws-i18n/SKILL.md) 为准。翻译 subagent 必须显式使用 GPT-5.6 Sol 或 Pro，reasoning 不低于 `high`；模型或推理级别不可用时停止流程，不允许由主 Agent 自行翻译、降级到其他模型或更新同步基线。
+
+`npm run i18n:apply` 会在 key、占位符和源码引用校验通过后更新同步基线；`npm run i18n:check` 确认提交内容与该基线一致。中文 key 已存在但源文案发生变化、复数形式变化或占位符变化，也必须重新触发翻译审查。
 
 设置页面不需要单独建立第二套翻译流程。
 
@@ -855,6 +863,23 @@ const settingsErrorKeys = {
 
 文件路径和底层异常可以写入日志，但不应直接完整展示给普通用户。
 
+Renderer 必须保留跨进程错误中的稳定 `code`、`message`、`stage`、`detail` 和 `repositoryName`。Toast 至少显示“稳定错误码 · 本地化消息”；需要操作诊断的页面使用统一错误面板显示阶段、可展开技术信息和复制日志入口，不能把结构化错误提前压平成字符串。
+
+工作区状态和操作进度只用稳定枚举跨进程表达需要本地化的语义：
+
+```ts
+type WorkspaceArtifact =
+  | "workspace-root"
+  | "manifest"
+  | "workspace-file";
+
+type OperationRollbackReason =
+  | "CLEANING_STAGING"
+  | "RETAINING_PUBLISHED_ARTIFACTS";
+```
+
+`WorkspaceSummary` 和 `WorkspaceDetail` 在路径缺失时返回 `missingArtifacts`，Renderer 将每项翻译后列出；旧 payload 没有该字段时才回退到通用提示。`OperationProgress` 在 `rolling-back` 阶段返回可选 `rollbackReason`，Renderer 优先按该枚举区分“清理未发布 staging”和“保留已发布工件供恢复”，不能只按阶段显示可能与 Main 实际动作相反的文案。原始 `message` 和 `statusDetail` 仅保留为兼容或诊断信息，不直接作为本地化 UI 的事实源。
+
 ---
 
 ## 16. 自动测试
@@ -897,6 +922,11 @@ const settingsErrorKeys = {
 6. 目录选择器结果正确填入表单。
 7. 创建工作区表单使用全局默认目录。
 8. 创建表单中的单次路径覆盖不会修改全局设置。
+9. App 级错误 Toast 保留稳定错误码和对应的本地化消息。
+10. Settings 保存或选目录失败时保留错误码、阶段和可复制技术诊断。
+11. 工作区详情使用中英文准确列出缺失的 root、manifest 或 `.code-workspace`。
+12. 创建失败在未发布和已发布两种回滚分支返回不同稳定原因，Renderer 显示对应文案。
+13. 已失效的全局默认目录在创建对话框中显示与字段关联的警告；选择单次替代目录后清除警告且不保存全局设置。
 
 ### 16.4 i18n
 
@@ -912,6 +942,8 @@ npm run i18n:check
 * 设置页面不存在遗漏翻译。
 * 占位符保持一致。
 * 中文源文案修改后英文翻译会被标记为过期。
+* 缺失工件枚举和回滚原因枚举都有中英文映射。
+* 翻译审查由满足模型门禁的指定 subagent 产生结构化结果，再由主 Agent 写回英文资源。
 
 ---
 
@@ -933,6 +965,11 @@ npm run i18n:check
 12. 非法或已经删除的目录不会导致应用崩溃。
 13. 设置页面新增中文源文案后，英文翻译已生成、复核且通过 i18n 一致性检查。
 14. `npm run i18n:check` 和现有 CI 全部通过。
+15. 列表或详情刷新失败时，Toast 同时显示稳定错误码与本地化消息。
+16. Settings 保存失败时，页面可查看并复制错误码、阶段和技术诊断。
+17. 工作区缺失路径时，详情准确列出缺失的具体工件，并随界面语言切换。
+18. 创建失败时，进度分别准确说明正在清理未发布 staging 或保留已发布工件。
+19. 已保存默认目录失效后打开创建对话框，会显示字段级警告；选择替代目录后警告消失且全局设置不变。
 
 ---
 

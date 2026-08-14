@@ -192,6 +192,46 @@ describe('Create Workspace form', () => {
     expect(onPickDirectory).toHaveBeenCalledWith('root', '/Users/rose/old-features');
   });
 
+  it('warns about stale defaults and clears each warning after a replacement is selected', async () => {
+    const user = userEvent.setup();
+    const onPickDirectory = vi.fn()
+      .mockResolvedValueOnce('/Users/rose/new-features')
+      .mockResolvedValueOnce('/Users/rose/new-workspaces');
+    render(
+      <CreateWorkspaceDialog
+        busy={false}
+        invalidDirectoryFields={[
+          'workspaceParentDirectory',
+          'workspaceFileDirectory',
+        ]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+        onPickDirectory={onPickDirectory}
+        repositories={repositories}
+      />,
+    );
+
+    const rootPath = screen.getByLabelText(/^工作区代码目录/);
+    const workspaceFileDirectory = screen.getByLabelText(/\.code-workspace 文件存放目录/);
+    const warnings = screen.getAllByRole('status');
+    expect(rootPath).toHaveAttribute('aria-invalid', 'true');
+    expect(rootPath.getAttribute('aria-describedby')).toContain(warnings[0]!.id);
+    expect(workspaceFileDirectory).toHaveAttribute('aria-invalid', 'true');
+    expect(workspaceFileDirectory.getAttribute('aria-describedby')).toContain(warnings[1]!.id);
+
+    const chooseButtons = screen.getAllByRole('button', { name: '选择…' });
+    await user.click(chooseButtons[0]!);
+    await waitFor(() => expect(rootPath).not.toHaveAttribute('aria-invalid'));
+    expect(workspaceFileDirectory).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+
+    await user.click(chooseButtons[1]!);
+    await waitFor(() => expect(workspaceFileDirectory).not.toHaveAttribute('aria-invalid'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(onPickDirectory).toHaveBeenNthCalledWith(1, 'root', '');
+    expect(onPickDirectory).toHaveBeenNthCalledWith(2, 'workspace-file', '');
+  });
+
   it('preserves repository selection across filtering', async () => {
     const user = userEvent.setup();
     const onCreate = vi.fn().mockResolvedValue(undefined);

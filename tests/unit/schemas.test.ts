@@ -5,6 +5,7 @@ import {
   createWorkspaceInputSchema,
   globalSettingsSchema,
   testRepositoryInputSchema,
+  workspaceSummarySchema,
   workspaceManifestSchema,
 } from '../../src/shared/schemas';
 
@@ -109,6 +110,30 @@ describe('IPC and state schemas', () => {
       workspaceParentDirectory: null,
       workspaceFileDirectory: null,
     });
+  });
+
+  it('accepts only stable missing-workspace artifact identifiers', () => {
+    const summary = {
+      id: 'ws_1',
+      name: 'Feature One',
+      featureBranch: 'feature/one',
+      rootPath: '/Users/rose/Features/One',
+      workspaceFilePath: '/Users/rose/Workspaces/One.code-workspace',
+      repositoryNames: ['order-api'],
+      status: 'missing',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    };
+
+    expect(workspaceSummarySchema.safeParse({
+      ...summary,
+      missingArtifacts: ['workspace-root', 'manifest', 'workspace-file'],
+    }).success).toBe(true);
+    expect(workspaceSummarySchema.safeParse({
+      ...summary,
+      missingArtifacts: ['unknown-artifact'],
+    }).success).toBe(false);
+    expect(workspaceSummarySchema.safeParse(summary).success).toBe(true);
   });
 
   it('normalizes missing, malformed, and legacy persisted settings', () => {

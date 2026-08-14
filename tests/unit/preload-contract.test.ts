@@ -115,10 +115,11 @@ describe('preload ReqwsAPI contract', () => {
     const progress = {
       operationId: 'op_1',
       kind: 'create-workspace' as const,
-      stage: 'cloning' as const,
+      stage: 'rolling-back' as const,
       current: 1,
       total: 2,
-      message: 'Cloning order-api',
+      message: 'Cleaning unpublished staging',
+      rollbackReason: 'CLEANING_STAGING' as const,
     };
     wrapped({}, progress);
     expect(listener).toHaveBeenCalledWith(progress);

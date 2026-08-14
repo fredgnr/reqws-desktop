@@ -139,6 +139,12 @@ export const workspaceRepositorySchema = z.object({
   relativePath: repositoryName,
 });
 
+export const workspaceArtifactSchema = z.enum([
+  'workspace-root',
+  'manifest',
+  'workspace-file',
+]);
+
 export const reqwsErrorPayloadSchema = z.object({
   code: z.enum(reqwsErrorCodes),
   message: nonEmpty,
@@ -157,6 +163,7 @@ export const workspaceSummarySchema = z.object({
   repositoryIds: z.array(id).optional(),
   status: z.enum(['ready', 'missing', 'error']),
   statusDetail: z.string().optional(),
+  missingArtifacts: z.array(workspaceArtifactSchema).optional(),
   lastError: reqwsErrorPayloadSchema.optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

@@ -158,12 +158,12 @@ src/renderer/locales/en-US.json
 新增或修改文案时：
 
 1. 更新中文源文案和实际引用；
-2. 更新并复核英文翻译，保持 key 和 `{{placeholder}}` 一致；
-3. 运行 `npm run i18n:scan` 检查缺 key、占位符、错误码、操作状态和陈旧翻译；catalog 合法变更导致的 baseline drift 会在 apply 前按预期以非零状态提示，应先修复除此提示外的错误；
-4. 人工确认两种语言后运行 `npm run i18n:apply` 更新同步基线；
+2. 使用项目级 [`reqws-i18n` Skill](../../.agents/skills/reqws-i18n/SKILL.md)；它会先运行 `npm run i18n:scan`，并以 GPT-5.6 Sol/Pro、reasoning `high` 或更高调用指定翻译 subagent；
+3. 翻译 subagent 只返回结构化 JSON，不直接编辑文件；主 Agent 校验 key、中文源文案、`{{placeholder}}`、复数形式和术语后，才写入 `en-US.json`；
+4. 复核两套 catalog 的限定 diff，然后运行 `npm run i18n:apply` 更新同步基线；
 5. 运行 `npm run i18n:check` 和相关 Renderer 测试。
 
-不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。
+模型或 reasoning 门禁不可用时必须停止，不要由主 Agent 自行翻译或降级模型。不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。已有 key 的源文案变化、复数形式和占位符变化同样触发完整流程。
 
 ## 7. 测试策略
 
@@ -213,6 +213,7 @@ GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需
 
 - 开发实例和安装版默认共享 ReqWS 的真实 userData。涉及迁移、损坏恢复或破坏性实验时，先退出应用并备份 state；优先用注入依赖或临时目录的测试，不拿真实工作区试错。
 - 错误跨 contextBridge 后是结构化 payload，不依赖自定义 `Error` 原型。Renderer 使用统一错误映射和复制日志入口。
+- 需要本地化的工作区缺失工件和回滚动作必须使用 shared 稳定枚举；Main 的自由文本只作诊断 fallback，Renderer 不用它推断用户可见语义。
 - Settings 或 state 加载失败不应让 Renderer 先以错误语言闪烁；启动初始化必须在首屏渲染前完成可用 locale 的解析。
 - 不在日志、fixture、截图或文档中写入 Token、带凭据 URL、私钥、本机敏感目录或真实用户数据。
 - 不自动删除用户工作区。清理测试 fixture 和生成物时限定到已验证的临时路径。

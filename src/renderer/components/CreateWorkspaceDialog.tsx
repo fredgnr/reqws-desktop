@@ -1,6 +1,10 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CreateWorkspaceInput, Repository } from '../../shared/types';
+import type {
+  CreateWorkspaceInput,
+  GlobalDirectorySetting,
+  Repository,
+} from '../../shared/types';
 import { defaultFeatureBranch, matchesRepository, workspaceSlug } from '../utils';
 import { CloseButton, Dialog } from './Dialog';
 import { DirectoryPickerField } from './DirectoryPickerField';
@@ -11,6 +15,7 @@ interface CreateWorkspaceDialogProps {
   repositories: Repository[];
   initialWorkspaceParentDirectory?: string;
   initialWorkspaceFileDirectory?: string;
+  invalidDirectoryFields?: GlobalDirectorySetting[];
   busy: boolean;
   onClose: () => void;
   onPickDirectory: (kind: 'root' | 'workspace-file', suggestedPath: string) => Promise<string | null>;
@@ -21,6 +26,7 @@ export function CreateWorkspaceDialog({
   repositories,
   initialWorkspaceParentDirectory = '',
   initialWorkspaceFileDirectory = '',
+  invalidDirectoryFields = [],
   busy,
   onClose,
   onPickDirectory,
@@ -34,6 +40,9 @@ export function CreateWorkspaceDialog({
   const [rootParent, setRootParent] = useState(initialWorkspaceParentDirectory);
   const [rootEdited, setRootEdited] = useState(false);
   const [workspaceFileDirectory, setWorkspaceFileDirectory] = useState(initialWorkspaceFileDirectory);
+  const [staleDirectoryFields, setStaleDirectoryFields] = useState<Set<GlobalDirectorySetting>>(
+    () => new Set(invalidDirectoryFields),
+  );
   const [repoSearch, setRepoSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [selectionError, setSelectionError] = useState(false);
@@ -47,6 +56,15 @@ export function CreateWorkspaceDialog({
   );
   const slug = workspaceSlug(name);
   const filename = `${slug}.code-workspace`;
+
+  const clearStaleDirectory = (field: GlobalDirectorySetting): void => {
+    setStaleDirectoryFields((current) => {
+      if (!current.has(field)) return current;
+      const next = new Set(current);
+      next.delete(field);
+      return next;
+    });
+  };
 
   const handleName = (value: string): void => {
     setName(value);
@@ -73,12 +91,16 @@ export function CreateWorkspaceDialog({
       setRootParent(normalizedParent);
       setRootPath(`${normalizedParent}/${slug}`);
       setRootEdited(false);
+      clearStaleDirectory('workspaceParentDirectory');
     }
   };
 
   const pickWorkspaceFile = async (): Promise<void> => {
     const selected = await onPickDirectory('workspace-file', workspaceFileDirectory);
-    if (selected) setWorkspaceFileDirectory(selected);
+    if (selected) {
+      setWorkspaceFileDirectory(selected);
+      clearStaleDirectory('workspaceFileDirectory');
+    }
   };
 
   const handleSubmit = async (event: FormEvent): Promise<void> => {
@@ -139,6 +161,9 @@ export function CreateWorkspaceDialog({
               onChange={(value) => { setRootPath(value); setRootEdited(true); }}
               onPick={() => void pickRoot()}
               value={rootPath}
+              warning={staleDirectoryFields.has('workspaceParentDirectory')
+                ? t('createWorkspace.directoryUnavailable')
+                : undefined}
             />
             <DirectoryPickerField
               help={t('createWorkspace.workspaceFileDirectory.help', { filename })}
@@ -146,6 +171,9 @@ export function CreateWorkspaceDialog({
               onChange={setWorkspaceFileDirectory}
               onPick={() => void pickWorkspaceFile()}
               value={workspaceFileDirectory}
+              warning={staleDirectoryFields.has('workspaceFileDirectory')
+                ? t('createWorkspace.directoryUnavailable')
+                : undefined}
             />
           </div>
           <div className="section-title-row">

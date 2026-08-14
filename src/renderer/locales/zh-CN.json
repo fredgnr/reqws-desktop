@@ -91,6 +91,7 @@
       "title": "创建说明：",
       "description": "所选仓库将依次克隆。若中途失败，ReqWS 会清理临时目录，不会保存未完成的工作区。ReqWS 不会自动推送分支，也不会让仓库共享 Git 元数据。"
     },
+    "directoryUnavailable": "此前设置的目录已不存在或无法访问，请重新选择。",
     "creating": "正在创建…",
     "submit": "创建工作区"
   },
@@ -166,6 +167,12 @@
     "workspaceFile": "工作区文件",
     "updatedAt": "更新时间",
     "pathsMissing": "工作区的部分路径或文件已经不存在。",
+    "pathsMissingDetail": "缺失：{{artifacts}}。",
+    "missingArtifacts": {
+      "workspace-root": "代码目录",
+      "manifest": "工作区清单",
+      "workspace-file": ".code-workspace 文件"
+    },
     "statusError": "工作区当前存在异常。",
     "managedFileNotice": "此 .code-workspace 文件由 ReqWS 管理。添加、移除或同步仓库时，ReqWS 会重新生成该文件，并覆盖手动修改。",
     "syncAndRestore": "重新生成工作区文件",
@@ -211,6 +218,10 @@
       "error": "操作失败",
       "preparing": "正在准备…",
       "launching": "正在打开…"
+    },
+    "rollbackReasons": {
+      "CLEANING_STAGING": "创建失败，正在清理尚未发布的临时文件…",
+      "RETAINING_PUBLISHED_ARTIFACTS": "创建失败。为避免误删，已保留生成的目录和文件。"
     }
   },
   "settings": {

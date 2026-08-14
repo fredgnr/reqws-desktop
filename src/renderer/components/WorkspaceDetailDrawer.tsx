@@ -1,9 +1,20 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { EditorAvailability, Repository, WorkspaceDetail } from '../../shared/types';
+import type {
+  EditorAvailability,
+  Repository,
+  WorkspaceArtifact,
+  WorkspaceDetail,
+} from '../../shared/types';
 import { CloseButton, Dialog } from './Dialog';
 import { ErrorNotice } from './ErrorNotice';
 import { formatUpdatedAt } from '../utils';
+
+const missingArtifactMessageKeys: Record<WorkspaceArtifact, string> = {
+  'workspace-root': 'workspaceDetail.missingArtifacts.workspace-root',
+  manifest: 'workspaceDetail.missingArtifacts.manifest',
+  'workspace-file': 'workspaceDetail.missingArtifacts.workspace-file',
+};
 
 interface WorkspaceDetailDrawerProps {
   workspace: WorkspaceDetail;
@@ -57,6 +68,15 @@ export function WorkspaceDetailDrawer({
   const unavailableEditorList = new Intl.ListFormat(
     i18n.resolvedLanguage ?? i18n.language,
   ).format(unavailableEditors);
+  const missingArtifactLabels = (workspace.missingArtifacts ?? []).map(
+    (artifact) => {
+      const messageKey = missingArtifactMessageKeys[artifact];
+      return messageKey && i18n.exists(messageKey) ? t(messageKey) : artifact;
+    },
+  );
+  const missingArtifactList = new Intl.ListFormat(
+    i18n.resolvedLanguage ?? i18n.language,
+  ).format(missingArtifactLabels);
 
   return (
     <Dialog dismissible={!busy} drawer onClose={onClose} titleId="workspace-detail-title">
@@ -94,7 +114,15 @@ export function WorkspaceDetailDrawer({
           <div className="detail-label">{t('workspaceDetail.updatedAt')}</div>
           <div className="detail-value">{formatUpdatedAt(workspace.updatedAt, i18n.resolvedLanguage ?? i18n.language)}</div>
         </div>
-        {workspace.status === 'missing' && <div className="notice warning">{t('workspaceDetail.pathsMissing')}</div>}
+        {workspace.status === 'missing' && (
+          <div className="notice warning">
+            {missingArtifactList && i18n.exists('workspaceDetail.pathsMissingDetail')
+              ? t('workspaceDetail.pathsMissingDetail', {
+                  artifacts: missingArtifactList,
+                })
+              : t('workspaceDetail.pathsMissing')}
+          </div>
+        )}
         {workspace.status === 'error' && !workspace.lastError && <div className="notice warning">{t('workspaceDetail.statusError')}</div>}
         {workspace.lastError && <ErrorNotice error={workspace.lastError} />}
         <div className="notice">{t('workspaceDetail.managedFileNotice')}</div>

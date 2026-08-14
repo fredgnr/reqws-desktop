@@ -4,6 +4,7 @@ import type {
   CreateRepositoryInput,
   CreateWorkspaceInput,
   OperationProgress,
+  OperationRollbackReason,
   Repository,
   RepositoryListItem,
   ResolvedGlobalSettings,
@@ -35,6 +36,12 @@ type Confirmation =
   | { kind: 'remove-repository'; repository: RepositoryListItem }
   | { kind: 'remove-workspace-repository'; repository: WorkspaceRepository }
   | { kind: 'forget-workspace' };
+
+const rollbackReasonMessageKeys: Record<OperationRollbackReason, string> = {
+  CLEANING_STAGING: 'operation.rollbackReasons.CLEANING_STAGING',
+  RETAINING_PUBLISHED_ARTIFACTS:
+    'operation.rollbackReasons.RETAINING_PUBLISHED_ARTIFACTS',
+};
 
 interface ActiveOperation extends Omit<OperationProgress, 'error'> {
   error?: DisplayError;
@@ -71,9 +78,19 @@ export function App({
     messageKey: string,
     values: Record<string, string | number> = {},
     tone: ToastMessage['tone'] = 'success',
+    errorCode?: string,
   ): void => {
     const id = Date.now() + Math.random();
-    setToasts((current) => [...current, { id, messageKey, values, tone }]);
+    setToasts((current) => [
+      ...current,
+      {
+        id,
+        messageKey,
+        values,
+        tone,
+        ...(errorCode ? { errorCode } : {}),
+      },
+    ]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
   }, []);
 
@@ -89,7 +106,7 @@ export function App({
   const toastError = useCallback((error: unknown): void => {
     const normalized = toDisplayError(error);
     const key = errorMessageKey(normalized.code);
-    toast(i18n.exists(key) ? key : 'errors.fallback', { code: normalized.code }, 'error');
+    toast(i18n.exists(key) ? key : 'errors.fallback', {}, 'error', normalized.code);
   }, [i18n, toast]);
 
   const loadData = useCallback(async (showRefresh = false): Promise<void> => {
@@ -141,11 +158,16 @@ export function App({
     const errorKey = activeOperation.error
       ? errorMessageKey(activeOperation.error.code)
       : null;
+    const rollbackReasonKey = activeOperation.rollbackReason
+      ? rollbackReasonMessageKeys[activeOperation.rollbackReason]
+      : undefined;
     operationView = {
       title: t(`operation.titles.${activeOperation.kind}`),
       message: errorKey && i18n.exists(errorKey)
         ? t(errorKey)
-        : t(`operation.stages.${activeOperation.stage}`),
+        : rollbackReasonKey && i18n.exists(rollbackReasonKey)
+          ? t(rollbackReasonKey)
+          : t(`operation.stages.${activeOperation.stage}`),
       repositoryName: activeOperation.repositoryName,
       current: activeOperation.current,
       total: activeOperation.total,
@@ -158,6 +180,9 @@ export function App({
   const operationInProgress = busy || Boolean(
     activeOperation && activeOperation.stage !== 'error' && activeOperation.stage !== 'done',
   );
+  const workspaceCreationUnavailable = settingsLoading
+    || !availability?.git.available
+    || operationInProgress;
 
   const runEditorAction = async (action: () => Promise<void>, success: string): Promise<void> => {
     try {
@@ -383,10 +408,17 @@ export function App({
     <>
       <AppShell
         onNavigate={setPage}
-        onPrimary={() => page === 'workspaces' ? setCreateWorkspaceOpen(true) : (setTestResult(null), setRepositoryDialog('new'))}
+        onPrimary={() => {
+          if (page === 'workspaces') {
+            if (!workspaceCreationUnavailable) setCreateWorkspaceOpen(true);
+          } else {
+            setTestResult(null);
+            setRepositoryDialog('new');
+          }
+        }}
         onRefresh={() => void loadData(true)}
         page={page}
-        primaryDisabled={page === 'workspaces' && (!availability?.git.available || operationInProgress)}
+        primaryDisabled={page === 'workspaces' && workspaceCreationUnavailable}
         refreshing={refreshing}
         repositoryCount={repositories.length}
         workspaceCount={workspaces.length}
@@ -394,8 +426,10 @@ export function App({
         {page === 'workspaces' ? (
           <WorkspacesPage
             availability={availability}
-            loading={loading}
-            onCreate={() => setCreateWorkspaceOpen(true)}
+            loading={loading || settingsLoading}
+            onCreate={() => {
+              if (!workspaceCreationUnavailable) setCreateWorkspaceOpen(true);
+            }}
             onDetails={(id) => void openDetails(id)}
             onOpenCursor={(id) => void runEditorAction(() => api.editors.openCursor(id), 'app.toasts.openedCursor')}
             onOpenVSCode={(id) => void runEditorAction(() => api.editors.openVSCode(id), 'app.toasts.openedVSCode')}
@@ -431,6 +465,7 @@ export function App({
           busy={busy}
           initialWorkspaceFileDirectory={settings?.workspaceFileDirectory ?? undefined}
           initialWorkspaceParentDirectory={settings?.workspaceParentDirectory ?? undefined}
+          invalidDirectoryFields={settings?.invalidDirectoryFields}
           onClose={() => !busy && setCreateWorkspaceOpen(false)}
           onCreate={createWorkspace}
           onPickDirectory={(kind, suggestedPath) => api.dialogs.selectDirectory({
