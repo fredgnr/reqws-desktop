@@ -1,11 +1,14 @@
 import { appStateSchema } from '../../shared/schemas';
-import type { AppState } from '../../shared/types';
+import {
+  DEFAULT_GLOBAL_SETTINGS,
+  type AppState,
+} from '../../shared/types';
 import { AtomicJsonStore } from './atomic-json-store';
 
 export function createDefaultAppState(): AppState {
   return {
     schemaVersion: 1,
-    settings: {},
+    settings: { ...DEFAULT_GLOBAL_SETTINGS },
     repositories: [],
     workspaces: [],
   };

@@ -1,0 +1,344 @@
+{
+  "common": {
+    "actions": "操作",
+    "add": "添加",
+    "available": "可用",
+    "cancel": "取消",
+    "chooseDirectory": "选择…",
+    "clear": "清除",
+    "close": "关闭",
+    "completed": "已完成",
+    "dismissNotification": "关闭通知",
+    "editorNotFound": "未找到 {{editor}}",
+    "failure": "失败",
+    "gitNotFound": "未找到 Git",
+    "inProgress": "进行中",
+    "labelSeparator": "：",
+    "pressKeyToClose": "按 {{key}} 关闭",
+    "processing": "正在处理…",
+    "refresh": "刷新",
+    "refreshing": "正在刷新…",
+    "remove": "移除",
+    "repository": "仓库",
+    "repositoryCount": "{{count}} 个仓库",
+    "repositoryCount_one": "{{count}} 个仓库",
+    "repositoryCount_other": "{{count}} 个仓库",
+    "saving": "正在保存…",
+    "success": "成功",
+    "unavailable": "不可用",
+    "updatedAt": "更新于 {{date}}",
+    "status": {
+      "ready": "就绪",
+      "missing": "路径缺失",
+      "error": "异常"
+    }
+  },
+  "navigation": {
+    "main": "主导航",
+    "workspaces": "工作区",
+    "repositories": "仓库",
+    "settings": "设置"
+  },
+  "shell": {
+    "brandSubtitle": "独立工作区管理器",
+    "localOnly": {
+      "title": "仅存储在本机",
+      "description": "仓库信息、路径和操作日志仅保存在这台 Mac 上。"
+    },
+    "workspaces": {
+      "subtitle": "创建、管理并打开彼此隔离的多仓库工作区"
+    },
+    "repositories": {
+      "subtitle": "管理创建工作区时可选的 Git 仓库"
+    },
+    "settings": {
+      "subtitle": "管理界面语言和新工作区的默认位置"
+    }
+  },
+  "confirmDialog": {
+    "localFilesPreserved": "不会删除本地文件或文件夹。"
+  },
+  "createWorkspace": {
+    "title": "创建工作区",
+    "description": "ReqWS 会将所选仓库分别克隆到独立目录，并切换到同一功能分支。",
+    "name": {
+      "label": "工作区名称",
+      "help": "用于生成默认文件夹名和 .code-workspace 文件名。"
+    },
+    "branch": {
+      "label": "功能分支",
+      "help": "如果远端已有该分支，则跟踪远端分支；否则基于各仓库的默认分支创建。"
+    },
+    "rootPath": {
+      "label": "工作区代码目录",
+      "help": "选择父目录后，ReqWS 会用工作区名称生成最终路径。你也可以直接输入绝对路径。"
+    },
+    "workspaceFileDirectory": {
+      "label": ".code-workspace 文件存放目录",
+      "help": "将生成：{{filename}}"
+    },
+    "repositories": {
+      "label": "选择仓库",
+      "selectedCount": "已选择 {{count}} 个",
+      "selectedCount_one": "已选择 {{count}} 个",
+      "selectedCount_other": "已选择 {{count}} 个",
+      "searchLabel": "搜索可选仓库",
+      "searchPlaceholder": "搜索仓库…",
+      "noMatches": "没有匹配的仓库",
+      "required": "请至少选择一个仓库。"
+    },
+    "rules": {
+      "title": "创建说明：",
+      "description": "所选仓库将依次克隆。若中途失败，ReqWS 会清理临时目录，不会保存未完成的工作区。ReqWS 不会自动推送分支，也不会让仓库共享 Git 元数据。"
+    },
+    "directoryUnavailable": "此前设置的目录已不存在或无法访问，请重新选择。",
+    "creating": "正在创建…",
+    "submit": "创建工作区"
+  },
+  "repositories": {
+    "summary": {
+      "total": { "label": "仓库", "description": "创建工作区时可选的仓库" },
+      "inUse": { "label": "使用中", "description": "已被至少一个工作区使用" },
+      "git": { "available": "已检测到，可执行 Git 操作", "unavailable": "未检测到，Git 操作不可用" }
+    },
+    "gitUnavailable": "未检测到 Git。你仍可编辑仓库列表，但无法测试连接、创建工作区或向工作区添加仓库。",
+    "search": { "label": "搜索仓库", "placeholder": "搜索仓库名称、Git 地址或默认分支…" },
+    "resultCount": "{{count}} 个仓库",
+    "resultCount_one": "{{count}} 个仓库",
+    "resultCount_other": "{{count}} 个仓库",
+    "loading": "正在加载仓库…",
+    "table": { "name": "名称", "url": "Git 地址", "defaultBranch": "默认分支", "usage": "工作区" },
+    "workspaceUsageCount": "{{count}} 个工作区",
+    "workspaceUsageCount_one": "{{count}} 个工作区",
+    "workspaceUsageCount_other": "{{count}} 个工作区",
+    "test": "测试",
+    "edit": "编辑 {{name}}",
+    "empty": {
+      "noMatches": { "title": "没有匹配的仓库", "description": "试试仓库名称、Git 地址或默认分支。" },
+      "initial": { "title": "还没有仓库", "description": "先添加仓库，创建工作区时即可选择。" }
+    }
+  },
+  "repositoryDialog": {
+    "createTitle": "添加仓库",
+    "editTitle": "编辑仓库",
+    "description": "保存的是仓库配置，不会立即克隆仓库。即使连接测试失败，也可以保存。",
+    "url": { "label": "Git 仓库地址", "help": "支持不含凭据的 HTTPS 和 SSH 地址；添加时会根据 URL 自动填写名称。" },
+    "name": "名称",
+    "defaultBranch": "默认分支",
+    "gitUnavailable": "未检测到 Git，因此无法测试连接；你仍可保存仓库信息。",
+    "test": {
+      "resultLabel": "连接测试：",
+      "remoteDefaultBranch": "远端默认分支 {{branch}}",
+      "failureDoesNotBlockSave": "连接测试失败不会阻止保存。",
+      "testing": "正在测试…",
+      "action": "测试连接"
+    },
+    "editWarning": "更改地址或默认分支不会影响已创建工作区中的本地仓库。",
+    "remove": "删除仓库记录",
+    "create": "添加仓库",
+    "save": "保存更改"
+  },
+  "workspaces": {
+    "summary": {
+      "total": { "label": "工作区", "description": "所有工作区" },
+      "ready": { "label": "就绪", "description": "代码目录和工作区文件均可用" },
+      "repositories": { "label": "仓库", "description": "仓库列表中的记录" }
+    },
+    "editorsUnavailable": "以下编辑器不可用：{{editors}}",
+    "search": { "label": "搜索工作区", "placeholder": "搜索名称、分支、仓库或路径…" },
+    "resultCount": "{{count}} 个工作区",
+    "resultCount_one": "{{count}} 个工作区",
+    "resultCount_other": "{{count}} 个工作区",
+    "loading": "正在加载工作区…",
+    "table": { "workspace": "工作区", "repositories": "仓库", "rootPath": "代码目录", "status": "状态" },
+    "pathIncomplete": "工作区路径不完整",
+    "viewDetails": "查看 {{name}} 的详情",
+    "empty": {
+      "noMatches": { "title": "没有匹配的工作区", "description": "试试名称、分支、仓库名或路径。" },
+      "initial": { "title": "还没有工作区", "description": "选择至少一个仓库，创建你的第一个独立工作区。" }
+    }
+  },
+  "workspaceDetail": {
+    "openCursorRoot": "用 Cursor 打开代码目录",
+    "revealInFinder": "在 Finder 中显示",
+    "editorDisabledPathIncomplete": "工作区路径不完整，无法用编辑器打开。",
+    "editorsUnavailable": "以下编辑器不可用：{{editors}}",
+    "rootPath": "代码目录",
+    "workspaceFile": "工作区文件",
+    "updatedAt": "更新时间",
+    "pathsMissing": "工作区的部分路径或文件已经不存在。",
+    "pathsMissingDetail": "缺失：{{artifacts}}。",
+    "missingArtifacts": {
+      "workspace-root": "代码目录",
+      "manifest": "工作区清单",
+      "workspace-file": ".code-workspace 文件"
+    },
+    "statusError": "工作区当前存在异常。",
+    "managedFileNotice": "此 .code-workspace 文件由 ReqWS 管理。添加、移除或同步仓库时，ReqWS 会重新生成该文件，并覆盖手动修改。",
+    "syncAndRestore": "重新生成工作区文件",
+    "repositories": {
+      "count": "仓库 · {{count}}",
+      "count_one": "仓库 · {{count}}",
+      "count_other": "仓库 · {{count}}",
+      "branch": "均使用分支 {{branch}}",
+      "empty": "暂无仓库",
+      "removeNotice": "从工作区移除仓库只会更新工作区清单和 .code-workspace 文件，不会删除本地仓库目录。"
+    },
+    "addRepository": {
+      "title": "添加仓库",
+      "description": "从仓库列表中选择",
+      "label": "选择要添加的仓库",
+      "empty": "没有其他可添加的仓库"
+    },
+    "forget": {
+      "title": "移除工作区记录",
+      "description": "只会从 ReqWS 的工作区列表中移除记录。磁盘上的代码目录、工作区清单和 .code-workspace 文件都会保留。",
+      "action": "移除工作区记录"
+    }
+  },
+  "operation": {
+    "description": "操作完成前请保持 ReqWS 运行，期间无法发起其他 Git 操作。",
+    "progressLabel": "操作进度",
+    "titles": {
+      "create-workspace": "正在创建工作区",
+      "add-repository": "正在添加仓库",
+      "remove-repository": "正在移除仓库",
+      "test-repository": "正在测试仓库连接",
+      "sync-workspace": "正在同步工作区"
+    },
+    "stages": {
+      "validating": "正在检查输入…",
+      "cloning": "正在克隆仓库…",
+      "fetching": "正在获取远端数据…",
+      "switching": "正在切换分支…",
+      "writing": "正在写入工作区文件…",
+      "rolling-back": "正在安全清理未完成的操作…",
+      "ls-remote": "正在检查远端仓库…",
+      "done": "操作已完成",
+      "error": "操作失败",
+      "preparing": "正在准备…",
+      "launching": "正在打开…"
+    },
+    "rollbackReasons": {
+      "CLEANING_STAGING": "创建失败，正在清理尚未发布的临时文件…",
+      "RETAINING_PUBLISHED_ARTIFACTS": "创建失败。为避免误删，已保留生成的目录和文件。"
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "generalSection": "通用",
+    "language": {
+      "label": "界面语言",
+      "description": "选择 ReqWS 使用的界面语言。",
+      "system": "跟随系统",
+      "zhCN": "简体中文",
+      "enUS": "English"
+    },
+    "workspaceSection": "工作区默认设置",
+    "workspaceParentDirectory": {
+      "label": "工作区默认父目录",
+      "description": "新工作区默认创建在此目录下。"
+    },
+    "workspaceFileDirectory": {
+      "label": ".code-workspace 文件存放目录",
+      "description": "自动生成的 .code-workspace 文件默认保存在此处。"
+    },
+    "emptyDirectory": "尚未设置",
+    "directoryUnavailable": "此前设置的目录已不存在或无法访问，请重新选择。",
+    "selectDirectory": "选择",
+    "selectDirectoryFor": "为“{{name}}”选择目录",
+    "clearDirectory": "清除",
+    "clearDirectoryFor": "清除“{{name}}”",
+    "save": "保存设置",
+    "saving": "正在保存…",
+    "saved": "设置已保存。",
+    "loading": "正在加载设置…"
+  },
+  "app": {
+    "toasts": {
+      "operationFailed": "{{code}} · 操作失败",
+      "repositoryUpdated": "已更新仓库“{{name}}”。",
+      "repositoryCreated": "已添加仓库“{{name}}”。",
+      "repositoryTestSucceeded": "仓库“{{name}}”连接成功。",
+      "repositoryTestFailed": "仓库“{{name}}”连接失败；你仍可编辑并保存。",
+      "workspaceCreated": "已创建工作区“{{name}}”。",
+      "repositoryRecordRemoved": "已从仓库列表中移除“{{name}}”，本地仓库副本未删除。",
+      "workspaceRepositoryRemoved": "已从工作区移除“{{name}}”，本地仓库目录未删除。",
+      "workspaceRecordRemoved": "已从 ReqWS 中移除“{{name}}”，磁盘上的文件未删除。",
+      "repositoryAdded": "已将仓库添加到工作区。",
+      "workspaceSynced": "已重新生成工作区文件。",
+      "openedVSCode": "已在 VS Code 中打开工作区。",
+      "openedCursor": "已在 Cursor 中打开工作区。",
+      "openedCursorRoot": "已在 Cursor 中打开代码目录。",
+      "revealedFinder": "已在 Finder 中显示代码目录。"
+    },
+    "confirmations": {
+      "removeRepository": {
+        "title": "删除仓库记录“{{name}}”？",
+        "referenced": "“{{name}}”仍由以下工作区使用：{{workspaces}}。删除记录不会更改现有工作区，也不会删除本地仓库副本。",
+        "unreferenced": "删除记录不会删除任何本地仓库副本。",
+        "action": "删除仓库记录"
+      },
+      "removeWorkspaceRepository": {
+        "title": "从工作区移除“{{name}}”？",
+        "description": "ReqWS 会更新工作区清单和 .code-workspace 文件，但不会删除本地仓库目录。",
+        "action": "移除仓库"
+      },
+      "forgetWorkspace": {
+        "title": "移除工作区记录“{{name}}”？",
+        "description": "只会从 ReqWS 的工作区列表中移除记录；代码目录、工作区清单和 .code-workspace 文件都会保留。",
+        "action": "移除工作区记录"
+      }
+    },
+    "directoryDialogs": {
+      "workspaceParent": "选择工作区的存放目录",
+      "workspaceFile": "选择 .code-workspace 文件的存放目录"
+    },
+    "loadingWorkspaceDetail": "正在加载工作区详情"
+  },
+  "errors": {
+    "fallback": "操作失败，请重试。",
+    "copyLog": "复制错误日志",
+    "stage": "阶段",
+    "technicalMessage": "技术信息",
+    "technicalDetails": "技术详情",
+    "settingsLoadFailed": "无法加载设置。",
+    "settingsSaveFailed": "无法保存设置。",
+    "settingsDirectoryInvalid": "所选目录无效或已经不存在。",
+    "codes": {
+      "GIT_NOT_FOUND": "未找到 Git。",
+      "GIT_PROCESS_FAILED": "Git 操作失败。",
+      "GIT_PROCESS_TIMEOUT": "Git 操作超时。",
+      "INVALID_INPUT": "输入内容无效。",
+      "INVALID_REPOSITORY_NAME": "仓库名称无效。",
+      "DUPLICATE_REPOSITORY_NAME": "仓库名称已存在。",
+      "INVALID_BRANCH_NAME": "分支名称无效。",
+      "REPOSITORY_UNREACHABLE": "无法连接到仓库。",
+      "REPOSITORY_IN_USE": "仓库仍被工作区使用。",
+      "WORKSPACE_ROOT_EXISTS": "工作区目录已存在。",
+      "WORKSPACE_FILE_EXISTS": "工作区文件已存在。",
+      "CLONE_FAILED": "克隆仓库失败。",
+      "DEFAULT_BRANCH_NOT_FOUND": "未找到默认分支。",
+      "FEATURE_BRANCH_CHECKOUT_FAILED": "无法切换到功能分支。",
+      "WORKSPACE_NOT_FOUND": "找不到工作区。",
+      "WORKSPACE_PATH_MISSING": "工作区路径不存在。",
+      "REPOSITORY_NOT_FOUND": "找不到仓库。",
+      "REPOSITORY_ALREADY_ADDED": "该仓库已在工作区中。",
+      "REPOSITORY_PATH_CONFLICT": "仓库目录发生冲突。",
+      "EDITOR_NOT_FOUND": "找不到请求的编辑器。",
+      "STATE_READ_FAILED": "无法读取应用数据。",
+      "STATE_WRITE_FAILED": "无法保存应用数据。",
+      "STATE_CORRUPT": "应用数据文件已损坏。",
+      "SETTINGS_INVALID_LOCALE": "所选界面语言不受支持。",
+      "SETTINGS_DIRECTORY_NOT_FOUND": "所选目录不存在或无法访问。",
+      "SETTINGS_DIRECTORY_NOT_DIRECTORY": "所选路径不是文件夹。",
+      "SETTINGS_READ_FAILED": "无法加载设置。",
+      "SETTINGS_WRITE_FAILED": "无法保存设置。",
+      "MANIFEST_READ_FAILED": "无法读取工作区清单。",
+      "MANIFEST_WRITE_FAILED": "无法保存工作区清单。",
+      "WORKSPACE_FILE_WRITE_FAILED": "无法写入工作区文件。",
+      "OPERATION_IN_PROGRESS": "已有操作正在进行。",
+      "UNKNOWN": "发生未知错误。"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { FolderX, MoreHorizontal, SearchX } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { EditorAvailability, WorkspaceSummary } from '../../shared/types';
 import { SearchField } from '../components/SearchField';
 import { formatUpdatedAt, matchesWorkspace } from '../utils';
@@ -16,12 +17,6 @@ interface WorkspacesPageProps {
   onOpenCursor: (id: string) => void;
 }
 
-function statusLabel(status: WorkspaceSummary['status']): string {
-  if (status === 'ready') return 'Ready';
-  if (status === 'missing') return 'Missing';
-  return 'Error';
-}
-
 export function WorkspacesPage({
   workspaces,
   repositoryCount,
@@ -34,63 +29,69 @@ export function WorkspacesPage({
   onOpenVSCode,
   onOpenCursor,
 }: WorkspacesPageProps): React.JSX.Element {
+  const { i18n, t } = useTranslation();
   const visible = workspaces.filter((workspace) => matchesWorkspace(workspace, search));
   const ready = workspaces.filter((workspace) => workspace.status === 'ready').length;
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
-  const availabilityMessages = [
-    !vscodeAvailable
-      ? availability?.vscode.reason ?? '未找到 Visual Studio Code'
-      : undefined,
-    !cursorAvailable ? availability?.cursor.reason ?? '未找到 Cursor' : undefined,
-  ].filter(Boolean);
+  const unavailableEditors = [
+    !vscodeAvailable ? 'Visual Studio Code' : undefined,
+    !cursorAvailable ? 'Cursor' : undefined,
+  ].filter((editor): editor is string => Boolean(editor));
+  const vscodeReason = t('common.editorNotFound', { editor: 'Visual Studio Code' });
+  const cursorReason = t('common.editorNotFound', { editor: 'Cursor' });
+  const unavailableEditorList = new Intl.ListFormat(
+    i18n.resolvedLanguage ?? i18n.language,
+  ).format(unavailableEditors);
 
   return (
     <section className="page">
       <div className="summary-grid">
         <div className="summary-card">
-          <div className="summary-label">Workspaces</div>
+          <div className="summary-label">{t('workspaces.summary.total.label')}</div>
           <div className="summary-value">{workspaces.length}</div>
-          <div className="summary-foot">全部 feature 工作区</div>
+          <div className="summary-foot">{t('workspaces.summary.total.description')}</div>
         </div>
         <div className="summary-card">
-          <div className="summary-label">Ready</div>
+          <div className="summary-label">{t('workspaces.summary.ready.label')}</div>
           <div className="summary-value">{ready}</div>
-          <div className="summary-foot">路径和 workspace 文件完整</div>
+          <div className="summary-foot">{t('workspaces.summary.ready.description')}</div>
         </div>
         <div className="summary-card">
-          <div className="summary-label">Repositories</div>
+          <div className="summary-label">{t('workspaces.summary.repositories.label')}</div>
           <div className="summary-value">{repositoryCount}</div>
-          <div className="summary-foot">已录入仓库目录</div>
+          <div className="summary-foot">{t('workspaces.summary.repositories.description')}</div>
         </div>
       </div>
-      {availabilityMessages.length > 0 && (
+      {unavailableEditors.length > 0 && (
         <p className="muted" id="workspace-editor-availability">
-          编辑器操作不可用：{availabilityMessages.join('；')}
+          {t('workspaces.editorsUnavailable', {
+            editors: unavailableEditorList,
+          })}
         </p>
       )}
       <div className="panel">
         <div className="panel-toolbar">
           <SearchField
-            label="搜索 Workspace"
+            label={t('workspaces.search.label')}
             onChange={onSearch}
-            placeholder="搜索名称、分支、仓库或路径…"
+            placeholder={t('workspaces.search.placeholder')}
             value={search}
           />
-          <div className="result-count">{visible.length} 个 workspace</div>
+          <div className="result-count">{t('workspaces.resultCount', { count: visible.length })}</div>
         </div>
         {loading ? (
-          <div className="loading"><span className="spinner" />加载 Workspaces…</div>
+          <div className="loading"><span className="spinner" />{t('workspaces.loading')}</div>
         ) : visible.length > 0 ? (
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th style={{ width: '23%' }}>Workspace</th>
-                  <th style={{ width: '22%' }}>Repositories</th>
-                  <th className="hide-compact" style={{ width: '24%' }}>代码目录</th>
-                  <th style={{ width: '10%' }}>状态</th>
-                  <th style={{ width: '21%', textAlign: 'right' }}>操作</th>
+                  <th style={{ width: '23%' }}>{t('workspaces.table.workspace')}</th>
+                  <th style={{ width: '22%' }}>{t('workspaces.table.repositories')}</th>
+                  <th className="hide-compact" style={{ width: '24%' }}>{t('workspaces.table.rootPath')}</th>
+                  <th style={{ width: '10%' }}>{t('workspaces.table.status')}</th>
+                  <th style={{ width: '21%', textAlign: 'right' }}>{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -99,17 +100,19 @@ export function WorkspacesPage({
                     <td>
                       <div className="workspace-name">{workspace.name}</div>
                       <div className="workspace-branch">{workspace.featureBranch}</div>
-                      <div className="updated">更新于 {formatUpdatedAt(workspace.updatedAt)}</div>
+                      <div className="updated">{t('common.updatedAt', {
+                        date: formatUpdatedAt(workspace.updatedAt, i18n.resolvedLanguage ?? i18n.language),
+                      })}</div>
                     </td>
                     <td>
-                      <div aria-label={`${workspace.repositoryNames.length} 个仓库`} className="tag-list">
+                      <div aria-label={t('common.repositoryCount', { count: workspace.repositoryNames.length })} className="tag-list">
                         {workspace.repositoryNames.slice(0, 3).map((name) => <span className="tag" key={name}>{name}</span>)}
                         {workspace.repositoryNames.length > 3 && <span className="tag more">+{workspace.repositoryNames.length - 3}</span>}
                       </div>
-                      <div className="updated">{workspace.repositoryNames.length} 个仓库</div>
+                      <div className="updated">{t('common.repositoryCount', { count: workspace.repositoryNames.length })}</div>
                     </td>
                     <td className="hide-compact"><div className="path" title={workspace.rootPath}>{workspace.rootPath}</div></td>
-                    <td><span className={`status ${workspace.status}`}>{statusLabel(workspace.status)}</span></td>
+                    <td><span className={`status ${workspace.status}`}>{t(`common.status.${workspace.status}`)}</span></td>
                     <td>
                       <div className="row-actions">
                         <button
@@ -117,7 +120,7 @@ export function WorkspacesPage({
                           aria-describedby={!vscodeAvailable ? 'workspace-editor-availability' : undefined}
                           disabled={workspace.status !== 'ready' || !vscodeAvailable}
                           onClick={() => onOpenVSCode(workspace.id)}
-                          title={!vscodeAvailable ? '未找到 Visual Studio Code' : workspace.status !== 'ready' ? 'Workspace 路径不完整' : undefined}
+                          title={!vscodeAvailable ? vscodeReason : workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : undefined}
                           type="button"
                         >VS Code</button>
                         <button
@@ -125,10 +128,10 @@ export function WorkspacesPage({
                           aria-describedby={!cursorAvailable ? 'workspace-editor-availability' : undefined}
                           disabled={workspace.status !== 'ready' || !cursorAvailable}
                           onClick={() => onOpenCursor(workspace.id)}
-                          title={!cursorAvailable ? '未找到 Cursor' : workspace.status !== 'ready' ? 'Workspace 路径不完整' : undefined}
+                          title={!cursorAvailable ? cursorReason : workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : undefined}
                           type="button"
                         >Cursor</button>
-                        <button aria-label={`查看 ${workspace.name} 详情`} className="button small icon-only" onClick={() => onDetails(workspace.id)} type="button">
+                        <button aria-label={t('workspaces.viewDetails', { name: workspace.name })} className="button small icon-only" onClick={() => onDetails(workspace.id)} type="button">
                           <MoreHorizontal aria-hidden="true" size={16} />
                         </button>
                       </div>
@@ -141,9 +144,9 @@ export function WorkspacesPage({
         ) : (
           <div className="empty-state">
             {search ? <SearchX aria-hidden="true" className="empty-icon" size={32} /> : <FolderX aria-hidden="true" className="empty-icon" size={32} />}
-            <h2 className="empty-title">{search ? '没有匹配的 Workspace' : '还没有 Workspace'}</h2>
-            <p className="empty-copy">{search ? '试试名称、分支、仓库名或路径。' : '选择至少一个仓库，创建第一个独立工作区。'}</p>
-            {!search && <button className="button primary" onClick={onCreate} type="button">创建 Workspace</button>}
+            <h2 className="empty-title">{search ? t('workspaces.empty.noMatches.title') : t('workspaces.empty.initial.title')}</h2>
+            <p className="empty-copy">{search ? t('workspaces.empty.noMatches.description') : t('workspaces.empty.initial.description')}</p>
+            {!search && <button className="button primary" onClick={onCreate} type="button">{t('createWorkspace.submit')}</button>}
           </div>
         )}
       </div>

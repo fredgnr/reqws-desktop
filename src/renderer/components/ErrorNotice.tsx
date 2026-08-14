@@ -1,11 +1,22 @@
 import { Copy } from 'lucide-react';
-import type { DisplayError } from '../error-utils';
+import { useTranslation } from 'react-i18next';
+import { errorMessageKey, type DisplayError } from '../error-utils';
 
 export function ErrorNotice({ error }: { error: DisplayError }): React.JSX.Element {
+  const { i18n, t } = useTranslation();
+  const messageKey = errorMessageKey(error.code);
+  const message = i18n.exists(messageKey)
+    ? t(messageKey)
+    : t('errors.fallback');
+  const stageKey = error.stage ? `operation.stages.${error.stage}` : '';
+  const stage = error.stage
+    ? i18n.exists(stageKey) ? t(stageKey) : error.stage
+    : undefined;
   const log = [
-    `[${error.code}] ${error.message}`,
-    error.repositoryName ? `Repository: ${error.repositoryName}` : '',
-    error.stage ? `Stage: ${error.stage}` : '',
+    `[${error.code}] ${message}`,
+    error.message !== message ? `${t('errors.technicalMessage')}: ${error.message}` : '',
+    error.repositoryName ? `${t('common.repository')}: ${error.repositoryName}` : '',
+    stage ? `${t('errors.stage')}: ${stage}` : '',
     error.detail ?? '',
   ].filter(Boolean).join('\n');
 
@@ -13,16 +24,21 @@ export function ErrorNotice({ error }: { error: DisplayError }): React.JSX.Eleme
     <div className="notice error" role="alert">
       <div className="copy-row">
         <div>
-          <strong>{error.code}</strong> · {error.message}
-          {error.repositoryName && <div>Repository：{error.repositoryName}</div>}
-          {error.stage && <div>阶段：{error.stage}</div>}
-          {error.detail && <pre className="error-detail">{error.detail}</pre>}
+          <strong>{error.code}</strong> · {message}
+          {error.repositoryName && <div>{t('common.repository')}{t('common.labelSeparator')}{error.repositoryName}</div>}
+          {stage && <div>{t('errors.stage')}{t('common.labelSeparator')}{stage}</div>}
+          {error.detail && (
+            <details>
+              <summary>{t('errors.technicalDetails')}</summary>
+              <pre className="error-detail">{error.detail}</pre>
+            </details>
+          )}
         </div>
         <button
-          aria-label="复制错误日志"
+          aria-label={t('errors.copyLog')}
           className="button small icon-only"
           onClick={() => void navigator.clipboard?.writeText(log)}
-          title="复制错误日志"
+          title={t('errors.copyLog')}
           type="button"
         >
           <Copy aria-hidden="true" size={14} />

@@ -6,10 +6,11 @@ import { IPC_CHANNELS } from '../../src/shared/ipc-channels';
 const progress = {
   operationId: 'op_1',
   kind: 'create-workspace' as const,
-  stage: 'cloning' as const,
+  stage: 'rolling-back' as const,
   current: 1,
   total: 2,
-  message: 'Cloning',
+  message: 'Cleaning unpublished staging',
+  rollbackReason: 'CLEANING_STAGING' as const,
 };
 
 describe('OperationReporter', () => {

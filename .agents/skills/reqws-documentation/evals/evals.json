@@ -1,0 +1,23 @@
+{
+  "skill_name": "reqws-documentation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "给 ReqWS 增加 workspace 归档功能：要新增 state 字段、Zod schema、typed IPC、preload API、main service 和 renderer 入口，还要兼容旧 state。请先说明你会查哪些项目文档、评估哪些文档影响，以及实现收尾时如何维护索引。不要实际改文件。",
+      "expected_output": "Starts from docs indexes, treats reference as historical, classifies requirements/design/testing/delivery with reasons, and names the nearest and parent indexes that need synchronization.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "RepositoriesPage 的一个按钮少了句号，现有验收语义不变。请修复前先判断是否需要给这个小改动新建需求文档、技术方案、测试方案和交付文档，并说明索引是否要改。只输出判断，不改仓库。",
+      "expected_output": "Avoids ceremonial documents, gives explicit none reasons, and avoids index churn while still considering existing documentation authority.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "把 MVP 验证记录改成更明确的日期命名并移动到 testing 子目录。请列出安全迁移、引用更新和验证步骤，尤其说明怎样防止文档变成孤儿。不要实际改文件。",
+      "expected_output": "Preserves content and user edits, updates the nearest index and inbound links, checks parent navigation when needed, and runs the documentation checker.",
+      "files": []
+    }
+  ]
+}

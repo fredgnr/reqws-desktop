@@ -3,7 +3,9 @@ import {
   appStateSchema,
   createRepositoryInputSchema,
   createWorkspaceInputSchema,
+  globalSettingsSchema,
   testRepositoryInputSchema,
+  workspaceSummarySchema,
   workspaceManifestSchema,
 } from '../../src/shared/schemas';
 
@@ -98,14 +100,82 @@ describe('IPC and state schemas', () => {
   });
 
   it('accepts the empty schema-v1 state', () => {
-    expect(
-      appStateSchema.parse({
-        schemaVersion: 1,
-        settings: {},
-        repositories: [],
-        workspaces: [],
-      }),
-    ).toBeTruthy();
+    expect(appStateSchema.parse({
+      schemaVersion: 1,
+      settings: {},
+      repositories: [],
+      workspaces: [],
+    }).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    });
+  });
+
+  it('accepts only stable missing-workspace artifact identifiers', () => {
+    const summary = {
+      id: 'ws_1',
+      name: 'Feature One',
+      featureBranch: 'feature/one',
+      rootPath: '/Users/rose/Features/One',
+      workspaceFilePath: '/Users/rose/Workspaces/One.code-workspace',
+      repositoryNames: ['order-api'],
+      status: 'missing',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    };
+
+    expect(workspaceSummarySchema.safeParse({
+      ...summary,
+      missingArtifacts: ['workspace-root', 'manifest', 'workspace-file'],
+    }).success).toBe(true);
+    expect(workspaceSummarySchema.safeParse({
+      ...summary,
+      missingArtifacts: ['unknown-artifact'],
+    }).success).toBe(false);
+    expect(workspaceSummarySchema.safeParse(summary).success).toBe(true);
+  });
+
+  it('normalizes missing, malformed, and legacy persisted settings', () => {
+    const base = { schemaVersion: 1 as const, repositories: [], workspaces: [] };
+    expect(appStateSchema.parse(base).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    });
+    expect(appStateSchema.parse({
+      ...base,
+      settings: {
+        localePreference: 'unknown',
+        workspaceParentDirectory: '../relative',
+        lastWorkspaceFileDirectory: '/legacy/workspaces',
+      },
+    }).settings).toEqual({
+      localePreference: 'system',
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: '/legacy/workspaces',
+    });
+  });
+
+  it('uses a strict schema for settings save requests', () => {
+    const settings = {
+      localePreference: 'zh-CN',
+      workspaceParentDirectory: '/features',
+      workspaceFileDirectory: null,
+    };
+    expect(globalSettingsSchema.safeParse(settings).success).toBe(true);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      localePreference: 'fr-FR',
+    }).success).toBe(false);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      stateFilePath: '/tmp/attacker-state.json',
+    }).success).toBe(false);
+    expect(globalSettingsSchema.safeParse({
+      ...settings,
+      workspaceParentDirectory: 'relative/path',
+    }).success).toBe(false);
   });
 
   it('rejects duplicate semantic identities in state', () => {

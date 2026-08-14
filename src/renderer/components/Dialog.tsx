@@ -1,5 +1,6 @@
 import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface DialogProps {
   children: ReactNode;
@@ -90,9 +91,11 @@ export function Dialog({
   );
 }
 
-export function CloseButton({ onClick, label = '关闭' }: { onClick: () => void; label?: string }): React.JSX.Element {
+export function CloseButton({ onClick, label }: { onClick: () => void; label?: string }): React.JSX.Element {
+  const { t } = useTranslation();
+
   return (
-    <button aria-label={label} className="close-button" onClick={onClick} type="button">
+    <button aria-label={label ?? t('common.close')} className="close-button" onClick={onClick} type="button">
       <X aria-hidden="true" size={17} />
     </button>
   );

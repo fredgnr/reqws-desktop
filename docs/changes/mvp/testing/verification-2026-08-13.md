@@ -1,4 +1,13 @@
+---
+title: ReqWS MVP 验证记录
+type: test-report
+status: archived
+updated: 2026-08-13
+---
+
 # ReqWS MVP 验证记录
+
+本文保存 2026-08-13 在目标 Mac 上执行的自动检查、GUI smoke、安全回归和安装验证证据。
 
 验证日期：2026-08-13  
 目标机：macOS 26.2（arm64），Git 2.55.0

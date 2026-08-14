@@ -176,6 +176,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .add-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; }
 .danger-zone { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
 
+.settings-page { max-width: 980px; }
+.settings-panel { overflow: visible; }
+.settings-section { padding: 22px 24px; border-bottom: 1px solid var(--line); }
+.settings-section-title { margin: 0 0 18px; font-size: 14px; font-weight: 740; }
+.settings-field { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(360px, 1.25fr); gap: 28px; align-items: center; padding: 13px 0; }
+.settings-label { display: block; color: #373c45; font-size: 12px; font-weight: 680; }
+.settings-select { width: 100%; }
+.settings-directory-row { display: flex; gap: 8px; min-width: 0; }
+.settings-directory-row .field-input { min-width: 0; }
+.settings-directory-row .field-input[readonly] { color: #555d69; background: #f8f9fb; }
+.settings-error { margin: 18px 24px 0; }
+.settings-actions { display: flex; justify-content: flex-end; padding: 18px 24px 22px; }
+.settings-loading { min-height: calc(100vh - 84px); }
+
 .progress-list { display: flex; flex-direction: column; gap: 9px; max-height: 300px; overflow: auto; }
 .progress-item { display: grid; grid-template-columns: 23px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 10px; background: #f8f9fb; border: 1px solid #eceef2; border-radius: 8px; }
 .progress-symbol { display: grid; place-items: center; width: 20px; height: 20px; color: #9ba0a9; background: #e9ebef; border-radius: 99px; font-size: 11px; }
@@ -202,6 +216,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-grid .summary-card:last-child { display: none; }
   .hide-compact { display: none; }
+  .settings-field { grid-template-columns: minmax(190px, .65fr) minmax(330px, 1.35fr); gap: 20px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type {
-  AppSettings,
   CreateRepositoryInput,
   CreateWorkspaceInput,
   OperationProgress,
+  OperationRollbackReason,
   Repository,
   RepositoryListItem,
+  ResolvedGlobalSettings,
   SystemAvailability,
   TestRepositoryResult,
   WorkspaceDetail,
@@ -20,8 +22,13 @@ import { RepositoryDialog } from './components/RepositoryDialog';
 import { ToastRegion, type ToastMessage } from './components/Toast';
 import { WorkspaceDetailDrawer } from './components/WorkspaceDetailDrawer';
 import { RepositoriesPage } from './pages/RepositoriesPage';
+import { SettingsPage } from './pages/settings/SettingsPage';
 import { WorkspacesPage } from './pages/WorkspacesPage';
-import { toDisplayError } from './error-utils';
+import {
+  errorMessageKey,
+  toDisplayError,
+  type DisplayError,
+} from './error-utils';
 
 const api = window.reqws;
 
@@ -30,35 +37,28 @@ type Confirmation =
   | { kind: 'remove-workspace-repository'; repository: WorkspaceRepository }
   | { kind: 'forget-workspace' };
 
-function operationTitle(progress: Pick<OperationProgress, 'kind'>): string {
-  const titles: Record<OperationProgress['kind'], string> = {
-    'create-workspace': '正在创建 Workspace',
-    'add-repository': '正在增加 Repository',
-    'remove-repository': '正在移除 Repository',
-    'test-repository': '正在测试 Repository',
-    'sync-workspace': '正在同步 Workspace',
-  };
-  return titles[progress.kind];
+const rollbackReasonMessageKeys: Record<OperationRollbackReason, string> = {
+  CLEANING_STAGING: 'operation.rollbackReasons.CLEANING_STAGING',
+  RETAINING_PUBLISHED_ARTIFACTS:
+    'operation.rollbackReasons.RETAINING_PUBLISHED_ARTIFACTS',
+};
+
+interface ActiveOperation extends Omit<OperationProgress, 'error'> {
+  error?: DisplayError;
 }
 
-function toOperationView(progress: OperationProgress): OperationView {
-  return {
-    title: operationTitle(progress),
-    message: progress.message,
-    repositoryName: progress.repositoryName,
-    current: progress.current,
-    total: progress.total,
-    done: progress.stage === 'done',
-    error: progress.error,
-  };
-}
-
-export function App(): React.JSX.Element {
+export function App({
+  initialSettings = null,
+}: {
+  initialSettings?: ResolvedGlobalSettings | null;
+}): React.JSX.Element {
+  const { i18n, t } = useTranslation();
   const [page, setPage] = useState<PageName>('workspaces');
   const [repositories, setRepositories] = useState<RepositoryListItem[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [availability, setAvailability] = useState<SystemAvailability | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({});
+  const [settings, setSettings] = useState<ResolvedGlobalSettings | null>(initialSettings);
+  const [settingsLoading, setSettingsLoading] = useState(initialSettings === null);
   const [workspaceSearch, setWorkspaceSearch] = useState('');
   const [repositorySearch, setRepositorySearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -69,54 +69,127 @@ export function App(): React.JSX.Element {
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [activeOperation, setActiveOperation] = useState<OperationView | null>(null);
+  const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  const toast = useCallback((message: string, tone: ToastMessage['tone'] = 'success'): void => {
+  const toast = useCallback((
+    messageKey: string,
+    values: Record<string, string | number> = {},
+    tone: ToastMessage['tone'] = 'success',
+    errorCode?: string,
+  ): void => {
+    const id = Date.now() + Math.random();
+    setToasts((current) => [
+      ...current,
+      {
+        id,
+        messageKey,
+        values,
+        tone,
+        ...(errorCode ? { errorCode } : {}),
+      },
+    ]);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
+  }, []);
+
+  const toastText = useCallback((
+    message: string,
+    tone: ToastMessage['tone'] = 'success',
+  ): void => {
     const id = Date.now() + Math.random();
     setToasts((current) => [...current, { id, message, tone }]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
   }, []);
 
+  const toastError = useCallback((error: unknown): void => {
+    const normalized = toDisplayError(error);
+    const key = errorMessageKey(normalized.code);
+    toast(i18n.exists(key) ? key : 'errors.fallback', {}, 'error', normalized.code);
+  }, [i18n, toast]);
+
   const loadData = useCallback(async (showRefresh = false): Promise<void> => {
     if (showRefresh) setRefreshing(true);
     try {
-      const [nextRepositories, nextWorkspaces, nextAvailability, nextSettings] = await Promise.all([
+      const [nextRepositories, nextWorkspaces, nextAvailability] = await Promise.all([
         api.repositories.list(),
         api.workspaces.list(),
         api.editors.getAvailability(),
-        api.workspaces.getSettings(),
       ]);
       setRepositories(nextRepositories);
       setWorkspaces(nextWorkspaces);
       setAvailability(nextAvailability);
-      setSettings(nextSettings);
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [toast]);
+  }, [toastError]);
 
   useEffect(() => {
     queueMicrotask(() => void loadData());
-    return api.operations.onProgress((progress) => setActiveOperation(toOperationView(progress)));
+    return api.operations.onProgress(setActiveOperation);
   }, [loadData]);
 
+  useEffect(() => {
+    if (initialSettings) return;
+    let active = true;
+    void api.settings.get()
+      .then(async (nextSettings) => {
+        if (!active) return;
+        setSettings(nextSettings);
+        await i18n.changeLanguage(nextSettings.effectiveLocale);
+      })
+      .catch(toastError)
+      .finally(() => {
+        if (active) setSettingsLoading(false);
+      });
+    return () => { active = false; };
+  }, [i18n, initialSettings, toastError]);
+
+  const handleSettingsSaved = useCallback((nextSettings: ResolvedGlobalSettings): void => {
+    setSettings(nextSettings);
+  }, []);
+
+  let operationView: OperationView | null = null;
+  if (activeOperation) {
+    const errorKey = activeOperation.error
+      ? errorMessageKey(activeOperation.error.code)
+      : null;
+    const rollbackReasonKey = activeOperation.rollbackReason
+      ? rollbackReasonMessageKeys[activeOperation.rollbackReason]
+      : undefined;
+    operationView = {
+      title: t(`operation.titles.${activeOperation.kind}`),
+      message: errorKey && i18n.exists(errorKey)
+        ? t(errorKey)
+        : rollbackReasonKey && i18n.exists(rollbackReasonKey)
+          ? t(rollbackReasonKey)
+          : t(`operation.stages.${activeOperation.stage}`),
+      repositoryName: activeOperation.repositoryName,
+      current: activeOperation.current,
+      total: activeOperation.total,
+      done: activeOperation.stage === 'done',
+      error: activeOperation.error,
+    };
+  }
+
   const currentRepository = repositoryDialog === 'new' ? undefined : repositoryDialog ?? undefined;
-  const operationInProgress = busy || Boolean(activeOperation && !activeOperation.error && !activeOperation.done);
+  const operationInProgress = busy || Boolean(
+    activeOperation && activeOperation.stage !== 'error' && activeOperation.stage !== 'done',
+  );
+  const workspaceCreationUnavailable = settingsLoading
+    || !availability?.git.available
+    || operationInProgress;
 
   const runEditorAction = async (action: () => Promise<void>, success: string): Promise<void> => {
     try {
       await action();
       toast(success);
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
     }
   };
 
@@ -126,8 +199,7 @@ export function App(): React.JSX.Element {
     try {
       setDetail(await api.workspaces.get(id));
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
     } finally {
       setDetailLoading(false);
     }
@@ -142,10 +214,9 @@ export function App(): React.JSX.Element {
       setRepositoryDialog(null);
       setTestResult(null);
       await loadData();
-      toast(currentRepository ? `${input.name} 已更新` : `${input.name} 已录入`);
+      toast(currentRepository ? 'app.toasts.repositoryUpdated' : 'app.toasts.repositoryCreated', { name: input.name });
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
       throw error;
     } finally {
       setBusy(false);
@@ -158,8 +229,7 @@ export function App(): React.JSX.Element {
     try {
       setTestResult(await api.repositories.testConnection({ url: input.url }));
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
       throw error;
     } finally {
       setBusy(false);
@@ -171,10 +241,13 @@ export function App(): React.JSX.Element {
     setTestingId(repository.id);
     try {
       const result = await api.repositories.testConnection({ url: repository.url });
-      toast(result.success ? `${repository.name} 连接成功` : `${repository.name} 连接失败，仍可编辑和保存`, result.success ? 'success' : 'error');
+      toast(
+        result.success ? 'app.toasts.repositoryTestSucceeded' : 'app.toasts.repositoryTestFailed',
+        { name: repository.name },
+        result.success ? 'success' : 'error',
+      );
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
     } finally {
       setTestingId(null);
     }
@@ -183,18 +256,27 @@ export function App(): React.JSX.Element {
   const createWorkspace = async (input: CreateWorkspaceInput): Promise<void> => {
     if (busy) return;
     setBusy(true);
-    setActiveOperation({ title: '正在创建 Workspace', message: '正在校验输入…', current: 0, total: Math.max(1, input.repositoryIds.length + 2) });
+    setActiveOperation({
+      operationId: `renderer-${Date.now()}`,
+      kind: 'create-workspace',
+      stage: 'validating',
+      message: '',
+      current: 0,
+      total: Math.max(1, input.repositoryIds.length + 2),
+    });
     try {
       await api.workspaces.create(input);
       setCreateWorkspaceOpen(false);
       await loadData();
-      setActiveOperation((current) => current ? { ...current, message: 'Workspace 创建完成', current: current.total, done: true } : null);
-      toast(`${input.name} 已创建`);
+      setActiveOperation((current) => current ? { ...current, stage: 'done', current: current.total } : null);
+      toast('app.toasts.workspaceCreated', { name: input.name });
     } catch (error) {
       const normalized = toDisplayError(error);
       setActiveOperation((current) => ({
-        title: current?.title ?? '创建 Workspace 失败',
-        message: normalized.message,
+        operationId: current?.operationId ?? `renderer-${Date.now()}`,
+        kind: current?.kind ?? 'create-workspace',
+        stage: 'error',
+        message: '',
         current: current?.current ?? 0,
         total: current?.total ?? 1,
         error: normalized,
@@ -206,22 +288,38 @@ export function App(): React.JSX.Element {
   };
 
   const mutateWorkspace = async (
-    title: string,
+    kind: Extract<OperationProgress['kind'], 'add-repository' | 'remove-repository' | 'sync-workspace'>,
     action: () => Promise<WorkspaceDetail>,
-    success: string,
+    successKey: string,
+    successValues: Record<string, string | number> = {},
   ): Promise<void> => {
     if (busy) return;
     setBusy(true);
-    setActiveOperation({ title, message: '准备操作…', current: 0, total: 1 });
+    setActiveOperation({
+      operationId: `renderer-${Date.now()}`,
+      kind,
+      stage: 'validating',
+      message: '',
+      current: 0,
+      total: 1,
+    });
     try {
       const nextDetail = await action();
       setDetail(nextDetail);
       await loadData();
-      setActiveOperation((current) => current ? { ...current, message: success, current: current.total, done: true } : null);
-      toast(success);
+      setActiveOperation((current) => current ? { ...current, stage: 'done', current: current.total } : null);
+      toast(successKey, successValues);
     } catch (error) {
       const normalized = toDisplayError(error);
-      setActiveOperation((current) => ({ title: current?.title ?? title, message: normalized.message, current: current?.current ?? 0, total: current?.total ?? 1, error: normalized }));
+      setActiveOperation((current) => ({
+        operationId: current?.operationId ?? `renderer-${Date.now()}`,
+        kind: current?.kind ?? kind,
+        stage: 'error',
+        message: '',
+        current: current?.current ?? 0,
+        total: current?.total ?? 1,
+        error: normalized,
+      }));
     } finally {
       setBusy(false);
     }
@@ -236,10 +334,9 @@ export function App(): React.JSX.Element {
         setConfirmation(null);
         setRepositoryDialog(null);
         await loadData();
-        toast(`${confirmation.repository.name} 已从仓库目录删除；本地 clone 保留`);
+        toast('app.toasts.repositoryRecordRemoved', { name: confirmation.repository.name });
       } catch (error) {
-        const normalized = toDisplayError(error);
-        toast(`${normalized.code} · ${normalized.message}`, 'error');
+        toastError(error);
       } finally {
         setBusy(false);
       }
@@ -250,9 +347,10 @@ export function App(): React.JSX.Element {
       const repository = confirmation.repository;
       setConfirmation(null);
       await mutateWorkspace(
-        '正在移除 Repository',
+        'remove-repository',
         () => api.workspaces.removeRepository({ workspaceId: detail.id, catalogRepositoryId: repository.catalogRepositoryId }),
-        `${repository.name} 已移除，本地目录仍保留`,
+        'app.toasts.workspaceRepositoryRemoved',
+        { name: repository.name },
       );
       return;
     }
@@ -262,10 +360,9 @@ export function App(): React.JSX.Element {
       setConfirmation(null);
       setDetail(null);
       await loadData();
-      toast(`${detail.name} 已从 ReqWS 索引遗忘；磁盘内容保留`);
+      toast('app.toasts.workspaceRecordRemoved', { name: detail.name });
     } catch (error) {
-      const normalized = toDisplayError(error);
-      toast(`${normalized.code} · ${normalized.message}`, 'error');
+      toastError(error);
     } finally {
       setBusy(false);
     }
@@ -275,34 +372,53 @@ export function App(): React.JSX.Element {
     if (!confirmation) return null;
     if (confirmation.kind === 'remove-repository') {
       const references = confirmation.repository.referencedBy;
+      const formattedReferences = new Intl.ListFormat(
+        i18n.resolvedLanguage ?? i18n.language,
+      ).format(references);
       return {
-        title: `删除 ${confirmation.repository.name}？`,
+        title: t('app.confirmations.removeRepository.title', {
+          name: confirmation.repository.name,
+        }),
         description: references.length > 0
-          ? `该目录项仍被 ${references.join('、')} 引用。删除只影响仓库目录，已有 Workspace 快照和本地 clone 不变。`
-          : '删除只影响仓库目录，不会删除任何本地 clone。',
-        label: '删除目录项',
+          ? t('app.confirmations.removeRepository.referenced', {
+              name: confirmation.repository.name,
+              workspaces: formattedReferences,
+            })
+          : t('app.confirmations.removeRepository.unreferenced'),
+        label: t('app.confirmations.removeRepository.action'),
       };
     }
     if (confirmation.kind === 'remove-workspace-repository') return {
-      title: `从 Workspace 移除 ${confirmation.repository.name}？`,
-      description: '将更新 manifest 与 .code-workspace，但本地 repo 目录会完整保留，可稍后在 Finder 中手动处理。',
-      label: '移除并保留目录',
+      title: t('app.confirmations.removeWorkspaceRepository.title', {
+        name: confirmation.repository.name,
+      }),
+      description: t('app.confirmations.removeWorkspaceRepository.description'),
+      label: t('app.confirmations.removeWorkspaceRepository.action'),
     };
     return {
-      title: `遗忘 ${detail?.name ?? 'Workspace'}？`,
-      description: '仅从 ReqWS 全局索引移除；代码目录、manifest 与 .code-workspace 文件均保留。',
-      label: '遗忘 Workspace',
+      title: t('app.confirmations.forgetWorkspace.title', {
+        name: detail?.name ?? t('navigation.workspaces'),
+      }),
+      description: t('app.confirmations.forgetWorkspace.description'),
+      label: t('app.confirmations.forgetWorkspace.action'),
     };
-  }, [confirmation, detail?.name]);
+  }, [confirmation, detail?.name, i18n.language, i18n.resolvedLanguage, t]);
 
   return (
     <>
       <AppShell
         onNavigate={setPage}
-        onPrimary={() => page === 'workspaces' ? setCreateWorkspaceOpen(true) : (setTestResult(null), setRepositoryDialog('new'))}
+        onPrimary={() => {
+          if (page === 'workspaces') {
+            if (!workspaceCreationUnavailable) setCreateWorkspaceOpen(true);
+          } else {
+            setTestResult(null);
+            setRepositoryDialog('new');
+          }
+        }}
         onRefresh={() => void loadData(true)}
         page={page}
-        primaryDisabled={page === 'workspaces' && (!availability?.git.available || operationInProgress)}
+        primaryDisabled={page === 'workspaces' && workspaceCreationUnavailable}
         refreshing={refreshing}
         repositoryCount={repositories.length}
         workspaceCount={workspaces.length}
@@ -310,17 +426,19 @@ export function App(): React.JSX.Element {
         {page === 'workspaces' ? (
           <WorkspacesPage
             availability={availability}
-            loading={loading}
-            onCreate={() => setCreateWorkspaceOpen(true)}
+            loading={loading || settingsLoading}
+            onCreate={() => {
+              if (!workspaceCreationUnavailable) setCreateWorkspaceOpen(true);
+            }}
             onDetails={(id) => void openDetails(id)}
-            onOpenCursor={(id) => void runEditorAction(() => api.editors.openCursor(id), '已请求 Cursor 打开 Workspace')}
-            onOpenVSCode={(id) => void runEditorAction(() => api.editors.openVSCode(id), '已请求 VS Code 打开 Workspace')}
+            onOpenCursor={(id) => void runEditorAction(() => api.editors.openCursor(id), 'app.toasts.openedCursor')}
+            onOpenVSCode={(id) => void runEditorAction(() => api.editors.openVSCode(id), 'app.toasts.openedVSCode')}
             onSearch={setWorkspaceSearch}
             repositoryCount={repositories.length}
             search={workspaceSearch}
             workspaces={workspaces}
           />
-        ) : (
+        ) : page === 'repositories' ? (
           <RepositoriesPage
             gitAvailable={availability?.git.available ?? false}
             loading={loading}
@@ -332,18 +450,28 @@ export function App(): React.JSX.Element {
             search={repositorySearch}
             testingId={testingId}
           />
+        ) : (
+          <SettingsPage
+            loading={settingsLoading}
+            onSaved={handleSettingsSaved}
+            onToast={toastText}
+            settings={settings}
+          />
         )}
       </AppShell>
 
       {createWorkspaceOpen && (
         <CreateWorkspaceDialog
           busy={busy}
-          initialWorkspaceFileDirectory={settings.lastWorkspaceFileDirectory}
-          initialWorkspaceParentDirectory={settings.lastWorkspaceParentDirectory}
+          initialWorkspaceFileDirectory={settings?.workspaceFileDirectory ?? undefined}
+          initialWorkspaceParentDirectory={settings?.workspaceParentDirectory ?? undefined}
+          invalidDirectoryFields={settings?.invalidDirectoryFields}
           onClose={() => !busy && setCreateWorkspaceOpen(false)}
           onCreate={createWorkspace}
           onPickDirectory={(kind, suggestedPath) => api.dialogs.selectDirectory({
-            title: kind === 'root' ? '选择 Workspace 代码目录的父目录' : '选择 .code-workspace 文件目录',
+            title: t(kind === 'root'
+              ? 'app.directoryDialogs.workspaceParent'
+              : 'app.directoryDialogs.workspaceFile'),
             defaultPath: suggestedPath || undefined,
             createDirectory: true,
           })}
@@ -371,15 +499,23 @@ export function App(): React.JSX.Element {
         <WorkspaceDetailDrawer
           availability={availability}
           busy={busy}
-          onAddRepository={(repositoryId) => void mutateWorkspace('正在增加 Repository', () => api.workspaces.addRepository({ workspaceId: detail.id, repositoryId }), 'Repository 已加入 Workspace')}
+          onAddRepository={(repositoryId) => void mutateWorkspace(
+            'add-repository',
+            () => api.workspaces.addRepository({ workspaceId: detail.id, repositoryId }),
+            'app.toasts.repositoryAdded',
+          )}
           onClose={() => !busy && setDetail(null)}
           onForget={() => setConfirmation({ kind: 'forget-workspace' })}
-          onOpenCursor={() => void runEditorAction(() => api.editors.openCursor(detail.id), '已请求 Cursor 打开 Workspace')}
-          onOpenCursorRoot={() => void runEditorAction(() => api.editors.openCursorRoot(detail.id), '已请求 Cursor 打开代码根目录')}
-          onOpenVSCode={() => void runEditorAction(() => api.editors.openVSCode(detail.id), '已请求 VS Code 打开 Workspace')}
+          onOpenCursor={() => void runEditorAction(() => api.editors.openCursor(detail.id), 'app.toasts.openedCursor')}
+          onOpenCursorRoot={() => void runEditorAction(() => api.editors.openCursorRoot(detail.id), 'app.toasts.openedCursorRoot')}
+          onOpenVSCode={() => void runEditorAction(() => api.editors.openVSCode(detail.id), 'app.toasts.openedVSCode')}
           onRemoveRepository={(repository) => setConfirmation({ kind: 'remove-workspace-repository', repository })}
-          onRevealFinder={() => void runEditorAction(() => api.editors.revealInFinder(detail.id), '已在 Finder 中显示代码目录')}
-          onSync={() => void mutateWorkspace('正在同步 Workspace', () => api.workspaces.sync(detail.id), 'Workspace 文件已同步')}
+          onRevealFinder={() => void runEditorAction(() => api.editors.revealInFinder(detail.id), 'app.toasts.revealedFinder')}
+          onSync={() => void mutateWorkspace(
+            'sync-workspace',
+            () => api.workspaces.sync(detail.id),
+            'app.toasts.workspaceSynced',
+          )}
           repositories={repositories}
           workspace={detail}
         />
@@ -397,15 +533,19 @@ export function App(): React.JSX.Element {
         />
       )}
 
-      {activeOperation && (
+      {activeOperation && operationView && (
         <OperationDialog
           onClose={() => {
-            if (activeOperation.error || activeOperation.done || (activeOperation.total > 0 && activeOperation.current >= activeOperation.total)) setActiveOperation(null);
+            if (
+              activeOperation.stage === 'error'
+              || activeOperation.stage === 'done'
+              || (activeOperation.total > 0 && activeOperation.current >= activeOperation.total)
+            ) setActiveOperation(null);
           }}
-          operation={activeOperation}
+          operation={operationView}
         />
       )}
-      {detailLoading && <div aria-live="polite" className="sr-only">正在加载 Workspace 详情</div>}
+      {detailLoading && <div aria-live="polite" className="sr-only">{t('app.loadingWorkspaceDetail')}</div>}
       <ToastRegion dismiss={(id) => setToasts((current) => current.filter((toastItem) => toastItem.id !== id))} toasts={toasts} />
     </>
   );

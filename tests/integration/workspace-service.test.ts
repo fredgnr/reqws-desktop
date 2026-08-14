@@ -12,6 +12,7 @@ import {
 } from '../../src/main/services/workspace-service';
 import type {
   AppState,
+  OperationProgress,
   WorkspaceManifest,
   WorkspaceRepository,
 } from '../../src/shared/types';
@@ -89,6 +90,7 @@ describe('WorkspaceService integration', () => {
   let stateStore: MemoryStateStore;
   let files: TestWorkspaceFiles;
   let service: WorkspaceService;
+  let progressReports: OperationProgress[];
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'reqws-workspace-test-'));
@@ -112,11 +114,15 @@ describe('WorkspaceService integration', () => {
       workspaces: [],
     });
     files = new TestWorkspaceFiles();
+    progressReports = [];
     service = new WorkspaceService(
       stateStore,
       files,
       git,
       new BranchService(git),
+      {
+        report: (progress) => progressReports.push(structuredClone(progress)),
+      },
     );
   });
 
@@ -143,6 +149,12 @@ describe('WorkspaceService integration', () => {
   });
 
   it('creates a physically independent clone, manifest, workspace file, and index', async () => {
+    stateStore.state.settings = {
+      localePreference: 'en-US',
+      workspaceParentDirectory: '/global/features',
+      workspaceFileDirectory: '/global/workspaces',
+    };
+    const settingsBeforeCreation = structuredClone(stateStore.state.settings);
     const detail = await createWorkspace();
     const repositoryPath = path.join(detail.rootPath, 'order-api');
 
@@ -153,6 +165,7 @@ describe('WorkspaceService integration', () => {
     ) as { folders: Array<{ path: string }> };
     expect(workspace.folders[0]?.path).toBe(repositoryPath);
     expect(stateStore.state.workspaces).toHaveLength(1);
+    expect(stateStore.state.settings).toEqual(settingsBeforeCreation);
     const branch = await git.run(['branch', '--show-current'], { cwd: repositoryPath });
     expect(branch.stdout.trim()).toBe('feature/FEAT-123');
   });
@@ -167,12 +180,32 @@ describe('WorkspaceService integration', () => {
     });
     await expect(fs.stat(path.join(rootPath, 'order-api', '.git'))).resolves
       .toBeTruthy();
+    expect(progressReports).toContainEqual(expect.objectContaining({
+      stage: 'rolling-back',
+      rollbackReason: 'RETAINING_PUBLISHED_ARTIFACTS',
+    }));
     expect(stateStore.state.workspaces).toHaveLength(0);
     expect(
       (await fs.readdir(path.join(root, 'features'))).filter((name) =>
         name.startsWith('.reqws-'),
       ),
     ).toEqual([]);
+  });
+
+  it('reports staging cleanup when creation fails before publication', async () => {
+    vi.spyOn(git, 'clone').mockRejectedValueOnce(
+      new Error('injected pre-publication failure'),
+    );
+
+    await expect(createWorkspace()).rejects.toMatchObject({ code: 'UNKNOWN' });
+
+    expect(progressReports).toContainEqual(expect.objectContaining({
+      stage: 'rolling-back',
+      rollbackReason: 'CLEANING_STAGING',
+    }));
+    await expect(
+      fs.stat(path.join(root, 'features', 'FEAT-123-refund')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('does not overwrite a workspace root created concurrently during staging', async () => {
@@ -632,6 +665,13 @@ describe('WorkspaceService integration', () => {
     await fs.rm(created.rootPath, { recursive: true });
     await fs.rm(created.workspaceFilePath);
 
+    await expect(service.list()).resolves.toEqual([
+      expect.objectContaining({
+        status: 'missing',
+        missingArtifacts: ['workspace-root', 'manifest', 'workspace-file'],
+      }),
+    ]);
+
     await expect(createWorkspace()).rejects.toMatchObject({
       code: 'WORKSPACE_ROOT_EXISTS',
       detail: expect.stringContaining('Forget workspace'),
@@ -664,16 +704,43 @@ describe('WorkspaceService integration', () => {
     const created = await createWorkspace();
     await fs.rm(created.workspaceFilePath);
     const [summary] = await service.list();
-    expect(summary).toMatchObject({ status: 'missing' });
+    expect(summary).toMatchObject({
+      status: 'missing',
+      missingArtifacts: ['workspace-file'],
+    });
     expect(summary?.statusDetail).toContain('workspace 文件');
     const missingDetail = await service.get(created.id);
     expect(missingDetail).toMatchObject({
       status: 'missing',
+      missingArtifacts: ['workspace-file'],
       repositories: [{ name: 'order-api' }],
+    });
+
+    await fs.rm(manifestPathFor(created.rootPath));
+    await expect(service.get(created.id)).resolves.toMatchObject({
+      status: 'missing',
+      missingArtifacts: ['manifest', 'workspace-file'],
+      repositories: [],
     });
 
     await service.forget(created.id);
     expect(stateStore.state.workspaces).toEqual([]);
     await expect(fs.stat(created.rootPath)).resolves.toBeTruthy();
+  });
+
+  it('clears stale missing-artifact diagnostics for ready and error workspaces', async () => {
+    await createWorkspace();
+    const persisted = stateStore.state.workspaces[0];
+    if (!persisted) throw new Error('workspace was not persisted');
+    persisted.missingArtifacts = ['workspace-file'];
+
+    const [readySummary] = await service.list();
+    expect(readySummary).toMatchObject({ status: 'ready' });
+    expect(readySummary).not.toHaveProperty('missingArtifacts');
+
+    persisted.status = 'error';
+    const [errorSummary] = await service.list();
+    expect(errorSummary).toMatchObject({ status: 'error' });
+    expect(errorSummary).not.toHaveProperty('missingArtifacts');
   });
 });

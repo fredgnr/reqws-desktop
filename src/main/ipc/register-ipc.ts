@@ -9,11 +9,14 @@ import type {
   IpcHandlerMap,
   RepositoryHandlerDependencies,
 } from './repository-handlers';
+import { createSettingsHandlers } from './settings-handlers';
+import type { SettingsHandlerDependencies } from './settings-handlers';
 import { createWorkspaceHandlers } from './workspace-handlers';
 import type { WorkspaceHandlerDependencies } from './workspace-handlers';
 
 export type RegisterIpcDependencies = RepositoryHandlerDependencies &
   WorkspaceHandlerDependencies &
+  SettingsHandlerDependencies &
   EditorHandlerDependencies &
   DialogHandlerDependencies;
 
@@ -25,6 +28,7 @@ function handlerMap(dependencies: RegisterIpcDependencies): IpcHandlerMap {
   return {
     ...createRepositoryHandlers(dependencies),
     ...createWorkspaceHandlers(dependencies),
+    ...createSettingsHandlers(dependencies),
     ...createDialogHandlers(dependencies),
     ...createEditorHandlers(dependencies),
   };
@@ -54,4 +58,3 @@ export function registerIpcHandlers(
     registrations.delete(ipcMain);
   };
 }
-

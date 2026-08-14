@@ -4,6 +4,10 @@ import {
   isSafeRepositoryUrl,
   repositoryNameKey,
 } from './repository-utils';
+import {
+  DEFAULT_GLOBAL_SETTINGS,
+  type GlobalSettings,
+} from './types';
 
 const nonEmpty = z.string().trim().min(1);
 const id = nonEmpty.max(200);
@@ -21,6 +25,70 @@ const absolutePath = nonEmpty
   .refine((value) => value.startsWith('/'), {
     message: 'Path must be absolute.',
   });
+
+export const supportedLocaleSchema = z.enum(['zh-CN', 'en-US']);
+export const localePreferenceSchema = z.enum(['system', 'zh-CN', 'en-US']);
+
+export const globalSettingsSchema = z.strictObject({
+  localePreference: localePreferenceSchema,
+  workspaceParentDirectory: absolutePath.nullable(),
+  workspaceFileDirectory: absolutePath.nullable(),
+});
+
+export const globalDirectorySettingSchema = z.enum([
+  'workspaceParentDirectory',
+  'workspaceFileDirectory',
+]);
+
+export const resolvedGlobalSettingsSchema = globalSettingsSchema.extend({
+  effectiveLocale: supportedLocaleSchema,
+  invalidDirectoryFields: z.array(globalDirectorySettingSchema).optional(),
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizedPersistedPath(value: unknown): string | null {
+  const parsed = absolutePath.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function migratedDirectory(
+  settings: Record<string, unknown>,
+  currentKey: 'workspaceParentDirectory' | 'workspaceFileDirectory',
+  legacyKey: 'lastWorkspaceParentDirectory' | 'lastWorkspaceFileDirectory',
+): string | null {
+  if (Object.prototype.hasOwnProperty.call(settings, currentKey)) {
+    return settings[currentKey] === null
+      ? null
+      : normalizedPersistedPath(settings[currentKey]);
+  }
+  return normalizedPersistedPath(settings[legacyKey]);
+}
+
+/**
+ * State files are user-editable and predate GlobalSettings. Normalize only
+ * this subtree so bad settings never hide otherwise valid repositories and
+ * workspaces or prevent the application from starting.
+ */
+export function normalizePersistedGlobalSettings(value: unknown): GlobalSettings {
+  if (!isRecord(value)) return { ...DEFAULT_GLOBAL_SETTINGS };
+  const locale = localePreferenceSchema.safeParse(value.localePreference);
+  return {
+    localePreference: locale.success ? locale.data : 'system',
+    workspaceParentDirectory: migratedDirectory(
+      value,
+      'workspaceParentDirectory',
+      'lastWorkspaceParentDirectory',
+    ),
+    workspaceFileDirectory: migratedDirectory(
+      value,
+      'workspaceFileDirectory',
+      'lastWorkspaceFileDirectory',
+    ),
+  };
+}
 
 function duplicateIndexes(
   values: readonly string[],
@@ -71,6 +139,12 @@ export const workspaceRepositorySchema = z.object({
   relativePath: repositoryName,
 });
 
+export const workspaceArtifactSchema = z.enum([
+  'workspace-root',
+  'manifest',
+  'workspace-file',
+]);
+
 export const reqwsErrorPayloadSchema = z.object({
   code: z.enum(reqwsErrorCodes),
   message: nonEmpty,
@@ -89,6 +163,7 @@ export const workspaceSummarySchema = z.object({
   repositoryIds: z.array(id).optional(),
   status: z.enum(['ready', 'missing', 'error']),
   statusDetail: z.string().optional(),
+  missingArtifacts: z.array(workspaceArtifactSchema).optional(),
   lastError: reqwsErrorPayloadSchema.optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -161,10 +236,7 @@ export const workspaceManifestSchema = z.object({
 
 export const appStateSchema = z.object({
   schemaVersion: z.literal(1),
-  settings: z.object({
-    lastWorkspaceParentDirectory: absolutePath.optional(),
-    lastWorkspaceFileDirectory: absolutePath.optional(),
-  }),
+  settings: z.unknown().optional().transform(normalizePersistedGlobalSettings),
   repositories: z.array(repositorySchema),
   workspaces: z.array(workspaceSummarySchema),
 }).superRefine((state, context) => {

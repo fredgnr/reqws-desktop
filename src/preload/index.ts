@@ -23,7 +23,6 @@ const api: ReqwsAPI = {
   },
   workspaces: {
     list: () => invoke(IPC_CHANNELS.workspaces.list),
-    getSettings: () => invoke(IPC_CHANNELS.workspaces.getSettings),
     get: (id) => invoke(IPC_CHANNELS.workspaces.get, id),
     create: (input) => invoke(IPC_CHANNELS.workspaces.create, input),
     addRepository: (input) =>
@@ -32,6 +31,10 @@ const api: ReqwsAPI = {
       invoke(IPC_CHANNELS.workspaces.removeRepository, input),
     sync: (id) => invoke(IPC_CHANNELS.workspaces.sync, id),
     forget: (id) => invoke(IPC_CHANNELS.workspaces.forget, id),
+  },
+  settings: {
+    get: () => invoke(IPC_CHANNELS.settings.get),
+    save: (settings) => invoke(IPC_CHANNELS.settings.save, settings),
   },
   dialogs: {
     selectDirectory: (input) =>

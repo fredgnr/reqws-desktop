@@ -1,0 +1,29 @@
+{
+  "skill_name": "reqws-i18n",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "给 ReqWS 的创建工作区对话框新增中文提示 key createWorkspace.directoryUnavailable，并生成英文。请说明完整执行顺序、你会怎样调用翻译 subagent，以及谁负责写回 en-US.json；不要实际改文件。",
+      "expected_output": "Runs i18n:scan before review, explicitly gates a designated GPT-5.6 Sol/Pro subagent at high reasoning or above, requires structured JSON only, validates it in the main agent, updates English only after validation, then runs i18n:apply and i18n:check.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "zh-CN.json 里 errors.codes.STATE_WRITE_FAILED 的中文从“无法保存应用数据。”改成了“无法写入应用数据。”，key 没变。请判断是否触发翻译流程并给出 fail-closed 条件；不要改仓库。",
+      "expected_output": "Treats changed source copy under an existing key as a translation delta, invokes the gated translator, and refuses to update English or the baseline when the required model or high reasoning gate is unavailable.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "新增 repositoryCount_one、repositoryCount_other 以及中文基础计数文案。请给翻译 subagent 的结构化输出要求和主 Agent 的复核点，重点覆盖复数形式；只输出方案。",
+      "expected_output": "Sends the complete plural family together, requires one structured entry per key, checks natural English singular/plural number agreement, and validates exact key coverage before updating en-US.json.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文翻译候选漏掉了 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
+      "expected_output": "Rejects the candidate because the placeholder multiset differs, keeps en-US.json and the baseline unchanged, requests a corrected structured response from the gated translator, and only applies after exact placeholder validation.",
+      "files": []
+    }
+  ]
+}

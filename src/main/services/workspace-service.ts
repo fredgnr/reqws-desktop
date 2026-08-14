@@ -12,7 +12,6 @@ import {
 } from '../../shared/repository-utils';
 import type {
   AddWorkspaceRepositoryInput,
-  AppSettings,
   AppState,
   CreateWorkspaceInput,
   OperationProgress,
@@ -21,6 +20,7 @@ import type {
   WorkspaceDetail,
   WorkspaceManifest,
   WorkspaceRepository,
+  WorkspaceArtifact,
   WorkspaceStatus,
   WorkspaceSummary,
 } from '../../shared/types';
@@ -191,10 +191,6 @@ export class WorkspaceService {
       new WorkspaceMutationCoordinator(),
   ) {}
 
-  async getSettings(): Promise<AppSettings> {
-    return (await this.stateStore.read()).settings;
-  }
-
   async list(): Promise<WorkspaceSummary[]> {
     const state = await this.stateStore.read();
     return Promise.all(
@@ -229,6 +225,7 @@ export class WorkspaceService {
       stage: OperationProgress['stage'],
       message: string,
       error?: ReqwsErrorPayload,
+      rollbackReason?: OperationProgress['rollbackReason'],
     ): void => {
       this.progress.report({
         operationId,
@@ -238,6 +235,7 @@ export class WorkspaceService {
         total,
         message,
         ...(activeRepository ? { repositoryName: activeRepository } : {}),
+        ...(rollbackReason ? { rollbackReason } : {}),
         ...(error ? { error } : {}),
       });
     };
@@ -247,7 +245,6 @@ export class WorkspaceService {
       const {
         repositories,
         rootPath,
-        workspaceFileDirectory: validatedWorkspaceFileDirectory,
         workspaceFilePath,
       } = await this.validateCreate(input);
       await this.branches.validateBranch(input.featureBranch);
@@ -313,14 +310,9 @@ export class WorkspaceService {
       current += 1;
 
       report('writing', '正在更新 ReqWS 索引');
-      await this.stateStore.update((state) => ({
-        ...replaceSummary(state, summaryFromManifest(manifest)),
-        settings: {
-          ...state.settings,
-          lastWorkspaceParentDirectory: path.dirname(manifest.rootPath),
-          lastWorkspaceFileDirectory: validatedWorkspaceFileDirectory,
-        },
-      }));
+      await this.stateStore.update((state) =>
+        replaceSummary(state, summaryFromManifest(manifest)),
+      );
       current = total;
       report('done', 'Workspace 创建完成');
       return { ...manifest, status: 'ready' };
@@ -343,6 +335,10 @@ export class WorkspaceService {
         publishedRootPath || publishedWorkspaceFilePath
           ? '创建失败，已保留发布工件供安全恢复'
           : '创建失败，正在清理未发布的 staging',
+        undefined,
+        publishedRootPath || publishedWorkspaceFilePath
+          ? 'RETAINING_PUBLISHED_ARTIFACTS'
+          : 'CLEANING_STAGING',
       );
 
       if (workspaceId) {
@@ -637,7 +633,6 @@ export class WorkspaceService {
   private async validateCreate(input: CreateWorkspaceInput): Promise<{
     repositories: Repository[];
     rootPath: string;
-    workspaceFileDirectory: string;
     workspaceFilePath: string;
   }> {
     assertAbsolutePath(input.rootPath, 'Workspace root');
@@ -743,7 +738,6 @@ export class WorkspaceService {
     return {
       repositories: repositories as Repository[],
       rootPath,
-      workspaceFileDirectory,
       workspaceFilePath,
     };
   }
@@ -903,19 +897,35 @@ export class WorkspaceService {
   private async evaluateSummary(
     summary: WorkspaceSummary,
   ): Promise<WorkspaceSummary> {
-    const missing: string[] = [];
-    if (!(await pathExists(summary.rootPath))) missing.push('代码目录');
-    if (!(await pathExists(manifestPathFor(summary.rootPath)))) missing.push('manifest');
-    if (!(await pathExists(summary.workspaceFilePath))) missing.push('workspace 文件');
-    if (missing.length > 0) {
+    const missingArtifacts: WorkspaceArtifact[] = [];
+    if (!(await pathExists(summary.rootPath))) {
+      missingArtifacts.push('workspace-root');
+    }
+    if (!(await pathExists(manifestPathFor(summary.rootPath)))) {
+      missingArtifacts.push('manifest');
+    }
+    if (!(await pathExists(summary.workspaceFilePath))) {
+      missingArtifacts.push('workspace-file');
+    }
+    if (missingArtifacts.length > 0) {
+      const legacyLabels: Record<WorkspaceArtifact, string> = {
+        'workspace-root': '代码目录',
+        manifest: 'manifest',
+        'workspace-file': 'workspace 文件',
+      };
       return {
         ...summary,
         status: 'missing',
-        statusDetail: `缺失：${missing.join('、')}`,
+        statusDetail: `缺失：${missingArtifacts.map(
+          (artifact) => legacyLabels[artifact],
+        ).join('、')}`,
+        missingArtifacts,
       };
     }
-    if (summary.status === 'error') return summary;
-    const ready: WorkspaceSummary = { ...summary, status: 'ready' };
+    const evaluated = { ...summary };
+    delete evaluated.missingArtifacts;
+    if (evaluated.status === 'error') return evaluated;
+    const ready: WorkspaceSummary = { ...evaluated, status: 'ready' };
     delete ready.statusDetail;
     delete ready.lastError;
     return ready;
@@ -930,6 +940,9 @@ export class WorkspaceService {
         return {
           ...manifest,
           status: 'missing',
+          ...(evaluated.missingArtifacts
+            ? { missingArtifacts: evaluated.missingArtifacts }
+            : {}),
           statusDetail:
             evaluated.statusDetail ?? 'Workspace paths are missing.',
         };
@@ -945,6 +958,9 @@ export class WorkspaceService {
         createdAt: summary.createdAt,
         updatedAt: summary.updatedAt,
         status: 'missing',
+        ...(evaluated.missingArtifacts
+          ? { missingArtifacts: evaluated.missingArtifacts }
+          : {}),
         statusDetail:
           evaluated.statusDetail ?? 'Workspace paths are missing.',
       };

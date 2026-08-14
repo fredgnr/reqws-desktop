@@ -1,4 +1,5 @@
 import { FolderGit2, MoreHorizontal, SearchX } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { Repository, RepositoryListItem } from '../../shared/types';
 import { SearchField } from '../components/SearchField';
 import { matchesRepository } from '../utils';
@@ -26,6 +27,7 @@ export function RepositoriesPage({
   onEdit,
   onTest,
 }: RepositoriesPageProps): React.JSX.Element {
+  const { t } = useTranslation();
   const visible = repositories.filter((repository) => matchesRepository(repository, search));
   const inUse = repositories.filter((repository) => repository.workspaceUsageCount > 0).length;
 
@@ -33,39 +35,41 @@ export function RepositoriesPage({
     <section className="page">
       <div className="summary-grid">
         <div className="summary-card">
-          <div className="summary-label">Repositories</div>
+          <div className="summary-label">{t('repositories.summary.total.label')}</div>
           <div className="summary-value">{repositories.length}</div>
-          <div className="summary-foot">可用于创建 workspace 的仓库</div>
+          <div className="summary-foot">{t('repositories.summary.total.description')}</div>
         </div>
         <div className="summary-card">
-          <div className="summary-label">In use</div>
+          <div className="summary-label">{t('repositories.summary.inUse.label')}</div>
           <div className="summary-value">{inUse}</div>
-          <div className="summary-foot">至少被一个 workspace 使用</div>
+          <div className="summary-foot">{t('repositories.summary.inUse.description')}</div>
         </div>
         <div className="summary-card">
           <div className="summary-label">Git</div>
-          <div className="summary-value compact">{gitAvailable ? 'Available' : 'Unavailable'}</div>
-          <div className="summary-foot">{gitAvailable ? '可测试连接和创建 Workspace' : '请安装 Git 或配置 PATH'}</div>
+          <div className="summary-value compact">{gitAvailable ? t('common.available') : t('common.unavailable')}</div>
+          <div className="summary-foot">
+            {gitAvailable ? t('repositories.summary.git.available') : t('repositories.summary.git.unavailable')}
+          </div>
         </div>
       </div>
-      {!gitAvailable && <div className="notice warning">未找到 Git。你仍可维护仓库目录，但连接测试、创建和增加仓库已禁用。</div>}
+      {!gitAvailable && <div className="notice warning">{t('repositories.gitUnavailable')}</div>}
       <div className="panel">
         <div className="panel-toolbar">
-          <SearchField label="搜索 Repository" onChange={onSearch} placeholder="搜索仓库名称、Git 地址或默认分支…" value={search} />
-          <div className="result-count">{visible.length} 个 repository</div>
+          <SearchField label={t('repositories.search.label')} onChange={onSearch} placeholder={t('repositories.search.placeholder')} value={search} />
+          <div className="result-count">{t('repositories.resultCount', { count: visible.length })}</div>
         </div>
         {loading ? (
-          <div className="loading"><span className="spinner" />加载 Repositories…</div>
+          <div className="loading"><span className="spinner" />{t('repositories.loading')}</div>
         ) : visible.length > 0 ? (
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th style={{ width: '20%' }}>名称</th>
-                  <th style={{ width: '42%' }}>Git 地址</th>
-                  <th style={{ width: '13%' }}>默认分支</th>
-                  <th style={{ width: '10%' }}>使用中</th>
-                  <th style={{ width: '15%', textAlign: 'right' }}>操作</th>
+                  <th style={{ width: '20%' }}>{t('repositories.table.name')}</th>
+                  <th style={{ width: '42%' }}>{t('repositories.table.url')}</th>
+                  <th style={{ width: '13%' }}>{t('repositories.table.defaultBranch')}</th>
+                  <th style={{ width: '10%' }}>{t('repositories.table.usage')}</th>
+                  <th style={{ width: '15%', textAlign: 'right' }}>{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -76,17 +80,17 @@ export function RepositoriesPage({
                       <td><div className="workspace-name">{repository.name}</div></td>
                       <td><div className="path" title={repository.url}>{repository.url}</div></td>
                       <td><span className="branch-pill">{repository.defaultBranch}</span></td>
-                      <td><span className="muted">{used} 个</span></td>
+                      <td><span className="muted">{t('repositories.workspaceUsageCount', { count: used })}</span></td>
                       <td>
                         <div className="row-actions">
                           <button
                             className="button small"
                             disabled={!gitAvailable || testingId !== null}
                             onClick={() => onTest(repository)}
-                            title={!gitAvailable ? '未找到 Git' : undefined}
+                            title={!gitAvailable ? t('common.gitNotFound') : undefined}
                             type="button"
-                          >{testingId === repository.id ? '测试中…' : '测试'}</button>
-                          <button aria-label={`编辑 ${repository.name}`} className="button small icon-only" onClick={() => onEdit(repository)} type="button">
+                          >{testingId === repository.id ? t('repositoryDialog.test.testing') : t('repositories.test')}</button>
+                          <button aria-label={t('repositories.edit', { name: repository.name })} className="button small icon-only" onClick={() => onEdit(repository)} type="button">
                             <MoreHorizontal aria-hidden="true" size={16} />
                           </button>
                         </div>
@@ -100,9 +104,9 @@ export function RepositoriesPage({
         ) : (
           <div className="empty-state">
             {search ? <SearchX aria-hidden="true" className="empty-icon" size={32} /> : <FolderGit2 aria-hidden="true" className="empty-icon" size={32} />}
-            <h2 className="empty-title">{search ? '没有匹配的 Repository' : '还没有 Repository'}</h2>
-            <p className="empty-copy">{search ? '试试仓库名称、Git 地址或默认分支。' : '录入 Git 地址，建立可选择的仓库目录。'}</p>
-            {!search && <button className="button primary" onClick={onCreate} type="button">录入 Repository</button>}
+            <h2 className="empty-title">{search ? t('repositories.empty.noMatches.title') : t('repositories.empty.initial.title')}</h2>
+            <p className="empty-copy">{search ? t('repositories.empty.noMatches.description') : t('repositories.empty.initial.description')}</p>
+            {!search && <button className="button primary" onClick={onCreate} type="button">{t('repositoryDialog.createTitle')}</button>}
           </div>
         )}
       </div>

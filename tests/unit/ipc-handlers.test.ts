@@ -6,6 +6,7 @@ import { IPC_CHANNELS } from '../../src/shared/ipc-channels';
 import { createDialogHandlers } from '../../src/main/ipc/dialog-handlers';
 import { createRepositoryHandlers } from '../../src/main/ipc/repository-handlers';
 import { registerIpcHandlers } from '../../src/main/ipc/register-ipc';
+import { createSettingsHandlers } from '../../src/main/ipc/settings-handlers';
 import { createWorkspaceHandlers } from '../../src/main/ipc/workspace-handlers';
 
 const event = {
@@ -100,9 +101,6 @@ describe('main IPC handlers', () => {
     });
     const workspaceService = {
       list: vi.fn(),
-      getSettings: vi.fn().mockResolvedValue({
-        lastWorkspaceParentDirectory: '/features',
-      }),
       get: vi.fn(),
       create: vi.fn(),
       addRepository: vi.fn(),
@@ -150,12 +148,48 @@ describe('main IPC handlers', () => {
     });
     expect(workspaceService.create).not.toHaveBeenCalled();
     expect(workspaceService.addRepository).not.toHaveBeenCalled();
+  });
+
+  it('exposes settings get/save through fixed channels with strict input', async () => {
+    const settings = {
+      localePreference: 'system' as const,
+      workspaceParentDirectory: null,
+      workspaceFileDirectory: null,
+    };
+    const resolved = { ...settings, effectiveLocale: 'en-US' as const };
+    const settingsService = {
+      get: vi.fn().mockResolvedValue(resolved),
+      save: vi.fn().mockResolvedValue(resolved),
+    };
+    const handlers = createSettingsHandlers({ settingsService });
+
     await expect(
-      workspaceHandlers[IPC_CHANNELS.workspaces.getSettings]?.(event),
-    ).resolves.toEqual({
-      ok: true,
-      value: { lastWorkspaceParentDirectory: '/features' },
+      handlers[IPC_CHANNELS.settings.get]?.(event),
+    ).resolves.toEqual({ ok: true, value: resolved });
+    await expect(
+      handlers[IPC_CHANNELS.settings.save]?.(event, settings),
+    ).resolves.toEqual({ ok: true, value: resolved });
+    expect(settingsService.save).toHaveBeenCalledWith(settings);
+
+    await expect(
+      handlers[IPC_CHANNELS.settings.save]?.(event, {
+        ...settings,
+        localePreference: 'fr-FR',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'SETTINGS_INVALID_LOCALE' },
     });
+    await expect(
+      handlers[IPC_CHANNELS.settings.save]?.(event, {
+        ...settings,
+        stateFilePath: '/tmp/attacker-state.json',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_INPUT' },
+    });
+    expect(settingsService.save).toHaveBeenCalledOnce();
   });
 
   it('uses openDirectory and opts into createDirectory only when requested', async () => {
@@ -193,9 +227,10 @@ describe('main IPC handlers', () => {
       gitUnavailableError: gitUnavailable,
       createOperationReporter: () => ({ report: vi.fn() }),
       createWorkspaceService: () => ({
-        list: vi.fn(), getSettings: vi.fn(), get: vi.fn(), create: vi.fn(), addRepository: vi.fn(),
+        list: vi.fn(), get: vi.fn(), create: vi.fn(), addRepository: vi.fn(),
         removeRepository: vi.fn(), sync: vi.fn(), forget: vi.fn(),
       }),
+      settingsService: { get: vi.fn(), save: vi.fn() },
       editorLauncher: {
         getAvailability: vi.fn(), openVSCode: vi.fn(), openCursor: vi.fn(),
         openCursorRoot: vi.fn(), revealInFinder: vi.fn(),
@@ -207,13 +242,13 @@ describe('main IPC handlers', () => {
     const cleanupFirst = registerIpcHandlers(ipcMain, services);
     const channels = ipcMain.handle.mock.calls.map(([channel]) => channel);
     expect(new Set(channels).size).toBe(channels.length);
-    expect(channels).toHaveLength(19);
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(19);
+    expect(channels).toHaveLength(20);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(20);
 
     const cleanupSecond = registerIpcHandlers(ipcMain, services);
     cleanupFirst();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(38);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(40);
     cleanupSecond();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(57);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(60);
   });
 });

@@ -1,0 +1,237 @@
+---
+title: ReqWS 开发指南
+type: guide
+status: active
+updated: 2026-08-14
+---
+
+# ReqWS 开发指南
+
+本指南说明 ReqWS 的本地开发环境、进程职责、验证基线，以及修改 IPC、状态、界面、国际化、文档和 macOS 交付流程时必须保持的契约。
+
+## 1. 环境准备
+
+ReqWS 是 macOS-only 的 Electron、TypeScript 和 React 项目。开发环境需要：
+
+- macOS；部分集成测试和全部 package/install 流程依赖 Darwin 工具与语义。
+- Node.js 24.x；版本范围由 `.nvmrc` 和 `package.json#engines` 共同约束。
+- npm 和 Git。
+- 首次安装依赖和 Electron runtime 时可访问 npm registry 与 GitHub。
+- GUI smoke 可选安装 VS Code 和 Cursor。
+
+初始化 checkout：
+
+```bash
+nvm use
+npm ci
+npm run check
+```
+
+必须使用 `npm ci` 和已提交的 lockfile，不用未审查的依赖漂移代替可复现安装。不要编辑或提交 `node_modules/`、`.vite/`、`out/`、`dist/`、`coverage/`。
+
+## 2. 启动与日常命令
+
+```bash
+# Electron Forge + Vite 开发实例
+npm start
+
+# 完整质量基线
+npm run check
+
+# 单项或分层验证
+npm run typecheck
+npm run lint
+npm test
+npm run test:unit
+npm run test:integration
+npm run test:renderer
+npm run test:watch
+
+# 专项一致性检查
+npm run i18n:check
+npm run docs:check
+```
+
+`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。提交评审前以该命令为准；迭代中可以先运行最接近改动层的测试。
+
+`npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
+
+## 3. 代码结构与进程边界
+
+```text
+src/
+  main/
+    ipc/                 handler、输入校验和依赖装配
+    services/            state、Git、branch、workspace、path、editor、settings
+    create-window.ts     BrowserWindow 安全配置
+    index.ts             Electron 生命周期与 single-instance
+  preload/               窄化的 contextBridge API
+  renderer/              React 页面、组件、本地化资源和样式
+  shared/                跨进程类型、Zod schema、channel、错误和纯函数
+tests/
+  unit/                  服务、schema、安全与跨进程契约
+  integration/           真实临时 Git remote、workspace 和安装脚本
+  renderer/              jsdom + Testing Library 用户交互
+scripts/                 i18n/docs 检查和 macOS package/install 脚手架
+docs/                    指南、需求包、规范和冻结历史资料
+```
+
+职责规则：
+
+- Renderer 不接触 Node、文件系统、Git 或任意 IPC channel。
+- Preload 只把固定、typed 的 `window.reqws` 方法映射到固定 channel。
+- Main 是所有权限操作的信任边界；IPC 入参必须用 shared Zod schema 再校验。
+- 跨进程类型、错误码和纯校验集中在 `src/shared/`，避免 Main/Renderer 各自定义相似契约。
+- Git、路径、状态和工作区原子性放在 service 层，不把业务逻辑堆进 IPC handler。
+
+Renderer 保持 `sandbox`、`contextIsolation`、`webSecurity` 开启且 `nodeIntegration` 关闭。窗口导航和 popup 默认拒绝；不要为便利放宽这些设置。
+
+## 4. 核心数据流
+
+典型调用链：
+
+```text
+React event
+  -> window.reqws typed preload API
+    -> fixed IPC channel
+      -> Main handler + Zod validation
+        -> service
+          -> Git / filesystem / state
+        <- structured result or Reqws error payload
+      <- IpcResult
+    <- Promise
+  -> localized UI state / progress / error
+```
+
+全局 state 位于 Electron `userData/reqws/state.v1.json`。每个工作区还有 `.reqws/workspace.json`，以及可能位于另一目录的 managed `.code-workspace`。状态、manifest 和 managed 文件均通过同目录临时文件和原子发布或替换写入；修改持久化代码时必须保留损坏备份、no-overwrite 与公开工件不自动删除的语义。
+
+Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*` 重定向变量，并维持非交互凭据策略。路径写入前必须重新做 realpath、父路径 containment 和 symlink 检查。
+
+## 5. 常见变更清单
+
+### 新增或修改 IPC
+
+同一次变更至少核对：
+
+1. `src/shared/types.ts` 中的请求、响应与 API 类型；
+2. `src/shared/schemas.ts` 中的 Main 端输入 schema；
+3. `src/shared/ipc-channels.ts` 中的固定 channel；
+4. `src/main/ipc/` handler、错误归一化和依赖装配；
+5. `src/preload/index.ts` 与 `src/preload/global.d.ts` 的窄化暴露；
+6. Renderer 调用方；
+7. schema、handler、preload contract 和 UI 测试。
+
+不要暴露原始 `ipcRenderer`、动态 channel、`fs`、`path` 或 state 文件位置。
+
+### 修改状态或持久化
+
+- 先定义旧 state 的读取和标准化策略，再改变写入结构。
+- 可选兼容字段不必机械提升 schema 版本；破坏性变化必须明确迁移和回滚。
+- 更新不能丢失仓库、工作区或设置中的无关字段。
+- 覆盖缺字段、非法字段、round-trip、写入失败原文件保持和损坏备份测试。
+- 不在 handler 或 Renderer 中绕过 `AppStateStore` 直接写 JSON。
+
+### 修改 Git、路径或工作区
+
+- 所有仓库保持完整、独立 `.git`；拒绝 gitfile、alternates、`commondir` 或 symlink 逃逸。
+- 可控 Git 参数必须验证，必要时使用 `--` option terminator。
+- workspace mutation 共用进程内 FIFO 协调器，不能用新的 service 实例绕开串行化。
+- 在 integration 测试中使用临时本地 bare remote；不依赖开发者账号或真实外部仓库。
+- 覆盖成功、已存在目标、部分失败、回滚失败、重试和磁盘工件保留语义。
+
+### 修改 Renderer
+
+- 使用现有页面、对话框和 toast 模式，保持键盘关闭、焦点和 aria label。
+- 行为测试使用 Testing Library，按用户可见结果断言，不耦合内部 state。
+- 所有用户可见文本和错误码映射进入 locale catalog，不在 JSX 中增加单语文案。
+- 视觉行为变化在 PR 中附截图；macOS 交付行为变化附 package/install 证据。
+
+## 6. 国际化流程
+
+简体中文和英文资源分别位于：
+
+```text
+src/renderer/locales/zh-CN.json
+src/renderer/locales/en-US.json
+```
+
+新增或修改文案时：
+
+1. 更新中文源文案和实际引用；
+2. 使用项目级 [`reqws-i18n` Skill](../../.agents/skills/reqws-i18n/SKILL.md)；它会先运行 `npm run i18n:scan`，并以 GPT-5.6 Sol/Pro、reasoning `high` 或更高调用指定翻译 subagent；
+3. 翻译 subagent 只返回结构化 JSON，不直接编辑文件；主 Agent 校验 key、中文源文案、`{{placeholder}}`、复数形式和术语后，才写入 `en-US.json`；
+4. 复核两套 catalog 的限定 diff，然后运行 `npm run i18n:apply` 更新同步基线；
+5. 运行 `npm run i18n:check` 和相关 Renderer 测试。
+
+模型或 reasoning 门禁不可用时必须停止，不要由主 Agent 自行翻译或降级模型。不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。已有 key 的源文案变化、复数形式和占位符变化同样触发完整流程。
+
+## 7. 测试策略
+
+| 层级 | 主要范围 | 何时运行 |
+|---|---|---|
+| Unit | schema、shared 工具、service、IPC/preload、安全与构建配置 | 修改对应模块时首先运行。 |
+| Integration | 真实临时 Git、分支语义、workspace 生命周期、回滚和安装脚本 | 修改 Git、文件系统、状态或安装行为时运行。 |
+| Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
+| Full check | 类型、lint、i18n、docs 和全部测试 | 每次交付前运行。 |
+
+测试文件使用 `*.test.ts` 或 `*.test.tsx`，`describe` 聚焦行为域，`it` 使用句子式行为描述。全局 setup 在 `tests/setup.ts`；Renderer 测试使用 jsdom，集成测试使用临时目录并自行清理。
+
+不要通过放宽 schema、安全断言、path containment 或跳过失败测试来让检查通过。修复行为后补能证明回归的最小测试。
+
+## 8. 文档工作流
+
+文档搜索从[文档总索引](../README.md)开始，再进入相关分类和需求包索引。`docs/reference/` 是冻结历史输入，不是当前需求。
+
+需求开发或行为修复前，按[项目文档规范](../standards/documentation-standard.md)分别判断 requirements、technical design、test material、delivery 和 evergreen guides 是 `create`、`update` 还是 `none`。新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级及必要的父级 `README.md`，完成后运行：
+
+```bash
+npm run docs:check
+```
+
+详细 Agent 流程见项目级 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md)。
+
+## 9. 打包、安装与发布
+
+```bash
+# clean install + check + 当前架构 package，仅生成 .app
+npm run package:macos
+
+# 完整构建、验证并安装到本机
+npm run install:macos
+
+# 复用已经安装的依赖和刚通过的检查
+npm run package:macos -- --skip-ci --skip-check
+```
+
+产物位于 `out/ReqWS-darwin-<arch>/ReqWS.app`。脚手架校验 bundle ID、版本、Mach-O 架构和 codesign 结构。不要提交 `out/` 或 `.vite/`。
+
+安装脚本会在目标目录进行 staging、旧版备份、整体替换和尽力回滚；不要用 `sudo` 包裹整个 npm 命令，也不要弱化遗留 lock/staging/backup 的 fail-closed 检查。
+
+GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。当前 Release ZIP 仍为 ad-hoc 签名且未公证；面向外部分发前需要独立实现 Developer ID、Hardened Runtime 和 notarization。
+
+## 10. 调试与安全操作
+
+- 开发实例和安装版默认共享 ReqWS 的真实 userData。涉及迁移、损坏恢复或破坏性实验时，先退出应用并备份 state；优先用注入依赖或临时目录的测试，不拿真实工作区试错。
+- 错误跨 contextBridge 后是结构化 payload，不依赖自定义 `Error` 原型。Renderer 使用统一错误映射和复制日志入口。
+- 需要本地化的工作区缺失工件和回滚动作必须使用 shared 稳定枚举；Main 的自由文本只作诊断 fallback，Renderer 不用它推断用户可见语义。
+- Settings 或 state 加载失败不应让 Renderer 先以错误语言闪烁；启动初始化必须在首屏渲染前完成可用 locale 的解析。
+- 不在日志、fixture、截图或文档中写入 Token、带凭据 URL、私钥、本机敏感目录或真实用户数据。
+- 不自动删除用户工作区。清理测试 fixture 和生成物时限定到已验证的临时路径。
+
+## 11. 完成检查
+
+交付变更前确认：
+
+- 代码位于正确进程和模块，跨层契约同步更新；
+- 新行为有相应层级的回归测试，用户文案完成双语同步；
+- 需求、设计、测试、交付和常青指南的影响已经判断并更新必要索引；
+- `npm run check` 通过；涉及 macOS package/install 时额外执行相应 smoke；
+- Renderer 变化准备截图，交付变化记录签名、公证、迁移、回滚和已知限制；
+- `git diff --check` 通过，生成目录和凭据没有进入变更。
+
+## 12. 设计依据与追溯
+
+- [全局设置需求包](../changes/global-settings/README.md)记录 settings、持久化兼容、typed IPC、启动语言解析和验证证据。
+- [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)记录 GitHub Actions 触发器、权限、双架构资产和发布限制。
+- [MVP 实现快照](../changes/mvp/README.md)保存初始范围、交付与验证历史；其状态为 archived，只用于理解演进背景。
+- [历史参考](../reference/README.md)是冻结输入，不作为当前开发决策。没有 active 设计覆盖的现状必须回到代码与测试核实。

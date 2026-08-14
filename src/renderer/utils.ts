@@ -44,10 +44,10 @@ export function matchesWorkspace(
   ].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 }
 
-export function formatUpdatedAt(value: string): string {
+export function formatUpdatedAt(value: string, locale: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(date);

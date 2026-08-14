@@ -50,6 +50,11 @@ export interface WorkspaceRepository {
 
 export type WorkspaceStatus = 'ready' | 'missing' | 'error';
 
+export type WorkspaceArtifact =
+  | 'workspace-root'
+  | 'manifest'
+  | 'workspace-file';
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -61,6 +66,7 @@ export interface WorkspaceSummary {
   repositoryIds?: string[];
   status: WorkspaceStatus;
   statusDetail?: string;
+  missingArtifacts?: WorkspaceArtifact[];
   lastError?: ReqwsErrorPayload;
   createdAt: string;
   updatedAt: string;
@@ -81,6 +87,7 @@ export interface WorkspaceManifest {
 export interface WorkspaceDetail extends WorkspaceManifest {
   status: WorkspaceStatus;
   statusDetail?: string;
+  missingArtifacts?: WorkspaceArtifact[];
   lastError?: ReqwsErrorPayload;
 }
 
@@ -112,6 +119,7 @@ export interface AvailabilityItem {
   available: boolean;
   path?: string;
   reason?: string;
+  reasonCode?: 'NOT_FOUND';
 }
 
 export interface SystemAvailability {
@@ -139,6 +147,10 @@ export type OperationStage =
   | 'done'
   | 'error';
 
+export type OperationRollbackReason =
+  | 'CLEANING_STAGING'
+  | 'RETAINING_PUBLISHED_ARTIFACTS';
+
 export interface OperationProgress {
   operationId: string;
   kind: OperationKind;
@@ -147,10 +159,40 @@ export interface OperationProgress {
   current: number;
   total: number;
   message: string;
+  rollbackReason?: OperationRollbackReason;
   error?: ReqwsErrorPayload;
 }
 
-export interface AppSettings {
+export type SupportedLocale = 'zh-CN' | 'en-US';
+
+export type LocalePreference = 'system' | SupportedLocale;
+
+export interface GlobalSettings {
+  localePreference: LocalePreference;
+  workspaceParentDirectory: string | null;
+  workspaceFileDirectory: string | null;
+}
+
+export type GlobalDirectorySetting =
+  | 'workspaceParentDirectory'
+  | 'workspaceFileDirectory';
+
+export interface ResolvedGlobalSettings extends GlobalSettings {
+  effectiveLocale: SupportedLocale;
+  invalidDirectoryFields?: GlobalDirectorySetting[];
+}
+
+export const DEFAULT_GLOBAL_SETTINGS: Readonly<GlobalSettings> = {
+  localePreference: 'system',
+  workspaceParentDirectory: null,
+  workspaceFileDirectory: null,
+};
+
+/**
+ * The state reader accepts this loose shape so older state.v1 files remain
+ * loadable. AppStateStore normalizes it to GlobalSettings at runtime.
+ */
+export interface AppSettings extends Partial<GlobalSettings> {
   lastWorkspaceParentDirectory?: string;
   lastWorkspaceFileDirectory?: string;
 }
@@ -177,13 +219,16 @@ export interface ReqwsAPI {
   };
   workspaces: {
     list(): Promise<WorkspaceSummary[]>;
-    getSettings(): Promise<AppSettings>;
     get(id: string): Promise<WorkspaceDetail>;
     create(input: CreateWorkspaceInput): Promise<WorkspaceDetail>;
     addRepository(input: AddWorkspaceRepositoryInput): Promise<WorkspaceDetail>;
     removeRepository(input: RemoveWorkspaceRepositoryInput): Promise<WorkspaceDetail>;
     sync(id: string): Promise<WorkspaceDetail>;
     forget(id: string): Promise<void>;
+  };
+  settings: {
+    get(): Promise<ResolvedGlobalSettings>;
+    save(settings: GlobalSettings): Promise<ResolvedGlobalSettings>;
   };
   dialogs: {
     selectDirectory(input: SelectDirectoryInput): Promise<string | null>;
