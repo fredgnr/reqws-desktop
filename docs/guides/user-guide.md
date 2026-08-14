@@ -136,11 +136,13 @@ git@example.com:team/repository.git
 工作区列表可按名称、分支、仓库名、代码路径或 workspace 文件路径搜索。操作按钮包括：
 
 - “VS Code”：打开生成的 `.code-workspace`。
-- “Cursor”：用 Cursor 打开 `.code-workspace`。
-- 详情中的“用 Cursor 打开代码目录”：直接打开工作区根目录。
+- “Cursor”：在新的 Cursor IDE 窗口中打开 `.code-workspace`，即使 Cursor 当前显示的是 Agents Window，也会加载全部 workspace root。
+- 详情中的“用 Cursor 打开代码目录”：在新的 Cursor IDE 窗口中直接打开工作区根目录。
 - “在 Finder 中显示”：定位代码根目录。
 
 编辑器未安装或工作区不是“就绪”状态时，相应按钮会禁用。
+
+ReqWS 使用 Cursor 应用 bundle 内置的 editor CLI，不要求另外安装 PATH 中的 `cursor` shell command。若旧版或非标准 Cursor bundle 缺少内置 CLI，ReqWS 会回退到 macOS LaunchServices；此时无法保证已经打开的 Agents Window 会正确接收 workspace，建议更新或重新安装官方 Cursor 应用。
 
 在详情面板中可以：
 
@@ -193,11 +195,13 @@ macOS 上的典型全局状态位置是：
 - clone 不支持取消、并发、浅克隆或字节级进度。
 - 不提供 pull、merge、rebase、push、PR/MR、测试运行器或 Git worktree。
 - `.code-workspace` 由 ReqWS 整体维护，不合并手工 settings。
+- Cursor 正常路径会为每次打开操作新建一个 IDE 窗口；旧版或非标准 bundle 缺少内置 CLI 时只能降级为 LaunchServices 打开。
 - 逻辑移除和遗忘操作有意保留磁盘文件；需要删除时由用户在核对路径后自行处理。
 - 本机构建采用 ad-hoc 签名，不含 Developer ID、公证、DMG 或自动更新。
 
 ## 12. 依据与进一步资料
 
+- [Cursor IDE 工作区启动](../changes/cursor-ide-launch/README.md)记录 Agents Window 兼容修复、启动策略和当前验证证据。
 - [全局设置需求包](../changes/global-settings/README.md)记录语言和默认目录的当前设计、验收范围与验证证据。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始需求覆盖、交付和验证历史；其状态为 archived，不代替当前代码和测试。
 - [历史参考](../reference/README.md)保存冻结的原始方案与原型，只用于追溯来源。
