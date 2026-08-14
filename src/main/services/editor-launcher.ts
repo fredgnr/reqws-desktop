@@ -14,6 +14,20 @@ import { GitRunner } from './git-runner';
 const OPEN_PATH = '/usr/bin/open';
 const VSCODE_APP_NAME = 'Visual Studio Code';
 const CURSOR_APP_NAME = 'Cursor';
+const CURSOR_CLI_RELATIVE_PATH = path.join(
+  'Contents',
+  'Resources',
+  'app',
+  'bin',
+  'cursor',
+);
+const CODE_CLI_RELATIVE_PATH = path.join(
+  'Contents',
+  'Resources',
+  'app',
+  'bin',
+  'code',
+);
 
 interface WorkspacePaths {
   workspaceFilePath: string;
@@ -36,6 +50,7 @@ export interface EditorLauncherDependencies {
   accessPath?: AccessPath;
   spawnProcess?: SpawnOpenProcess;
   homeDirectory?: string;
+  processEnvironment?: NodeJS.ProcessEnv;
   resolveGitPath?: () => Promise<string>;
 }
 
@@ -51,6 +66,7 @@ export class EditorLauncher {
   private readonly accessPath: AccessPath;
   private readonly spawnProcess: SpawnOpenProcess;
   private readonly homeDirectory: string;
+  private readonly processEnvironment: NodeJS.ProcessEnv;
   private readonly resolveGitPath: () => Promise<string>;
 
   constructor(
@@ -60,6 +76,9 @@ export class EditorLauncher {
     this.accessPath = dependencies.accessPath ?? access;
     this.spawnProcess = dependencies.spawnProcess ?? spawnOpenProcess;
     this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
+    this.processEnvironment = {
+      ...(dependencies.processEnvironment ?? process.env),
+    };
     this.resolveGitPath =
       dependencies.resolveGitPath ?? (() => GitRunner.resolveGitPath());
   }
@@ -83,15 +102,13 @@ export class EditorLauncher {
   async openCursor(workspaceId: string): Promise<void> {
     const paths = await this.resolveWorkspacePaths(workspaceId);
     await this.ensurePathExists(paths.workspaceFilePath, 'workspace file');
-    await this.ensureApplicationAvailable(CURSOR_APP_NAME);
-    await this.runOpen(['-a', CURSOR_APP_NAME, paths.workspaceFilePath]);
+    await this.openCursorTarget(paths.workspaceFilePath);
   }
 
   async openCursorRoot(workspaceId: string): Promise<void> {
     const paths = await this.resolveWorkspacePaths(workspaceId);
     await this.ensurePathExists(paths.rootPath, 'workspace root');
-    await this.ensureApplicationAvailable(CURSOR_APP_NAME);
-    await this.runOpen(['-a', CURSOR_APP_NAME, paths.rootPath]);
+    await this.openCursorTarget(paths.rootPath);
   }
 
   async revealInFinder(workspaceId: string): Promise<void> {
@@ -129,15 +146,60 @@ export class EditorLauncher {
     };
   }
 
-  private async ensureApplicationAvailable(appName: string): Promise<void> {
+  private async ensureApplicationAvailable(appName: string): Promise<string> {
     const availability = await this.detectApplication(appName);
-    if (availability.available) return;
+    if (availability.available && availability.path) return availability.path;
     throw new ReqwsError({
       code: 'EDITOR_NOT_FOUND',
       message: `${appName} is not installed.`,
       detail: availability.reason,
       stage: 'launching',
     });
+  }
+
+  private async openCursorTarget(targetPath: string): Promise<void> {
+    const applicationPath = await this.ensureApplicationAvailable(
+      CURSOR_APP_NAME,
+    );
+    const cursorCliPath = path.join(
+      applicationPath,
+      CURSOR_CLI_RELATIVE_PATH,
+    );
+    if (await this.isExecutable(cursorCliPath)) {
+      await this.runProcess(
+        cursorCliPath,
+        ['editor', '--new-window', targetPath],
+        this.cursorProcessEnvironment(),
+      );
+      return;
+    }
+
+    const codeCliPath = path.join(applicationPath, CODE_CLI_RELATIVE_PATH);
+    if (await this.isExecutable(codeCliPath)) {
+      await this.runProcess(
+        codeCliPath,
+        ['--new-window', targetPath],
+        this.cursorProcessEnvironment(),
+      );
+      return;
+    }
+
+    await this.runOpen(['-a', CURSOR_APP_NAME, targetPath]);
+  }
+
+  private async isExecutable(filePath: string): Promise<boolean> {
+    try {
+      await this.accessPath(filePath, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private cursorProcessEnvironment(): NodeJS.ProcessEnv {
+    const environment = { ...this.processEnvironment };
+    delete environment.VSCODE_IPC_HOOK_CLI;
+    return environment;
   }
 
   private async ensurePathExists(
@@ -177,39 +239,53 @@ export class EditorLauncher {
   }
 
   private async runOpen(args: readonly string[]): Promise<void> {
+    await this.runProcess(OPEN_PATH, args);
+  }
+
+  private async runProcess(
+    command: string,
+    args: readonly string[],
+    environment?: NodeJS.ProcessEnv,
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       let child: ChildProcess;
       try {
-        child = this.spawnProcess(OPEN_PATH, args, {
+        const options: SpawnOptions = {
           shell: false,
           stdio: 'ignore',
           windowsHide: true,
-        });
+        };
+        if (environment) options.env = environment;
+        child = this.spawnProcess(command, args, options);
       } catch (error) {
-        reject(this.launchError(error));
+        reject(this.launchError(command, error));
         return;
       }
 
       child.once('error', (error) => {
         if (settled) return;
         settled = true;
-        reject(this.launchError(error));
+        reject(this.launchError(command, error));
       });
       child.once('close', (exitCode) => {
         if (settled) return;
         settled = true;
         if (exitCode === 0) resolve();
-        else reject(this.launchError(undefined, exitCode));
+        else reject(this.launchError(command, undefined, exitCode));
       });
     });
   }
 
-  private launchError(error?: unknown, exitCode?: number | null): ReqwsError {
+  private launchError(
+    command: string,
+    error?: unknown,
+    exitCode?: number | null,
+  ): ReqwsError {
     const detail =
       exitCode === undefined
-        ? 'Unable to start /usr/bin/open.'
-        : `/usr/bin/open exited with code ${String(exitCode)}.`;
+        ? `Unable to start ${command}.`
+        : `${command} exited with code ${String(exitCode)}.`;
     return new ReqwsError(
       {
         code: 'EDITOR_NOT_FOUND',
