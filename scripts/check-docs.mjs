@@ -7,6 +7,7 @@ const docsRoot = path.join(repositoryRoot, 'docs');
 const allowedTypes = new Set([
   'delivery',
   'governance',
+  'guide',
   'requirements',
   'technical-design',
   'test-plan',
@@ -243,12 +244,12 @@ for (const directory of directories) {
       continue;
     }
 
-    if (entry.isFile() && usesManagedMetadata(expected)) {
+    const listedStatus = indexStatus(source, readme, expected);
+    if (!listedStatus) {
+      failures.push(`${path.relative(repositoryRoot, expected)} has no status in ${path.relative(repositoryRoot, readme)}`);
+    } else if (entry.isFile() && usesManagedMetadata(expected)) {
       const metadata = parseFrontmatter(await readFile(expected, 'utf8'));
-      const listedStatus = indexStatus(source, readme, expected);
-      if (!listedStatus) {
-        failures.push(`${path.relative(repositoryRoot, expected)} has no status in ${path.relative(repositoryRoot, readme)}`);
-      } else if (metadata?.get('status') && listedStatus !== metadata.get('status')) {
+      if (metadata?.get('status') && listedStatus !== metadata.get('status')) {
         failures.push(`${path.relative(repositoryRoot, expected)} status (${metadata.get('status')}) does not match ${path.relative(repositoryRoot, readme)} (${listedStatus})`);
       }
     }

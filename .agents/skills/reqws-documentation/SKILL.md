@@ -34,8 +34,9 @@ Before implementation, classify each of these as `create`, `update`, or `none`, 
 - technical design and decisions
 - test plan or verification evidence
 - delivery, migration, rollback, and known limitations
+- evergreen user or developer guides
 
-Apply the decision table in `docs/standards/documentation-standard.md`. Do not create an empty four-document set. One document may cover adjacent concerns when they are reviewed and maintained together; record that coverage in the requirement index.
+Apply the decision table in `docs/standards/documentation-standard.md`. Do not create an empty lifecycle-document set or a guide without an executable audience task. One document may cover adjacent concerns when they are reviewed and maintained together; record that coverage in the requirement index.
 
 For a read-only explanation or review, inspect documents but do not mutate them unless the user also requested documentation changes.
 
@@ -45,6 +46,7 @@ For a read-only explanation or review, inspect documents but do not mutate them 
 - Confirm test scope before verification; record commands, environment, results, and evidence gaps after execution.
 - Create delivery notes only when there is a release, milestone, migration, rollback, or external handoff to record.
 - Put lifecycle documents in `docs/changes/<requirement-id-or-kebab-topic>/` and use the templates under `docs/standards/templates/` selectively.
+- Update `docs/guides/` when current installation, use, development, troubleshooting, or maintenance steps change; link the relevant requirement or design instead of duplicating its rationale.
 - Preserve unrelated working-tree edits. Do not rewrite frozen files under `docs/reference/` to match current behavior.
 
 Use the required frontmatter, statuses, naming, concise opening sentence, and relative links from the documentation standard.

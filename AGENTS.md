@@ -18,7 +18,7 @@ rg -n -i --glob '*.md' '<keyword|requirement-id|module>' docs
 rg --files docs | sort
 ```
 
-For requirement work and behavior-changing fixes, use the project [reqws-documentation skill](.agents/skills/reqws-documentation/SKILL.md) and follow [the documentation standard](docs/standards/documentation-standard.md). Before implementation, assess whether requirements, technical design, test material, and delivery notes each need to be created, updated, or left unchanged. Produce only materially useful documents; never create empty four-document sets.
+For requirement work and behavior-changing fixes, use the project [reqws-documentation skill](.agents/skills/reqws-documentation/SKILL.md) and follow [the documentation standard](docs/standards/documentation-standard.md). Before implementation, assess whether requirements, technical design, test material, delivery notes, and evergreen user or developer guides each need to be created, updated, or left unchanged. Produce only materially useful documents; never create empty document sets.
 
 Whenever a document is added, moved, renamed, deleted, or its status or one-line summary changes, update the nearest `README.md` in the same change. Update parent indexes when their direct entries or summaries change. Use relative Markdown links and concise descriptions. Run `npm run docs:check` after documentation changes and include documentation impact in the final handoff.
 
