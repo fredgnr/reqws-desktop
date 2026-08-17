@@ -6,6 +6,7 @@ import { WorkspaceDetailDrawer } from '../../src/renderer/components/WorkspaceDe
 import i18n, { initializeI18n } from '../../src/renderer/i18n';
 import type {
   EditorAvailability,
+  Repository,
   WorkspaceDetail,
 } from '../../src/shared/types';
 
@@ -31,6 +32,7 @@ function renderDrawer(
     cursor: { available: true, path: '/Applications/Cursor.app' },
     goland: { available: true, path: '/Applications/GoLand.app' },
   },
+  repositories: Repository[] = [],
 ): void {
   render(
     <WorkspaceDetailDrawer
@@ -47,7 +49,7 @@ function renderDrawer(
       onRemoveRepository={vi.fn()}
       onRevealFinder={vi.fn()}
       onSync={vi.fn()}
-      repositories={[]}
+      repositories={repositories}
       workspace={detail}
     />,
   );
@@ -88,7 +90,14 @@ describe('Workspace diagnostics', () => {
       ...workspace,
       status: 'ready',
       missingArtifacts: [],
-    }, null);
+    }, null, [{
+      id: 'repo-available',
+      name: 'available-repository',
+      url: 'git@example.com:team/available-repository.git',
+      defaultBranch: 'main',
+      createdAt: '2026-08-12T00:00:00Z',
+      updatedAt: '2026-08-12T00:00:00Z',
+    }]);
 
     for (const editor of ['VS Code', 'Cursor', 'GoLand']) {
       const button = screen.getByRole('button', { name: editor });
@@ -96,6 +105,9 @@ describe('Workspace diagnostics', () => {
       expect(button).not.toHaveAttribute('title');
       expect(button).not.toHaveAttribute('aria-describedby');
     }
+    const addRepository = screen.getByRole('button', { name: /添加/u });
+    expect(addRepository).toBeDisabled();
+    expect(addRepository).not.toHaveAttribute('title');
     expect(screen.queryByText(/未找到/u)).not.toBeInTheDocument();
   });
 });

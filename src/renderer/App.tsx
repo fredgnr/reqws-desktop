@@ -456,7 +456,7 @@ export function App({
           />
         ) : page === 'repositories' ? (
           <RepositoriesPage
-            gitAvailable={availability?.git.available ?? false}
+            gitAvailable={availability?.git.available ?? null}
             loading={loading}
             onCreate={() => { setTestResult(null); setRepositoryDialog('new'); }}
             onEdit={(repository) => { setTestResult(null); setRepositoryDialog(repository); }}
@@ -498,7 +498,7 @@ export function App({
       {repositoryDialog && (
         <RepositoryDialog
           busy={busy}
-          gitAvailable={availability?.git.available ?? false}
+          gitAvailable={availability?.git.available ?? null}
           onClose={() => !busy && (setRepositoryDialog(null), setTestResult(null))}
           onDelete={currentRepository ? () => {
             const item = repositories.find((repository) => repository.id === currentRepository.id);

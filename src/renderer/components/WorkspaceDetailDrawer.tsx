@@ -60,9 +60,11 @@ export function WorkspaceDetailDrawer({
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
   const golandAvailable = availability?.goland.available ?? false;
+  const gitAvailable = availability?.git.available ?? false;
   const vscodeUnavailable = availability !== null && !vscodeAvailable;
   const cursorUnavailable = availability !== null && !cursorAvailable;
   const golandUnavailable = availability !== null && !golandAvailable;
+  const gitUnavailable = availability !== null && !gitAvailable;
   const vscodeReason = !ready
     ? t('workspaces.pathIncomplete')
     : vscodeUnavailable
@@ -179,7 +181,7 @@ export function WorkspaceDetailDrawer({
               ? availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.defaultBranch}</option>)
               : <option value="">{t('workspaceDetail.addRepository.empty')}</option>}
           </select>
-          <button className="button" disabled={busy || !repositoryId || !availability?.git.available} onClick={() => onAddRepository(repositoryId)} title={!availability?.git.available ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
+          <button className="button" disabled={busy || !repositoryId || !gitAvailable} onClick={() => onAddRepository(repositoryId)} title={gitUnavailable ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
         </div>
 
         <div className="danger-zone">

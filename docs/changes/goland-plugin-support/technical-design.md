@@ -267,7 +267,7 @@ export interface ReqwsAPI {
 
 `workspaceId` 继续由 Main 使用 `idSchema` 重新验证；Main 必须重新读取 workspace detail 并确认状态为 `ready`，不能信任 renderer 提供路径。
 
-availability response 使用判别联合：`available:true` 必须携带 absolute canonical candidate path，且不能同时携带 `NOT_FOUND`；`available:false` 不得携带 path。renderer 在首次响应尚未返回时只禁用操作，不把 unknown 状态宣告为“未安装”。
+availability response 使用判别联合：`available:true` 必须携带经过 resolver 验证的绝对 candidate path，且不能同时携带 `NOT_FOUND`；`available:false` 不得携带 path。Git resolver 按 PATH 目录顺序展开稳定的绝对 `git` 候选，再追加固定 macOS fallback，并对返回候选执行 `git --version`；不得把裸命令名或验证后未经执行的替代路径写入响应。GoLand 等依赖 bundle identity 的 resolver 仍按各自章节完成 canonical 校验。renderer 在首次响应尚未返回时只禁用操作，不把 unknown 状态宣告为“未安装”。
 
 ### 6.2 GoLand 安装探测
 

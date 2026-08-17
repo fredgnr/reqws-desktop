@@ -109,6 +109,8 @@ workspace/
 - invalid workspace ID；
 - availability shape 包含 goland；
 - availability 判别联合要求 `true + absolute path` 或 `false + no path`；
+- PATH 命中的 Git 必须展开为经过 `git --version` 验证的绝对路径，并能通过完整 availability IPC 响应校验；
+- Git availability 尚未知时相关操作保持禁用，但不显示“未检测到 Git”警告或缺失 title；
 - availability 尚未知时按钮禁用，但列表和详情都不显示 `editorNotFound`/`editorsUnavailable`；
 - disabled state；
 - click loading/error；

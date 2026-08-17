@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../src/renderer/components/ConfirmDialog';
 import { CreateWorkspaceDialog } from '../../src/renderer/components/CreateWorkspaceDialog';
 import { ErrorNotice } from '../../src/renderer/components/ErrorNotice';
 import { RepositoryDialog } from '../../src/renderer/components/RepositoryDialog';
+import { RepositoriesPage } from '../../src/renderer/pages/RepositoriesPage';
 import { WorkspacesPage } from '../../src/renderer/pages/WorkspacesPage';
 import i18n, { initializeI18n } from '../../src/renderer/i18n';
 
@@ -200,6 +201,85 @@ describe('Workspace list', () => {
 });
 
 describe('Repository form', () => {
+  it('disables Git actions without claiming Git is missing while availability loads', () => {
+    render(
+      <RepositoriesPage
+        gitAvailable={null}
+        loading={false}
+        onCreate={vi.fn()}
+        onEdit={vi.fn()}
+        onSearch={vi.fn()}
+        onTest={vi.fn()}
+        repositories={repositories.map((repository) => ({
+          ...repository,
+          referencedBy: [],
+          workspaceUsageCount: 0,
+        }))}
+        search=""
+        testingId={null}
+      />,
+    );
+
+    expect(screen.getByText('正在处理…')).toBeInTheDocument();
+    expect(screen.queryByText(/未检测到 Git/u)).not.toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: '测试' })) {
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAttribute('title');
+    }
+  });
+
+  it('does not show a Git warning before availability is known', () => {
+    render(
+      <RepositoryDialog
+        busy={false}
+        gitAvailable={null}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onTest={vi.fn()}
+        repository={repositories[0]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled();
+    expect(screen.queryByText(/未检测到 Git/u)).not.toBeInTheDocument();
+  });
+
+  it('distinguishes unavailable and available Git states', () => {
+    const pageProps = {
+      loading: false,
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onSearch: vi.fn(),
+      onTest: vi.fn(),
+      repositories: repositories.map((repository) => ({
+        ...repository,
+        referencedBy: [],
+        workspaceUsageCount: 0,
+      })),
+      search: '',
+      testingId: null,
+    };
+    const view = render(
+      <RepositoriesPage {...pageProps} gitAvailable={false} />,
+    );
+
+    expect(screen.getByText(i18n.t('repositories.gitUnavailable')))
+      .toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: '测试' })) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', '未找到 Git');
+    }
+
+    view.rerender(<RepositoriesPage {...pageProps} gitAvailable />);
+
+    expect(screen.queryByText(i18n.t('repositories.gitUnavailable')))
+      .not.toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: '测试' })) {
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute('title');
+    }
+  });
+
   it('derives a repository name from URL and submits a valid form', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);
