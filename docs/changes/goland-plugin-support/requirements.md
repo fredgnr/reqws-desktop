@@ -1,8 +1,8 @@
 ---
 title: GoLand 插件支持需求说明
 type: requirements
-status: draft
-updated: 2026-08-14
+status: active
+updated: 2026-08-17
 ---
 
 # GoLand 插件支持需求说明
@@ -52,7 +52,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 插件不执行 Git 生命周期操作，不删除目录，不绕过 Trusted Project / Safe Mode；
 - 用户已有、且不属于 ReqWS 的 module、Content Root 和 VCS mapping 不被删除；
 - Desktop、插件、Plugin Verifier、真实 macOS GoLand GUI 和文档检查均有 exact-head 证据；
-- 用户指南和开发指南在实现稳定后更新，需求包状态按证据从 `draft` 调整。
+- 用户指南和开发指南反映实际本地流程，需求包完成状态只按 exact-head 证据调整。
 
 ## 4. 本次范围
 
@@ -66,8 +66,9 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - `repositories` 数组是活动仓库的唯一权威集合；
 - 不在数组中的目录不属于当前 IDE workspace，即使目录仍存在于磁盘；
 - 插件使用完整文件内容摘要识别目标状态，不依赖文件事件顺序或时间戳单调；
-- Desktop 与插件使用同一组 golden fixture 验证兼容行为；
+- Desktop 与插件使用同一组 manifest golden fixture 和版本化 repository URL safety corpus 验证兼容行为；
 - 未知附加字段可以忽略，不支持的 major version 必须拒绝；
+- repository URL 必须通过双方共同消费的 versioned corpus 所定义、与 Desktop `isSafeRepositoryUrl` 一致的无凭据 HTTPS/SSH 或 SCP-like SSH 校验；规则必须保留安全 IDN 并对畸形 URI/credential 输入作相同判定，插件不得访问或记录 URL；
 - manifest 写入仍由 Desktop 使用原子替换完成。
 
 ### 4.2 ReqWS Desktop
@@ -88,6 +89,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 必须实现：
 
 - 插件源码、Gradle wrapper 和测试位于 `integrations/goland/`；
+- 插件 ID 为 `com.reqws.workspace`，Kotlin package 为 `com.reqws.goland`；
 - 可构建本地 ZIP，并通过 “Install Plugin from Disk” 安装；
 - 只在项目根存在有效 ReqWS manifest 时启用项目级能力；
 - 解析和校验 manifest，但不根据 URL、branch 或其他字段执行网络或命令；
@@ -99,16 +101,18 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 同步串行、幂等、latest-wins，重复同一内容不重复刷新项目模型；
 - 项目重启后从 manifest 冷恢复，不依赖 Desktop 正在运行；
 - 提供 ReqWS Tool Window，至少展示 workspace、feature branch、活动仓库、同步状态、最近错误和“立即同步”；
+- Tool Window 必须与 GoLand 原生主题和控件密度一致，清晰区分状态、工作区摘要、仓库列表、诊断摘要和操作区；状态不能只靠颜色表达，常用窄宽度下不得出现仓库行异常拉伸、控件裁切或不可达操作；
 - 只删除插件明确拥有且当前不再需要的项目模型和 VCS 条目；
 - 普通非 ReqWS 项目不受到行为或 UI 干扰；
 - Safe Mode 下只允许读取和诊断，不修改项目模型或启动外部进程。
+- Safe Mode 使用稳定的 `TrustedProjects.isProjectTrusted` 查询；仅在有效 ReqWS project 被阻塞期间低频检查信任状态，转为 trusted 后只提交一次同步，不依赖 261 中的 experimental trust listener。
 
 ### 4.4 构建、测试和文档
 
 必须实现：
 
 - 使用 IntelliJ Platform Gradle Plugin 2.x；
-- 在构建 spike 中锁定 GoLand target、JDK、Gradle、Kotlin、JVM target 和 `since-build`；
+- 固定 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 target、Java/JVM 21 与 `since-build: 261`，不设置 `until-build`；
 - 插件单元测试、平台模型测试、`verifyPlugin`、Plugin Verifier 和 `buildPlugin` 通过；
 - 在 Apple Silicon macOS 的真实 GoLand 上完成 GUI smoke；
 - 验证报告记录 exact commit、GoLand version/build、JBR/JDK、macOS、插件 ZIP SHA-256、fixture 和结果；
@@ -213,11 +217,11 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 
 - 同一项目同一时刻最多一个 apply；
 - apply 期间收到的新内容合并为下一轮最新目标；
-- 相同 digest 不重复 apply；
+- 同一 live project service/coordinator 生命周期内，只有上一次 model/VCS 完整 apply 成功后，相同 digest 才不重复 apply；
 - 原子 rename 产生的多个 VFS 事件合并为一次稳定读取；
 - manifest 临时不存在时有限重试，不因单个 delete 事件立即清空 roots；
 - invalid manifest 保留上次有效状态，并在文件恢复后自动重试；
-- 项目重启不依赖内存状态即可恢复；
+- 项目重启不依赖内存状态即可恢复；持久化最近摘要只用于 UI/诊断，新 service 必须重新读取并收敛，不能据此跳过 apply；
 - 单个活动目录缺失时不得创建目录，可同步其他有效活动仓库并把整体状态标记为 degraded。
 
 ### 7.3 性能与体验
@@ -225,6 +229,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 - 文件读取、JSON、digest 和路径扫描不在 EDT 执行；
 - 项目模型更新在 JetBrains 要求的写事务中完成；
 - Tool Window 更新在 EDT 完成；
+- Tool Window 在浅色与深色主题使用平台颜色，长 manifest 文本安全截断并可查看完整值，按钮保留原生键盘焦点和可访问名称；
 - listener 回调不做阻塞 IO；
 - 无目标变化时不触发重复索引；
 - 以 50 个活动仓库和 20 个保留仓库作为规模回归；
@@ -234,9 +239,9 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 ### 7.4 兼容性
 
 - 产品范围是本地 macOS GoLand；
-- 本次真实 GUI 验收至少覆盖实现时当前稳定 GoLand，文档制定时为 2026.2；
-- W0 优先评估以 GoLand 2026.1 / Java 21 编译，并使用 Plugin Verifier 验证 2026.1 与 2026.2；
-- 如果实际使用的公开 API 必须以 2026.2 为基线，则使用 Java 25 和 262 build range，并记录缩小兼容范围的原因；
+- 编译基线固定为 GoLand 2026.1.3 / Java 21 / build 261，真实 GUI 必须记录本机实际安装的 exact build；
+- Plugin Verifier 必须覆盖 GoLand 2026.1.3 与 2026.2，262 兼容性不能只由 261 GUI 结果推断；
+- `since-build` 为 261 且不设置 `until-build`；若 262 Verifier 失败，必须修复或明确收窄范围，不能以 `continue-on-error` 掩盖；
 - 不使用 `@Internal`、`@Experimental`、反射或未记录私有 API作为生产方案；
 - GoLand 用户的“新窗口 / 当前窗口 / 询问”设置继续由 IDE 决定，Desktop 不通过私有参数覆盖。
 
@@ -276,6 +281,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 | GL-13 | 用户自定义配置 | 插件同步不删除非 ReqWS-owned module、Content Root 或 VCS mapping。 |
 | GL-14 | 50+20 仓库样例 | 同步完成，无重复事件风暴、持续 CPU 或无限 indexing。 |
 | GL-15 | 全面回归 | VS Code、Cursor、Finder、workspace 增删、i18n、Desktop package 和现有测试通过。 |
+| GL-16 | Tool Window 视觉与可用性 | 实现不只包含与原型相同的元素，还应尽可能复现其空间结构与主次层级：紧凑状态徽标、带边界的工作区摘要、右侧独立计数的仓库卡片、固定高度且有行分隔的仓库列表，以及全宽主同步按钮和居中的次级动作；因原生 Tool Window chrome 无法复现的差异必须明确记录。同步、降级、错误和 Safe Mode 均有文字语义，窄宽度与浅/深主题无异常拉伸、裁切或操作不可达，并保存真实 GoLand 候选截图供后续验收。 |
 
 ## 10. 术语
 

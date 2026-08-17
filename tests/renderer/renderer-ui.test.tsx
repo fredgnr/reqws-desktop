@@ -35,6 +35,7 @@ const unavailableEditors: SystemAvailability = {
   git: { available: true, path: '/usr/bin/git' },
   vscode: { available: false, reason: '未安装 VS Code' },
   cursor: { available: false, reason: '未安装 Cursor' },
+  goland: { available: false, reason: '未安装 GoLand' },
 };
 
 describe('Workspace list', () => {
@@ -48,10 +49,12 @@ describe('Workspace list', () => {
         onCreate={vi.fn()}
         onDetails={vi.fn()}
         onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
         onOpenVSCode={vi.fn()}
         onSearch={onSearch}
         repositoryCount={2}
         search="order-api"
+        launchingWorkspaceIds={new Set()}
         workspaces={[workspace]}
       />,
     );
@@ -63,10 +66,12 @@ describe('Workspace list', () => {
         onCreate={vi.fn()}
         onDetails={vi.fn()}
         onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
         onOpenVSCode={vi.fn()}
         onSearch={onSearch}
         repositoryCount={2}
         search="does-not-exist"
+        launchingWorkspaceIds={new Set()}
         workspaces={[workspace]}
       />,
     );
@@ -83,34 +88,103 @@ describe('Workspace list', () => {
         onCreate={vi.fn()}
         onDetails={vi.fn()}
         onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
         onOpenVSCode={vi.fn()}
         onSearch={vi.fn()}
         repositoryCount={2}
         search=""
+        launchingWorkspaceIds={new Set()}
         workspaces={[workspace]}
       />,
     );
     expect(screen.getByRole('button', { name: 'VS Code' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'VS Code' })).toHaveAttribute('title', '未找到 Visual Studio Code');
     expect(screen.getByRole('button', { name: 'Cursor' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'GoLand' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'GoLand' })).toHaveAttribute(
+      'title',
+      '未找到 GoLand',
+    );
+  });
+
+  it('keeps launch actions disabled without claiming editors are missing while availability loads', () => {
+    render(
+      <WorkspacesPage
+        availability={null}
+        loading={false}
+        onCreate={vi.fn()}
+        onDetails={vi.fn()}
+        onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
+        onOpenVSCode={vi.fn()}
+        onSearch={vi.fn()}
+        repositoryCount={2}
+        search=""
+        launchingWorkspaceIds={new Set()}
+        workspaces={[workspace]}
+      />,
+    );
+
+    for (const editor of ['VS Code', 'Cursor', 'GoLand']) {
+      const button = screen.getByRole('button', { name: editor });
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAttribute('title');
+      expect(button).not.toHaveAttribute('aria-describedby');
+    }
+    expect(screen.queryByText(/未找到/u)).not.toBeInTheDocument();
+  });
+
+  it('disables all editor launch actions for a workspace while one is pending', () => {
+    render(
+      <WorkspacesPage
+        availability={{
+          git: { available: true, path: '/usr/bin/git' },
+          vscode: { available: true, path: '/Applications/Visual Studio Code.app' },
+          cursor: { available: true, path: '/Applications/Cursor.app' },
+          goland: { available: true, path: '/Applications/GoLand.app' },
+        }}
+        loading={false}
+        onCreate={vi.fn()}
+        onDetails={vi.fn()}
+        onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
+        onOpenVSCode={vi.fn()}
+        onSearch={vi.fn()}
+        repositoryCount={2}
+        search=""
+        launchingWorkspaceIds={new Set([workspace.id])}
+        workspaces={[workspace]}
+      />,
+    );
+
+    for (const editor of ['VS Code', 'Cursor', 'GoLand']) {
+      expect(screen.getByRole('button', { name: editor })).toBeDisabled();
+      expect(screen.getByRole('button', { name: editor })).toHaveAttribute(
+        'aria-busy',
+        'true',
+      );
+    }
   });
 
   it('updates visible labels, accessibility text and counts when the locale changes', async () => {
     render(
       <WorkspacesPage
         availability={{
-          git: { available: true },
-          vscode: { available: true },
-          cursor: { available: true },
+          git: { available: true, path: '/usr/bin/git' },
+          vscode: { available: true, path: '/Applications/Visual Studio Code.app' },
+          cursor: { available: true, path: '/Applications/Cursor.app' },
+          goland: { available: true, path: '/Applications/GoLand.app' },
         }}
         loading={false}
         onCreate={vi.fn()}
         onDetails={vi.fn()}
         onOpenCursor={vi.fn()}
+        onOpenGoLand={vi.fn()}
         onOpenVSCode={vi.fn()}
         onSearch={vi.fn()}
         repositoryCount={0}
         search=""
+        launchingWorkspaceIds={new Set()}
         workspaces={[]}
       />,
     );

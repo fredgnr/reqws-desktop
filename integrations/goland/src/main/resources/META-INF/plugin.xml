@@ -1,0 +1,27 @@
+<idea-plugin>
+  <id>com.reqws.workspace</id>
+  <name>ReqWS</name>
+  <vendor>ReqWS contributors</vendor>
+
+  <resource-bundle>messages.ReqwsBundle</resource-bundle>
+
+  <description><![CDATA[
+    Projects the active repositories from a ReqWS workspace manifest into GoLand.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.goland</depends>
+  <depends>com.intellij.modules.vcs</depends>
+  <depends>Git4Idea</depends>
+  <depends>org.jetbrains.plugins.go</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <projectService serviceImplementation="com.reqws.goland.project.ReqwsProjectService" />
+    <postStartupActivity implementation="com.reqws.goland.project.ReqwsStartupActivity" />
+    <toolWindow
+      id="ReqWS"
+      anchor="right"
+      factoryClass="com.reqws.goland.ui.ReqwsToolWindowFactory"
+    />
+  </extensions>
+</idea-plugin>

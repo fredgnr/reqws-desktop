@@ -4,7 +4,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { WorkspaceDetailDrawer } from '../../src/renderer/components/WorkspaceDetailDrawer';
 import i18n, { initializeI18n } from '../../src/renderer/i18n';
-import type { WorkspaceDetail } from '../../src/shared/types';
+import type {
+  EditorAvailability,
+  WorkspaceDetail,
+} from '../../src/shared/types';
 
 const workspace: WorkspaceDetail = {
   schemaVersion: 1,
@@ -20,20 +23,26 @@ const workspace: WorkspaceDetail = {
   updatedAt: '2026-08-12T00:00:00Z',
 };
 
-function renderDrawer(detail: WorkspaceDetail = workspace): void {
+function renderDrawer(
+  detail: WorkspaceDetail = workspace,
+  availability: EditorAvailability | null = {
+    git: { available: true, path: '/usr/bin/git' },
+    vscode: { available: true, path: '/Applications/Visual Studio Code.app' },
+    cursor: { available: true, path: '/Applications/Cursor.app' },
+    goland: { available: true, path: '/Applications/GoLand.app' },
+  },
+): void {
   render(
     <WorkspaceDetailDrawer
-      availability={{
-        git: { available: true },
-        vscode: { available: true },
-        cursor: { available: true },
-      }}
+      availability={availability}
       busy={false}
+      editorLaunching={false}
       onAddRepository={vi.fn()}
       onClose={vi.fn()}
       onForget={vi.fn()}
       onOpenCursor={vi.fn()}
       onOpenCursorRoot={vi.fn()}
+      onOpenGoLand={vi.fn()}
       onOpenVSCode={vi.fn()}
       onRemoveRepository={vi.fn()}
       onRevealFinder={vi.fn()}
@@ -72,5 +81,21 @@ describe('Workspace diagnostics', () => {
 
     expect(screen.getByText(i18n.t('workspaceDetail.pathsMissing')))
       .toBeInTheDocument();
+  });
+
+  it('does not announce missing editors before availability is known', () => {
+    renderDrawer({
+      ...workspace,
+      status: 'ready',
+      missingArtifacts: [],
+    }, null);
+
+    for (const editor of ['VS Code', 'Cursor', 'GoLand']) {
+      const button = screen.getByRole('button', { name: editor });
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAttribute('title');
+      expect(button).not.toHaveAttribute('aria-describedby');
+    }
+    expect(screen.queryByText(/未找到/u)).not.toBeInTheDocument();
   });
 });

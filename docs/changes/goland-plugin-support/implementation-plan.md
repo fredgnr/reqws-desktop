@@ -1,8 +1,8 @@
 ---
 title: GoLand 插件支持探索与实施计划
 type: technical-design
-status: draft
-updated: 2026-08-14
+status: active
+updated: 2026-08-17
 ---
 
 # GoLand 插件支持探索与实施计划
@@ -175,17 +175,17 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 ## 5. 工作包总览
 
-| 工作包 | 目标 | 主要产物 |
+| 工作包 | 目标 | 当前状态 |
 |---|---|---|
-| W0 | 锁定工具链和可用公开 API | Gradle baseline、最小 plugin、环境证据 |
-| W1 | 建立只读 plugin 骨架 | manifest reader、digest、Tool Window、Safe Mode |
-| W2 | 选择项目模型策略 | 唯一 production adapter、ownership tests |
-| W3 | 建立可靠自动同步 | VFS listener、debounce、coordinator、恢复 |
-| W4 | 完成 VCS 与 Desktop 启动 | Git mappings、GoLand resolver、IPC/UI |
-| W5 | 完成功能、规模和安全验证 | GoLand GUI evidence、性能与对抗结果 |
-| W6 | 整合 CI、指南与验收材料 | 全量 checks、ZIP、hash、verification、handoff |
+| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；工作树产物对 261/262 Verifier 均为 Compatible，exact-head 报告待 GUI 后形成。 |
+| W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
+| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B 并实现 state v2 + companion-marker owned-exclude adapter；state/JPS serialization 自动化已覆盖，真实 IDE reopen 待 GUI。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、同生命周期 digest no-op、部分失败回退重放与 reopen 强制收敛已实现/test。 |
+| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS、live replan、安全 GoLand launcher、Desktop/Renderer 回归已通过；真实启动待验证。 |
+| W5 | 完成功能、规模和安全验证 | 自动化、261/262 Verifier 与两类本地打包已通过；GUI、Go 功能、reopen 和规模证据仍未完成。 |
+| W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
-工作包按 `W0 → W1 → W2 → W3 → W4 → W5 → W6` 执行。只有明确说明的纯测试或文档工作可以并行，不允许在 W2 尚未选定项目模型时提前堆叠完整 VFS 和 UI 实现。
+工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
 
 ## 6. W0：环境盘点与构建基线
 
@@ -193,20 +193,21 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 在修改业务代码前锁定真实 GoLand、JDK、Gradle 和插件依赖基线，并验证最小插件可运行。
 
-### 6.2 步骤
+### 6.2 已锁定结果
 
-1. 记录本机 macOS version/build、architecture；
-2. 识别 GoLand 安装来源、绝对 bundle path、version、build 和 JBR；
-3. 记录本地可用 JDK 21、JDK 25；
-4. 使用 IntelliJ Platform Gradle Plugin 2.x 建立最小空插件；
-5. 比较两个 target：
-   - GoLand 2026.1 + Java 21；
-   - GoLand 2026.2 + Java 25；
-6. 验证 target 2026.1 的插件能否通过 2026.1、2026.2 Plugin Verifier，并在本机 GoLand 2026.2 加载；
-7. 若所需公开 API 只能在 2026.2 使用，记录证据并切换 262 baseline；
-8. 验证 `test`、`verifyPlugin`、`runPluginVerifier`、`buildPlugin`、`runIde`；
-9. 确认 GoLand product dependency、bundled VCS/Go plugin dependency 和 plugin.xml 写法；
-10. 锁定 Gradle wrapper、Kotlin、JVM target、target IDE、`since-build` 和 test framework。
+| 项目 | 结果 |
+|---|---|
+| IntelliJ Platform Gradle Plugin | 2.18.1 |
+| Gradle wrapper | 9.3.0 |
+| Kotlin | 2.3.20 |
+| GoLand target | 2026.1.3 |
+| build JDK / Java release / JVM target | 21 |
+| build range | `since-build: 261`，无 `until-build` |
+| Plugin Verifier | 配置 GoLand 2026.1.3 与 2026.2 |
+| plugin identity | `com.reqws.workspace`；Kotlin package `com.reqws.goland` |
+| 本机候选 | GoLand 2026.1.3，build `GO-261.25134.147` |
+
+直接任务为 `test`、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、`verifyPlugin`、`buildPlugin` 和用于调试的 `runIde`。IntelliJ Platform Gradle Plugin 2.18.1 由 `verifyPlugin` 执行配置的 Plugin Verifier，不另设第二个 verifier 任务。
 
 ### 6.3 Exit criteria
 
@@ -234,6 +235,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 - SHA-256 digest；
 - project-level service 和 disposable scope；
 - Tool Window view model；
+- 先归档 Tool Window 高保真原型，再以稳定 261 Swing API实现状态徽标、工作区摘要、紧凑仓库列表、诊断摘要和分层操作区；
 - `Sync Now` 暂时只重新读取并展示；
 - Safe Mode 只读 gate；
 - golden fixtures；
@@ -244,6 +246,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 - 普通项目无 Tool Window 干扰或重逻辑；
 - valid fixture 展示 workspace、branch 和 active repositories；
+- Tool Window 与归档原型具有同一信息层级，状态不只靠颜色表达，窄宽度下仓库行不拉伸且三个动作都可达；
 - malformed、oversized、unsupported、root mismatch 和 path escape 有稳定错误；
 - Safe Mode 无 model/VCS/external-process 副作用；
 - project dispose 后无未管理 task；
@@ -256,9 +259,9 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 在真实 GoLand 中选择一个可生产化的项目模型策略，并建立所有权保护。
 
-### 8.2 EXP-02A：单 module、多 Content Root
+### 8.2 EXP-02A：单 module、多 Content Root（安全门禁失败）
 
-首先尝试：
+已完成的公开 API spike 证明 Workspace Model 可以 add/remove/re-add Content Root，并保留 module 的 SDK/dependency。但生产化还要求先移除 GoLand 创建的 workspace-root Content Root：
 
 - workspace root 打开后取得现有 module；
 - repo-a、repo-b 作为活动 Content Root；
@@ -270,22 +273,15 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 - 重启 GoLand；
 - 增加用户非 ReqWS module/root 并确认保留。
 
-### 8.3 EXP-02B：workspace root + owned excludes
+默认 workspace root 没有 ReqWS entity source 或持久化 ownership，插件不能证明自己有权删除它。启发式采用该 root 会违反“所有权不确定时不做破坏性移除”，所以 A 在进入完整 GUI 对比前即按安全退出条件失败；不保留 production 代码。
 
-只有 02A 出现可复现阻塞时执行。必须记录失败来自：
+### 8.3 EXP-02B：workspace root + owned excludes（已选择）
 
-- Go plugin 对多 Content Root 的支持；
-- Project View；
-- model serialization；
-- public API；
-- test/debug；
-- 用户配置保护。
+B 保留默认 workspace-root Content Root，只排除 `.reqws` 和 root 直接子级中已确认的非活动 Git repository，不排除普通未知目录。每个新 target exclude 在同一 Workspace Model transaction 中增加一个指向虚拟 `.reqws/.goland-ownership/<128-bit-token>` 的 companion marker exclude；persistent state v2 保存 module、workspace-relative target 和 token。删除必须同时验证 state claim、唯一 target 和唯一 marker；已有等价用户 exclude 只借用，任何缺失、重复、旧 state 或物理 marker namespace 冲突均保守失败。
 
-B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普通未知目录。
+### 8.4 EXP-02C：每活动仓库一个 module（未执行）
 
-### 8.4 EXP-02C：每活动仓库一个 module
-
-只有 A、B 都失败时执行。重点验证 module naming、SDK、Go support、restart、remove 和 ownership 成本。
+B 已成为唯一 production path，因此不继续探索 C，不增加 runtime fallback。若 exact-head GUI 证明 B 失败，应重新评审并记录新证据。
 
 ### 8.5 Production adapter
 
@@ -297,20 +293,20 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 - `add / keep / remove-owned / conflict` planner；
 - write transaction；
 - persistent state；
-- restart recovery；
+- state reload、独立 JPS serialization contract 与 reopen recovery；
 - user-owned entries preservation；
 - ownership conflict 的保守失败。
 
 ### 8.6 Exit criteria
 
-- 选择第一个满足技术方案第 8.4 节全部门禁的策略；
+- 选择符合 active 技术方案所有权/API 门禁并最终通过完整验收矩阵的策略；
 - 形成唯一 production `ProjectModelAdapter`；
 - 未选 spike 代码、依赖和配置已删除；
-- model-level tests 覆盖 initial/add/remove/re-add/restart；
+- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、state reload 与 JPS serialization；真实 GoLand reopen 由 GUI 补足；
 - 用户无关 module/root 不丢失；
 - retained repo 不进入默认项目内容；
 - Plugin Verifier 无禁止 API；
-- 选择过程写入验证证据。
+- 选择过程先记录在 active 技术方案；只有完整 Verifier 与 GUI 证据形成后才写入 dated verification report。
 
 ## 9. W3：VFS 监听与最终收敛
 
@@ -320,13 +316,13 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 
 ### 9.2 实现
 
-- exact manifest path 和 parent filtering；
+- 每个 file-based project 在首次读取前安装 canonical exact manifest/parent watcher，使 initial absent → create 也可恢复；
 - create/delete/move/rename/replace/content event 覆盖；
 - background read/parse；
-- 250–500 ms debounce spike；
+- 固定 350 ms debounce；
 - single-flight coordinator；
 - latest-wins pending candidate；
-- digest no-op；
+- 仅同一个 clean coordinator 生命周期内的 digest no-op；新 service/reopen 强制 reconcile；
 - temporary missing 的有限 retry；
 - invalid candidate 保留 last good model；
 - project dispose cancellation；
@@ -347,7 +343,7 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 ### 9.4 Exit criteria
 
 - 最终项目模型等于最后一个 valid manifest；
-- 同 digest 不重复 apply；
+- 同一 coordinator 生命周期内 clean digest 不重复 apply，部分 apply 失败后回退旧 digest 必须重放；
 - invalid/temporary missing 不清空 last good roots；
 - 单项目最多一个 apply；
 - coordinator exception 不死锁；
@@ -365,10 +361,12 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 实现：
 
 - 读取现存 VCS mappings；
-- 对同路径 Git mapping adopt；
+- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；规划期间 mappings 变化时有界重读并按完整 equality（含 root settings）重新规划，不稳定则写入前失败；
+- 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
 - 添加缺失 active mappings；
-- 只移除 ReqWS-owned inactive mappings；
+- 新增 mapping 只在平台提交成功后记录为 `CREATED`；移除仍能精确验证 ownership 的 inactive mapping 前先持久撤销删除权；
 - 保留用户 mapping；
+- workspace 内额外/root mapping 保留并进入 degraded，stale `CREATED` 删除权在 mapping 消失时丢弃；
 - path identity normalization；
 - Git plugin unavailable 的稳定诊断；
 - apply failure 的 degraded state；
@@ -381,8 +379,10 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 
 - `SystemAvailability.goland`；
 - standard/user/Toolbox resolver；
+- 各来源候选独立验证后再 canonical 去重，损坏的同路径 Toolbox launcher 不得污染有效 standard/user app；
 - bundle identifier 和 canonical path 校验；
 - 启动 root 的 production strategy；
+- 允许 macOS `/tmp`、`/var` 第一层系统别名，但拒绝更深层 symlink；
 - `openGoLand` IPC、Main handler、preload；
 - renderer button、disabled/loading/error；
 - zh-CN source 文案和 en-US 翻译 workflow；
@@ -415,7 +415,7 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 
 ### 11.1 目标
 
-证明所选模型不仅在 Project View 中可见，而且支持真实 Go 开发、恢复和边界保护。
+证明所选模型不仅在 Project View 中可见，而且支持真实 Go 开发、恢复、边界保护和 GL-16 Tool Window 视觉可用性。
 
 ### 11.2 GoLand 功能
 
@@ -457,7 +457,7 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 - 10 次 add/remove sequence；
 - 100 次 rapid rewrite；
 - 观察 sync stage duration、EDT freeze、event/apply ratio、index completion、CPU、threads 和 memory；
-- same digest no-op；
+- 同一 live coordinator 的 clean same-digest no-op，并记录 reopen 强制 reconcile 的额外 apply；
 - Project/Git UI 保持可交互。
 
 不设置脱离本机环境的绝对毫秒门限，但以下任一情况判失败：
@@ -487,7 +487,7 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 
 ### 11.6 Exit criteria
 
-- requirements GL-01 至 GL-14 均有 exact-head 证据；
+- requirements GL-01 至 GL-14 与 GL-16 均有 exact-head 证据；
 - Go development basics 通过；
 - 没有严重性能或事件问题；
 - 安全负向场景符合设计；
@@ -505,9 +505,12 @@ B 只排除 `.reqws` 和已确认的保留独立 Git repository，不排除普�
 - `docs/guides/user-guide.md` GoLand 安装和使用步骤；
 - `docs/guides/development-guide.md` plugin build/test/debug 流程；
 - dated verification report；
+- 受版本控制的 Tool Window 原型和真实 GoLand 实现候选截图；
 - plugin ZIP SHA-256；
 - 当前需求包和索引状态评估；
 - 文档与代码 traceability。
+
+`goland-plugin` job 只做 branch/PR/dispatch 质量门禁，不修改现有 tag Release 工作流，也不把 plugin ZIP 加入 ReqWS Desktop Release 资产。根 `npm run check` 和 `package:macos` 保持与 Gradle 构建隔离。
 
 ### 12.2 最终命令候选
 
@@ -524,9 +527,7 @@ npm run package:goland
 
 ```bash
 cd integrations/goland
-./gradlew test
-./gradlew verifyPlugin
-./gradlew runPluginVerifier
+./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
 ./gradlew buildPlugin
 ```
 
@@ -540,7 +541,7 @@ cd integrations/goland
 4. 重启 GoLand；
 5. 使用固定 fixture 完成 GL-04 至 GL-14；
 6. 从 packaged 或开发态 Desktop 完成 GL-01 至 GL-03、GL-15；
-7. 记录截图、关键日志、环境和未覆盖边界；
+7. 记录截图、关键日志、环境和未覆盖边界；其中 Tool Window 截图对照归档原型，覆盖浅/深主题、常用窄宽度和关键状态；
 8. 给出 `GO` 或 `NO-GO`。
 
 ### 12.4 Exit criteria
@@ -617,7 +618,7 @@ cd integrations/goland
 审查：
 
 - Desktop resolver 与 launcher 安全；
-- VCS mapping merge/adoption；
+- VCS mapping merge 与 created/borrowed ownership；
 - VFS 并发与错误恢复；
 - add/remove/re-add 端到端；
 - Desktop 回归和 i18n。
@@ -651,7 +652,7 @@ cd integrations/goland
 - restart 冷恢复且不依赖 Desktop；
 - 50+20 规模无事件风暴、持续 CPU 或无限 indexing；
 - Desktop、plugin、docs、package 和 verifier checks 全绿；
-- 当前稳定 GoLand 真实 GUI verdict 为 `GO`；
+- 本机 GoLand 2026.1.3 exact build 的真实 GUI verdict 为 `GO`，且 2026.2 Plugin Verifier 通过；
 - 指南、verification 和 ZIP hash 已提交；
 - feature branch 不含双向通信、managed `go.work`、插件发布或远程开发实现；
 - 无未解释 spike、TODO、生成物或工作树修改。

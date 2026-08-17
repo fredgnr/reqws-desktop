@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { reqwsErrorCodes } from './errors';
 import {
+  isLegacySafePersistedRepositoryUrl,
   isSafeRepositoryUrl,
+  isValidRepositoryName,
   repositoryNameKey,
 } from './repository-utils';
 import {
@@ -13,16 +15,22 @@ const nonEmpty = z.string().trim().min(1);
 const id = nonEmpty.max(200);
 const repositoryName = nonEmpty
   .max(255)
-  .refine((value) => value !== '.' && value !== '..')
-  .refine((value) => !value.includes('/') && !value.includes('\\'));
+  .refine(isValidRepositoryName);
 const repositoryUrl = nonEmpty
   .max(8_192)
   .refine(isSafeRepositoryUrl, {
     message: 'Repository URL must use credential-free HTTPS or SSH.',
   });
+const persistedRepositoryUrl = nonEmpty
+  .max(8_192)
+  .refine((value) => (
+    isSafeRepositoryUrl(value) || isLegacySafePersistedRepositoryUrl(value)
+  ), {
+    message: 'Persisted repository URL is outside the supported migration boundary.',
+  });
 const absolutePath = nonEmpty
   .max(16_384)
-  .refine((value) => value.startsWith('/'), {
+  .refine((value) => value.startsWith('/') && !value.includes('\0'), {
     message: 'Path must be absolute.',
   });
 
@@ -43,6 +51,25 @@ export const globalDirectorySettingSchema = z.enum([
 export const resolvedGlobalSettingsSchema = globalSettingsSchema.extend({
   effectiveLocale: supportedLocaleSchema,
   invalidDirectoryFields: z.array(globalDirectorySettingSchema).optional(),
+});
+
+export const availabilityItemSchema = z.discriminatedUnion('available', [
+  z.strictObject({
+    available: z.literal(true),
+    path: absolutePath,
+  }),
+  z.strictObject({
+    available: z.literal(false),
+    reason: nonEmpty.max(2_048).optional(),
+    reasonCode: z.literal('NOT_FOUND').optional(),
+  }),
+]);
+
+export const systemAvailabilitySchema = z.strictObject({
+  git: availabilityItemSchema,
+  vscode: availabilityItemSchema,
+  cursor: availabilityItemSchema,
+  goland: availabilityItemSchema,
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +142,10 @@ export const repositorySchema = z.object({
   defaultBranch: nonEmpty.max(1_024),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+});
+
+const persistedRepositorySchema = repositorySchema.extend({
+  url: persistedRepositoryUrl,
 });
 
 export const createRepositoryInputSchema = repositorySchema.pick({
@@ -237,7 +268,7 @@ export const workspaceManifestSchema = z.object({
 export const appStateSchema = z.object({
   schemaVersion: z.literal(1),
   settings: z.unknown().optional().transform(normalizePersistedGlobalSettings),
-  repositories: z.array(repositorySchema),
+  repositories: z.array(persistedRepositorySchema),
   workspaces: z.array(workspaceSummarySchema),
 }).superRefine((state, context) => {
   const uniquenessChecks: Array<{

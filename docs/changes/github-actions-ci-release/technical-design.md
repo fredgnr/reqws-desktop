@@ -2,7 +2,7 @@
 title: GitHub Actions CI 与 Release 技术方案
 type: technical-design
 status: active
-updated: 2026-08-13
+updated: 2026-08-17
 ---
 
 # GitHub Actions CI 与 Release 技术方案
@@ -15,15 +15,29 @@ updated: 2026-08-13
 - `npm run package:macos` 会执行 clean install、完整检查、Forge package 和 bundle 校验；CI 已完成前两步时，可通过脚手架的 skip 参数避免重复执行。
 - Forge 当前只配置本机 ad-hoc 签名并关闭 Hardened Runtime。它可以验证 bundle 内部一致性，但不构成 Developer ID、公证或 Gatekeeper 公共分发能力。
 - GitHub-hosted macOS 的 arm64 与 x64 架构使用不同 runner，构建结果不能依赖跨 job 的 `node_modules` 或 `out/`。
+- GoLand plugin 位于独立 Gradle project；根 `npm run check` 和 Electron package 不下载 IDE SDK，也不复用 plugin Gradle cache 或 build output。
 
 ## 工作流划分
 
 | 工作流 | 触发 | Runner | 职责 |
 |---|---|---|---|
-| CI | 所有 branch push、`pull_request`、`workflow_dispatch` | `macos-15` | Node 24 下安装依赖、运行完整检查并执行 arm64 package smoke。 |
+| CI / `checks` | 所有 branch push、`pull_request`、`workflow_dispatch` | `macos-15` | Node 24 下安装依赖、运行 Desktop 完整检查并执行 arm64 package smoke。 |
+| CI / `goland-plugin` | 同上 | `macos-15` | JDK 21 下校验 Gradle wrapper，运行 plugin tests、project/structure checks、261/262 Plugin Verifier 和 ZIP build。 |
 | Release | `v*` tag push | validate 使用 `macos-15`；package 使用 `macos-15` 与 `macos-15-intel` | 验证 tag 来源和版本、重跑检查、构建双架构资产并事务化发布。 |
 
-CI 只授予 `contents: read`。同一 ref 的后续 CI 运行可取消未完成的旧运行，避免陈旧结果占用 runner；pull request 与 branch push 仍分别保留可见检查。
+两个 CI job 都只授予 `contents: read`，且彼此不传递依赖或 artifact。同一 ref 的后续 CI 运行可取消未完成的旧运行，避免陈旧结果占用 runner；pull request 与 branch push 仍分别保留可见检查。
+
+### GoLand plugin job
+
+plugin job 使用固定完整 SHA 的 `actions/setup-java` 配置 Temurin 21，并用固定 SHA 的 `gradle/actions` 完成 wrapper validation 和 Gradle setup。随后在 `integrations/goland/` 执行：
+
+```bash
+./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon
+```
+
+构建基线为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 和 `since-build: 261`。`verifyPlugin` 下载并校验 GoLand 2026.1.3 与 2026.2；configuration/structure check 不能代替该矩阵。120 分钟 timeout 只限制单个 job，不允许 `continue-on-error`。
+
+`buildPlugin` 产物只用于当前 CI job 的构建证明，不上传为长期 artifact。Release workflow 没有 plugin dependency，资产集合、签名限制、draft 事务和失败清理逻辑全部保持不变。
 
 ## Release 校验与构建
 
@@ -50,6 +64,7 @@ Git tag 是版本事实源，Release 标题使用同一 tag。package job 与发
 ## 供应链与并发控制
 
 - `actions/checkout`、`actions/setup-node`、artifact 上传/下载等第三方 Action 全部固定到完整 commit SHA；版本升级应作为可审查的代码变更。
+- CI plugin job 的 `actions/setup-java`、Gradle wrapper validation 和 setup action 同样固定到完整 commit SHA。
 - Release 按 tag 设置并发组且不自动取消正在发布的运行，避免两次运行互相删除 draft。创建前检查既有 Release，使重跑在人工确认前 fail closed。
 - shell 使用严格错误处理，所有路径和 tag 参数都引用。pull request 来源代码会执行项目检查，但对应 job 始终只有读权限；拥有写权限的发布 job 只由 tag 事件触发。
 - npm 缓存只用于下载加速，依赖安装仍以锁文件和 `npm ci` 为准，缓存命中不能跳过校验。

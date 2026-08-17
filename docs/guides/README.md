@@ -4,7 +4,8 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [使用说明](user-guide.md) | active | 说明安装启动、仓库配置、工作区管理、设置、数据保护和故障处理。 |
-| [开发指南](development-guide.md) | active | 说明本地环境、进程边界、开发验证、跨层变更和打包发布流程。 |
+| [使用说明](user-guide.md) | active | 说明 Desktop 安装启动、仓库配置、工作区管理、数据保护和故障处理。 |
+| [GoLand 插件使用指南](goland-plugin-guide.md) | active | 图解本地插件编译安装、Tool Window 区块与按钮、状态、日常同步和安全排障。 |
+| [开发指南](development-guide.md) | active | 说明 Desktop 与 GoLand 插件环境、进程边界、验证、跨层变更和打包发布流程。 |
 
 指南描述当前代码的常青用法。查找需求背景、技术取舍或按次验证结果时，从[文档总索引](../README.md)进入相应需求包。

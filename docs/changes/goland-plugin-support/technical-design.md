@@ -1,8 +1,8 @@
 ---
 title: GoLand 插件支持技术方案
 type: technical-design
-status: draft
-updated: 2026-08-14
+status: active
+updated: 2026-08-17
 ---
 
 # GoLand 插件支持技术方案
@@ -38,10 +38,12 @@ ReqWS GoLand Plugin（IDE adapter）
 2. 复用现有 `.reqws/workspace.json` schema v1，不增加第二份 IDE manifest，也不升级 schema major。
 3. 插件只读 manifest，不 clone、不切分支、不删除目录、不执行仓库命令。
 4. Desktop 打开 workspace root；插件把 manifest 中的活动仓库投影到 GoLand 项目模型。
-5. 项目模型 API 路径必须通过真实 GoLand spike 决策，优先单 module 多 Content Root，不预先锁死未经验证的实现。
+5. 项目模型采用策略 B：保留 GoLand 创建的 workspace-root Content Root，只管理 `.reqws` 与已识别保留 Git repository 的 excludes；策略 A 因无法证明默认 root 的 ReqWS ownership 而未通过破坏性变更安全门禁。
 6. 插件源码与 Desktop 同仓，放在 `integrations/goland/`，使用独立 Gradle 构建。
 7. 本次产物是本地可安装 ZIP；不实现签名、Marketplace、自动更新或发布服务。
 8. 本次不引入 Desktop 与插件的双向通信，不生成或修改 `go.work`。
+
+本文状态为 active，表示上述设计是当前实现依据，不表示功能已完成交付。Desktop 自动化、插件单元/平台测试、261/262 Plugin Verifier、ZIP 哈希和真实 GUI 分属不同证据层；在同一 exact commit 的 Verifier 与 GUI 结果形成前，不给出兼容性或 `GO` 结论。
 
 ## 2. 现有实现基线
 
@@ -93,11 +95,11 @@ reqws-desktop/
 └── docs/changes/goland-plugin-support/
 ```
 
-建议标识：
+已固定标识：
 
 ```text
 Kotlin package: com.reqws.goland
-Plugin ID:      com.reqws.goland
+Plugin ID:      com.reqws.workspace
 Display name:   ReqWS
 Initial version: 0.1.0
 ```
@@ -112,8 +114,9 @@ Initial version: 0.1.0
 | clone / fetch / checkout feature branch | 是 | 否 |
 | manifest 写入 | 唯一 writer | 只读 |
 | `.code-workspace` 写入 | 是 | 忽略 |
-| GoLand 受管项目内容 | 否 | owner |
-| GoLand 受管 VCS mapping | 否 | owner / 可采用现存等价项 |
+| GoLand workspace root | 否 | 保留平台既有条目，不接管 |
+| `.reqws` 与保留 Git repo excludes | 否 | 仅 owner 自己创建的条目 |
+| GoLand 受管 VCS mapping | 否 | owner 自建项；只借用现存等价项 |
 | `.idea` 中插件私有状态 | 否 | owner |
 | 用户自定义 module/root/mapping | 否 | 只保留，不接管 |
 | repository/workspace 删除 | 当前不自动执行 | 绝不执行 |
@@ -164,9 +167,10 @@ Initial version: 0.1.0
 - 不在该数组中的磁盘目录不是当前 IDE workspace 成员；
 - `rootPath` 参与 workspace identity，必须与当前打开 project 的 canonical root 一致；
 - `relativePath` 从 root 解析活动仓库目录；当前 v1 同时要求其等于安全 repository name；
-- `url`、`defaultBranch` 和 `featureBranch` 供 Desktop 使用，插件只展示或校验长度，不据此访问网络或执行命令；
+- `url` 使用与 Desktop `isSafeRepositoryUrl` 相同的安全契约：接受无凭据 HTTPS、`ssh://` 和 SCP-like SSH，并以双方相同的纯文本 host/port/IPv4/IPv6 规则保留国际化域名和既有 inert path 文本；拒绝明文 HTTP、本地或 remote-helper 形式、C0/DEL、前导 option、无效 authority、密码及 credential-like query/fragment；`defaultBranch` 和 `featureBranch` 只校验。插件不据任何字段访问网络、执行命令或写入普通日志；
 - `workspaceFilePath` 供 VS Code/Cursor 使用，插件忽略；
 - `updatedAt` 只用于展示，不能作为唯一同步版本；
+- 所有 Zod `.trim()` 字段在 Kotlin 侧使用显式 ECMAScript `TrimString` code-point 集合；包括 `U+FEFF`，但不把 `U+001C` 等 Java/Kotlin 扩展控制字符当作可裁剪空白；
 - 未知附加字段可忽略；不支持的 major version 必须拒绝。
 
 ### 5.3 内容摘要
@@ -179,10 +183,12 @@ ManifestDigest = SHA-256(fileBytes)
 
 摘要用于：
 
-- 相同内容幂等 no-op；
+- 同一 live coordinator 生命周期内，上次完整 model/VCS apply 成功后对相同内容幂等 no-op；
 - VFS 事件乱序或合并时重新识别最终内容；
-- 项目冷启动恢复；
+- 项目冷启动重新收敛和诊断关联；
 - 错误去重和诊断关联。
+
+持久化的最近摘要只供 UI 和诊断展示，不作为 project reopen 后跳过 apply 的依据。每个新 project service 都从 manifest、当前 Workspace Model 和 ownership state 重新收敛，避免把进程外变化或部分持久化状态误判为 no-op。
 
 不在 schema v1 中增加递增 revision，避免旧 Desktop、回滚内容和跨文件事务引入额外兼容路径。
 
@@ -195,7 +201,9 @@ integrations/goland/src/test/resources/manifests/
 ├── valid-minimal-v1.json
 ├── valid-full-v1.json
 ├── valid-unknown-fields-v1.json
+├── valid-ecma-trim-v1.json
 ├── invalid-duplicate-name.json
+├── invalid-non-ecma-trim-control-v1.json
 ├── invalid-relative-path.json
 └── unsupported-v2.json
 ```
@@ -206,6 +214,16 @@ TypeScript tests 与 Kotlin tests 必须读取等价 fixture，并验证：
 - 插件接受的 valid v1 同时被 Zod schema 接受；
 - duplicate、unsafe path 和 unsupported version 的判定一致；
 - URL 永远不触发网络或命令行为。
+
+URL 安全契约另使用双方直接读取的版本化 corpus：
+
+```text
+integrations/goland/src/test/resources/contracts/repository-url-safety.json
+```
+
+语料覆盖 raw 与 percent-encoded UTF-8 IDN、visible Unicode、zero-width host 字符、HTTPS/SSH/SCP-like、IPv4/IPv6、userinfo、编码 credential key、非法端口，以及畸形 percent、反斜杠和普通 path 原始字符的既有兼容语义。两端不调用各自不等价的 WHATWG/Java URI/IDNA parser 决定这份 manifest 安全契约；新增接受或拒绝规则必须先在该 corpus 中表达，再由 TypeScript 与 Kotlin 同时验证。
+
+为避免校验收紧把整个旧 `state.v1` 判为损坏，`appStateSchema` 另有只读兼容边界：仅 persisted catalog 可按 GoLand 功能加入前的原始 Desktop URL policy 继续解析。新建/编辑仓库、连接测试和 workspace manifest 一律仍走当前共享严格 policy；legacy-only URL 因此可以列出、删除或改正，但在改正前不能进入新 manifest。这条 migration path 不进入 Kotlin，也不扩大插件接受集。
 
 不引入跨 TypeScript/Kotlin 的代码生成步骤；共享的是 JSON 规范和行为证据。
 
@@ -249,45 +267,47 @@ export interface ReqwsAPI {
 
 `workspaceId` 继续由 Main 使用 `idSchema` 重新验证；Main 必须重新读取 workspace detail 并确认状态为 `ready`，不能信任 renderer 提供路径。
 
-### 6.2 GoLand 安装探测 spike
+availability response 使用判别联合：`available:true` 必须携带 absolute canonical candidate path，且不能同时携带 `NOT_FOUND`；`available:false` 不得携带 path。renderer 在首次响应尚未返回时只禁用操作，不把 unknown 状态宣告为“未安装”。
 
-安装布局存在不确定性，因此先建立 resolver spike，再固化生产规则。候选来源：
+### 6.2 GoLand 安装探测
+
+生产 resolver 只读取三个边界明确的候选来源：
 
 1. `/Applications/GoLand.app`；
 2. `~/Applications/GoLand.app`；
-3. JetBrains Toolbox 生成的用户级 app、symlink 或 command-line launcher；
-4. 必要时通过固定 `/usr/bin/mdfind` 参数查询 GoLand bundle identifier，再校验结果。
+3. 最多 1 MiB、最多 1024 条记录的 `~/Library/Application Support/JetBrains/Toolbox/state.json` 中声明的 GoLand 安装项。
 
 安全规则：
 
-- 不递归扫描整个 home；
-- 不把 PATH 中任意 `goland` 当作唯一可信来源；
-- 候选必须 canonicalize 到存在的 `.app` bundle 或经过验证的官方 launcher；
-- 校验 bundle 结构、可执行文件和 bundle identifier；
-- 多个版本时使用确定性排序，默认稳定版优先，并在诊断中记录选择结果；
-- 任何外部命令使用固定路径、参数数组和 `shell: false`。
+- 不递归扫描 home、不调用 Spotlight，也不信任 PATH 中任意 `goland`；
+- Toolbox 的 launcher 必须是绝对路径，并只能反解到 `.app/Contents/MacOS/<executable>` 结构；
+- Toolbox 来源在执行任何 `plutil` 前按 source/app/launcher 去重，最多接受 64 个唯一 GoLand 候选；全部候选使用固定 4-worker 验证，避免损坏 state 触发无界子进程或文件描述符；
+- 候选 app 先 canonicalize，再校验 bundle、`CFBundleIdentifier == com.jetbrains.goland`、声明的 `CFBundleExecutable`、实际普通 executable 和执行权限；
+- 多个候选按稳定版优先、版本降序、来源优先级和 canonical path 做确定性排序；
+- Toolbox state 缺失、过大、损坏或条目无效时只忽略该来源，不执行未验证路径。
 
-W0/W4 必须真实验证标准安装和 Toolbox 安装。若 Toolbox 布局无法形成稳定只读发现规则，则支持标准 app 和用户 Applications symlink，并把 Toolbox 的必要手工配置写入指南；不得用不受控全盘扫描换取“自动发现”。
+标准路径和实际 Toolbox layout 仍需进入 exact-head GUI 证据；发现规则不会为提高命中率扩大为全盘扫描。
 
 ### 6.3 启动策略
 
 启动目标始终是 `manifest.rootPath`，不是 `.code-workspace`。
 
-候选顺序由 spike 确认：
+生产启动命令固定为：
 
-1. app bundle 内官方 launcher，若对当前 GoLand build 稳定；
-2. `/usr/bin/open -a GoLand <rootPath>`；
-3. `/usr/bin/open -a <absolute-app-path> <rootPath>` 或等价的绝对 bundle 打开方式。
+```text
+/usr/bin/open -a <canonical-GoLand.app> <validated-workspace-root>
+```
 
 所有路径：
 
-- root 来自 Main 重新读取并校验的 workspace manifest；
-- root 必须是绝对 canonical path，且实际存在；
+- Main 先按 workspace ID 重新加载 workspace detail 并要求状态为 `ready`，不信任 Renderer 提供路径；
+- root 来自重新读取的 manifest，必须是绝对普通目录，固定 manifest 必须是普通文件；除 macOS 系统维护的第一层别名（例如 `/tmp → /private/tmp`、`/var → /private/var`）外，root 和 manifest 的更深层 symlink/alias 均拒绝；
+- app 使用 canonical path，`open` 的 root 参数保留已经验证过的原始安全拼写，使其与 Desktop `PathService` 的 workspace identity 一致；
 - command 和 args 分离；
 - `shell: false`、`stdio: ignore`；
 - 处理同步 spawn exception、child `error` 和非零 exit；
 - 不把 manifest 字段拼接到 shell command；
-- 不静默把已选择 launcher 的失败伪装成成功。
+- 不静默把已选择 app 的失败伪装成成功，也不回退到 PATH executable。
 
 GoLand 在已有项目窗口时如何打开新项目由用户的 IDE 设置决定。Desktop 不使用私有或未记录参数强行覆盖“New window / Current window / Ask”。
 
@@ -298,6 +318,7 @@ GoLand 在已有项目窗口时如何打开新项目由用户的 IDE 设置决�
 - unavailable：禁用，并显示本地化原因；
 - workspace 非 `ready`：沿用现有禁用逻辑；
 - launching：阻止重复点击；
+- availability 尚未返回：保持禁用但不显示“未找到编辑器”；
 - failure：进入现有错误面板，保留稳定错误码和 detail；
 - Desktop 不显示未经握手验证的“插件已安装”状态。
 
@@ -340,7 +361,7 @@ ProjectModelAdapter
   └─ write transaction
 
 VcsMappingAdapter
-  ├─ adopt equivalent mapping
+  ├─ borrow equivalent user mapping
   ├─ add missing active roots
   └─ remove ReqWS-owned inactive roots
 
@@ -354,14 +375,14 @@ ReqwsToolWindowFactory
 
 ### 7.2 项目生命周期
 
-1. project opened 后运行轻量 detector；
-2. 固定 manifest 不存在：插件项目服务保持 inactive，Tool Window 隐藏或显示不可用；
+1. 每个有 file-based root 的 project opened 后启动轻量项目服务，并在后台 canonicalize root；
+2. watcher 在第一次读取前安装，因此固定 manifest 尚不存在时也能接收后续 create；项目状态保持 inactive，Tool Window 不显示；
 3. manifest 存在：后台读取、digest 和校验；
 4. Safe Mode：保存只读 snapshot，但不执行 model/VCS apply；
 5. trusted：提交首次同步；
 6. project-level VFS listener 只关注 manifest exact path 及直接父目录；
 7. project close/dispose：取消 debounce、IO 和 pending sync；
-8. reopen：不依赖旧进程内状态，从 manifest 和插件 ownership state 冷恢复。
+8. reopen：不使用持久摘要作 skip，从 manifest、当前模型和插件 ownership state 强制重新收敛。
 
 ### 7.3 状态机
 
@@ -383,9 +404,11 @@ DISPOSED
 - invalid manifest、root mismatch 和 path escape 进入 `ERROR`，保留上次有效模型；
 - 单个活动仓库 missing 可同步其他有效仓库，整体为 `DEGRADED`；
 - project model 成功但 VCS mapping 失败为 `DEGRADED`，允许重试；
-- model 和 VCS 均成功后才更新 `lastAppliedDigest`；
-- 相同 digest 在 `SYNCHRONIZED` 状态为 no-op；
+- model 和 VCS 均成功后才更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；
+- 相同 digest 只在同一个 coordinator 生命周期且内存 baseline 仍为 clean 时 no-op；
+- 开始应用不同 digest 时先使内存 no-op baseline 失效；若后层失败，回退到先前 digest 也必须重放，不能把部分提交状态误判为 no-op；
 - 文件恢复后自动重新进入 `READING`。
+- service state 通过锁内排队、锁外串行通知的 terminal publisher 发布；`DISPOSED` 一旦进入队列即成为永久终态，随后到达的 read/apply 回调不能覆盖终态或产生晚到的非终态通知；listener 注册与 dispose 使用同一线性化边界。
 
 ### 7.4 线程与事务
 
@@ -394,6 +417,8 @@ DISPOSED
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
 - VCS mapping 合并在平台允许的项目级更新路径执行；
+- trust 与 dispose 不只在 orchestration 起点检查：Workspace Model transaction 的写入/提交边界，以及 VCS ownership pre-revoke、mapping set、最终 ownership record 和 refresh 前都重新 gate；事务内翻转通过异常回滚；
+- Workspace Model 与 persistent ownership 不是同一事务；若 model 在仍 trusted 时刚提交、随后 gate 才观察到 untrusted/disposed，本轮不 mint 删除权、不推进 digest，下一次 trusted sync 只保守借用该 orphaned exclude；
 - Tool Window view model 转 Swing component 在 EDT 更新；
 - 同一项目最多一个 apply；pending 只保存最新 candidate。
 
@@ -410,101 +435,94 @@ onManifestEvent {
 syncCoordinator {
   while (hasPendingCandidate()) {
     val latest = takeLatestCandidate()
-    if (latest.digest == state.lastAppliedDigest) continue
+    if (latest.digest == inMemoryCleanAppliedDigest) continue
+    inMemoryCleanAppliedDigest = null
     val plan = planner.plan(currentModel(), state.ownership, latest)
     applyProjectModel(plan)
     applyVcsMappings(plan)
+    inMemoryCleanAppliedDigest = latest.digest
     state.markApplied(latest)
   }
 }
 ```
 
+新 service 的 `inMemoryCleanAppliedDigest` 从 `null` 开始；持久化摘要不注入它。任一不同 digest 的 apply 可能已提交前一层，因此进入 apply 前先清空 baseline，只有两层完全成功才恢复。
+
 生产实现必须使用当前 JetBrains 推荐的 coroutine/lifecycle API；伪代码不授权阻塞 EDT 或使用全局 unmanaged executor。
 
-## 8. 项目模型策略与实验门禁
+## 8. 项目模型策略与实验结论
 
-Workspace Model 自 IntelliJ Platform 2024.2 起可供第三方插件使用，并应优先于旧 Project Model API。本次仍需用真实 GoLand 验证 Go plugin 对多 Content Root、多 `go.mod` 和动态变更的行为。
+Workspace Model 使用 261 的公开 `WorkspaceModel.update`、entity DSL 和 `VirtualFileUrlManager`。生产代码不使用 obsolete `updateProjectModel`，也不使用 `@Internal`、`@Experimental`、反射或私有 API。
 
-### 8.1 策略 A：单 module、多活动 Content Root
+### 8.1 策略 A 未通过所有权门禁
 
-首选方案：
+策略 A 原计划移除 GoLand 打开目录时生成的 workspace-root Content Root，再为活动仓库增加多个 Content Root。API spike 证明这些实体可以通过公开 Workspace Model API 更新，且 module 的 SDK/dependency 可以保留；但默认 workspace root 不是 ReqWS 创建的条目，也没有可验证的 ReqWS ownership。
 
-- 使用打开 root 时已有的 workspace module；
-- 将每个活动仓库目录作为该 module 的 Content Root；
-- workspace root 本身不作为代码 Content Root；
-- `.reqws`、普通 notes 和保留仓库自然不进入项目内容；
-- 其他非 ReqWS module 不删除。
+因此 ReqWS 无法在满足“所有权不确定时不做破坏性移除”的同时删除该 root。按 A → B 门禁，策略 A 在用户配置保护和 restart ownership 条件上失败，不进入 production，也不通过名称或路径启发式接管默认 root。
 
-必须验证：
+### 8.2 选定策略 B：workspace root + owned excludes
 
-- 多个独立 `go.mod` 的 completion、navigation、test、run/debug；
-- Project View 只呈现活动仓库；
-- add/remove/re-add 后索引与 Git 正确；
-- restart serialization 稳定；
-- 不依赖 internal API。
+唯一 production path 保留既有 workspace-root Content Root，并只调整它的 excludes：
 
-### 8.2 策略 B：workspace root + 受管 excludes
+- 固定排除 `.reqws`；
+- 扫描 workspace root 的直接子目录，只把不在活动集合且包含普通 `.git` 目录的子目录识别为保留 repository 并排除；
+- 普通 notes、未知目录和嵌套路径不排除；
+- 活动 repository 不得仍被任何不可移除 exclude 覆盖，否则报 `OWNERSHIP_CONFLICT`；
+- nested Content Root 冲突检查使用 URL collection 而不是由不可信相对名拼成的 map key，避免合法目录名与 synthetic ownership label 碰撞后漏检；
+- 不新增、不删除 module，不修改 SDK、library、source root 或其他 Content Root。
 
-仅当策略 A 有可复现失败证据时尝试：
+Workspace Model 不持久化单个 exclude 的自定义 entity-source tag，因此 production 不把 runtime `EntitySource` 当作 restart ownership 证据。每个由插件创建的 target exclude 都在同一 Workspace Model transaction 中配一个 companion marker exclude：
 
-- workspace root 保持 Content Root；
-- 对 `.reqws` 和识别出的非活动独立 Git repository 增加插件拥有的 exclude；
-- 重新添加时移除对应 owned exclude；
-- 不排除普通未知目录。
+```text
+<workspace-root>/.reqws/.goland-ownership/<32-lowercase-hex-random-token>
+```
 
-该策略的缺点是 root 范围更大、用户显示 excluded files 时仍可看到保留仓库，并增加 exclude ownership 复杂度。
+marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Content Root 的 entity source，从而由标准 `.iml` exclude 序列化保存；插件不在磁盘创建 marker directory 或文件。persistent state v2 保存 target module、workspace-relative target 和 128-bit random marker token。删除权必须同时由有效 state claim、唯一 target entity 和唯一 marker entity 三者证明，target 与 marker 在同一事务中增删。marker namespace 真实存在、为 symlink，或 state/target/marker 缺失、重复、冲突、版本旧时均 fail closed。用户已有的等价 exclude 只借用，不取得删除权。
 
-### 8.3 策略 C：每活动仓库一个 module
+该策略会保留 workspace root 的一般内容范围；被排除的保留 repository 在用户显式显示 excluded files 时仍可能可见。其真实 Project/Search/Go 行为仍必须由 GUI smoke 证明，不能仅由 API spike 推断。
 
-只有 A、B 均无法满足 Go 分析、隔离和公开 API 要求时评估。它会增加 module naming、SDK、serialization、remove 和用户配置保护成本，不作为默认路径。
+### 8.3 策略 C 不执行
 
-### 8.4 选择门禁
+策略 B 已满足当前公开 API 和所有权设计门禁，因此不继续评估“每活动仓库一个 module”。仓库不保留策略 A/C 的 runtime fallback 或隐藏切换项；若后续 exact-head GUI 证明 B 无法满足验收，应回到本需求重新评审，而不是自动采用未验证策略。
 
-W2 必须按 A → B → C 顺序使用同一 fixture。选择第一个同时通过以下条件的策略：
+### 8.4 仍待完成的选择证据
 
-1. 活动和保留仓库的默认可见性、索引和搜索范围正确；
-2. Git Root 与 manifest 一致；
-3. Go completion、navigation、test 和 debug 可用；
-4. add/remove/re-add 和 restart 幂等；
-5. Plugin Verifier 无禁止 API；
-6. 用户无关 module/root/mapping 不被删除；
-7. ownership 可持久化并在重启后安全恢复；
-8. 没有持续 indexing loop 或明显 EDT freeze。
-
-选择结果写入 dated verification report。未选 spike 代码必须删除；只有报告证明单一 production path 无法覆盖支持矩阵时，才保留最小 runtime fallback。
+当前结论是 production 设计决策，不等同于最终验收。GoLand 2026.1.3/2026.2 Plugin Verifier、add/remove/re-add、restart、Go completion/navigation/test/debug、Project/Search 隔离及规模行为必须在同一 exact-head 验证中记录；未取得这些证据前不创建 `GO` 报告。
 
 ## 9. 受管条目所有权
 
 插件不得把当前全部项目 roots 或 VCS mappings 替换为 manifest 集合。
 
-建议 persistent state：
+项目私有 persistent state 分为模型、VCS 和同步摘要三部分，示意：
 
 ```xml
-<component name="ReqwsProjectState">
-  <option name="stateVersion" value="1" />
-  <option name="strategy" value="content-roots" />
+<component name="ReqwsManagedProjectModel">
+  <option name="stateVersion" value="2" />
+  <option name="strategy" value="workspace-root-excludes" />
+  <option name="targetModuleName" value="..." />
+  <option name="managedExcludes">
+    ... workspace-relative target + random marker token claims ...
+  </option>
+</component>
+<component name="ReqwsVcsOwnershipState">
+  ... CREATED / BORROWED workspace-relative mappings ...
+</component>
+<component name="ReqwsSynchronization">
   <option name="lastAppliedDigest" value="..." />
-  <option name="managedModuleName" value="..." />
-  <option name="managedContentRoots">
-    ... workspace-relative paths ...
-  </option>
-  <option name="managedVcsRoots">
-    ... workspace-relative paths ...
-  </option>
 </component>
 ```
 
 规则：
 
 - 路径以 workspace-relative 形式保存，读取时重新 containment 校验；
-- 不保存 repository URL、token、remote 或 Git credential；
+- 不保存 repository URL、remote 或 Git credential；marker token 是本地随机 ownership nonce，不来自 manifest，也不是访问凭据；
 - planner 计算 `add / keep / remove-owned / conflict`；
 - 只删除上次由插件记录并且当前不再需要的条目；
-- 与现存等价 mapping/root 可采用，但必须记录 adopted ownership 的边界；
-- 用户手工修改使所有权不确定时，不做破坏性移除，状态转为 `DEGRADED` 并提示重新同步或重置受管配置；
+- 现存等价 exclude 或 VCS mapping 只标记为 borrowed，不变成可删除的 ReqWS-owned 条目；
+- 用户手工修改使所有权不确定时，不做破坏性移除，状态转为 `DEGRADED` 并显示稳定诊断；
 - 不删除其他 module、SDK、library、source root、exclude 或 VCS mapping。
 
-如果公开 Workspace Model `EntitySource` 能稳定表达插件所有权，可减少 XML 列表，但必须经 W2 验证；不得依赖 internal entity source。
+模型删除使用 state claim + target entity + companion marker entity 三份可重建证据；任一证据不唯一或不能验证 filesystem identity 都不删除。状态只保存相对路径、marker nonce 和枚举，不保存 repository URL 或完整 manifest。
 
 ## 10. VCS Mapping
 
@@ -512,27 +530,31 @@ W2 必须按 A → B → C 顺序使用同一 fixture。选择第一个同时通
 
 算法：
 
-1. 从 validated manifest 得到 canonical active repo paths；
-2. 读取当前 `ProjectLevelVcsManager` mappings；
+1. 从 validated manifest 得到目标 active repo paths，并在 apply 前按实时文件系统重新判定 present/missing/普通 `.git`；
+2. 读取当前 `ProjectLevelVcsManager` mappings；若规划期间变化则以完整 mapping equality（包括 `rootSettings`）有界重读并重新规划，始终不稳定时在写入前失败；
 3. 保留所有非 ReqWS-owned mappings；
-4. 对已有等价 Git mapping 执行 adopt，不制造重复；
+4. 对已有等价 Git mapping 标记为 `BORROWED`，不制造重复，也不取得删除权；
 5. 对缺失 active path 添加 `Git` mapping；
-6. 对已不活动且明确 owned 的 mapping 移除；
-7. 一次提交合并后的 mapping 集合；
+6. 对已不活动且明确 owned 的 mapping，先持久化撤销对应删除权，再移除 mapping；失败宁可遗留无 ownership 的 mapping，不能遗留可误删的陈旧权利；
+7. 一次提交合并后的 mapping 集合；新增 mapping 只在提交成功后记录 `CREATED`；
 8. 通过公开 API刷新 Git repository manager；
 9. 验证 Git Tool Window 最终 root 集合。
 
 VCS mapping failure 不得回滚或删除用户 mapping。项目内容已经成功时，状态显示 `DEGRADED`，同一 digest 可通过自动或手动同步重试 VCS apply。
 
+插件自己添加的 mapping 记录为 `CREATED`，只有当前 mapping 仍是唯一、精确、为 Git 且 `rootSettings` 仍为空时才可在 repository 退出活动集合后删除；用户添加或修改 `rootSettings` 即撤销插件的破坏性删除资格。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
+
+261 的公开项目级 mapping API 没有 compare-and-set；最后一次稳定读取与整表 `setDirectoryMappings` 之间仍存在外部并发窗口。实现通过有界双读、完整 equality、失败时不写和后续同步重新收敛降低风险，但 exact-head GUI 仍必须验证用户同时修改 mapping 的行为。
+
 ## 11. VFS 监听与收敛
 
 Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target delete、move、rename、replace 和 content change 的组合。
 
-监听器必须：
+项目服务在所有 file-based project 上安装这个固定路径 watcher；manifest 不存在时只保持 inactive，不运行模型/VCS 同步，也不显示 Tool Window。监听器必须：
 
-- 只关注 canonical manifest path 及直接父目录；
+- 在后台把 project root canonicalize 后，只关注 canonical manifest path 及直接父目录；
 - 支持 target create、delete、move、rename、replace 和 content change；
-- 对事件做 250–500 ms 防抖，最终值由 W3 实测确定；
+- 使用固定 350 ms 防抖；listener callback 只做事件翻译和路径过滤，不读取文件；
 - 防抖后重新读取目标文件，不消费事件携带的中间内容；
 - 文件暂时不存在时有限重试；
 - 不因单个 delete 事件立即移除全部 roots；
@@ -552,22 +574,25 @@ W3 必须用与 Desktop `writeJsonAtomically` 等价的脚本模拟连续替换�
 - UTF-8 JSON object；
 - `schemaVersion == 1`；
 - ID、name、branch 非空并有长度上限；
-- `rootPath` 和 `workspaceFilePath` 是绝对路径；
+- `rootPath` 和 `workspaceFilePath` 是不含 NUL 的绝对路径；repository name/`relativePath` 同样拒绝 NUL；
 - canonical `rootPath` 等于当前 project root；
 - repository ID 和 name 在 macOS identity 规则下唯一；
 - `relativePath` 非绝对、非空、无 `..`，v1 要求等于 safe name；
 - resolve 后位于 canonical root 内；
 - 已存在 repository path 不得通过 symlink 指向 root 外；
+- project model 以 canonical filesystem identity 区分 active/retained repository，不依赖 manifest 与磁盘目录的大小写或 Unicode 拼写完全一致；
 - missing active repository 不创建目录，只标记 missing；
-- URL 只限制类型和长度，不打印、不访问。
+- URL 除类型和 8,192 字符上限外，还执行与 TypeScript `isSafeRepositoryUrl` 对等的协议、authority、credential 和 remote-helper 拒绝规则；校验过程不解析 remote 内容、不访问网络、不打印 URL。
 
-稳定错误码建议：
+当前稳定错误码：
 
 ```text
 MANIFEST_NOT_FOUND
+MANIFEST_NOT_REGULAR_FILE
 MANIFEST_TOO_LARGE
 MANIFEST_INVALID_ENCODING
 MANIFEST_INVALID_JSON
+MANIFEST_SCHEMA_INVALID
 UNSUPPORTED_MANIFEST_VERSION
 WORKSPACE_ROOT_MISMATCH
 REPOSITORY_DUPLICATE
@@ -585,6 +610,8 @@ SAFE_MODE_BLOCKED
 ## 13. Tool Window 与 UX
 
 Tool Window 名称：`ReqWS`。
+
+[Tool Window 视觉设计与实现对照](ui/tool-window-visual-design.md)是本节的视觉实施依据；原型只定义信息层级和交互优先级，不授权引入非原生主题、自绘 Web 控件或新的业务动作。
 
 最小内容：
 
@@ -605,6 +632,7 @@ Last applied: a1b2c3d4e5f6
 规则：
 
 - 非 ReqWS project 隐藏或保持不可用；
+- factory 以固定 manifest entry 决定初始 `shouldBeAvailable`；所有 file-based project 的轻量 startup controller 监听 service state，并在 EDT 动态切换 availability，因此普通项目不会先闪现 stripe，而 absent → create 可在内容尚未实例化时激活 Tool Window；
 - Safe Mode 显示“信任项目后同步”，不自行修改 trust；
 - invalid manifest 显示稳定错误码、文件位置和保留上次有效状态的说明；
 - `Open Manifest` 只打开固定路径的 manifest；
@@ -612,6 +640,12 @@ Last applied: a1b2c3d4e5f6
 - 不提供 add/remove、branch、Git 或 Desktop 控制按钮；
 - 首次错误可显示 balloon，同一 digest 的重复错误只更新 Tool Window；
 - 插件文案使用 JetBrains resource bundle，不在 Kotlin UI 中散落硬编码字符串。
+- 面板按状态徽标、workspace 摘要、紧凑 repository rows、诊断摘要和操作区分层；repository rows 顶部对齐且高度固定，不随 viewport 拉伸；只有 repository 区域滚动。
+- 状态徽标保持内容宽度并靠右，不拉伸成整行边框；workspace 摘要使用独立卡片边界，并显示活动仓库数量。
+- repository 区域使用独立卡片：标题与 count 分列，列表高度按可见行数计算，行间有主题感知分隔线；1–6 行不显示滚动条，7 行起固定显示六行并只在卡片内部滚动，少量仓库时卡片不吞满整个 Tool Window 高度。
+- `Sync Now` 使用全宽主操作视觉，`Open Manifest File` 与 `Copy Diagnostics` 居中作为次级动作；业务行为、enable 规则和可访问名称保持不变。
+- 状态色使用稳定的 JetBrains 主题颜色并始终伴随文字；浅色/深色主题、键盘焦点、窄 Tool Window、长 workspace/branch/repository name 和 tooltip 都进入 GUI 验收。
+- manifest 文本继续设置 `html.disable=true`，避免 Swing 把不可信值解释为 HTML；颜色、图标和截断不得削弱现有错误码、Safe Mode 提示或动作 enable 规则。
 
 ## 14. Trusted Project / Safe Mode
 
@@ -628,7 +662,7 @@ Safe Mode 下禁止：
 - 自动执行 repository 内任何代码或构建工具；
 - 以插件代码把项目直接标记为 trusted。
 
-插件订阅 trust state 变化；用户通过 JetBrains 原生流程信任项目后，仅触发一次串行同步。
+261 的 trust listener 带 `@Experimental`，生产实现不订阅它。插件只使用稳定的 `TrustedProjects.isProjectTrusted(project)`：有效 ReqWS project 在 `SAFE_MODE_BLOCKED` 期间以 1 秒间隔低频检查，观察到用户通过 JetBrains 原生流程完成信任后停止检查，并只向同一串行 coordinator 提交一次同步。项目 trusted、inactive 或 dispose 后没有常驻轮询；插件不会自行修改 trust。
 
 ## 15. Go module 与 `go.work`
 
@@ -656,18 +690,20 @@ Safe Mode 下禁止：
 
 ### 16.2 Java 与 build baseline
 
-JetBrains 平台规则要求：
+W0 已锁定以下 production baseline：
 
-- 2024.2+ 使用 IntelliJ Platform Gradle Plugin 2.x；
-- target 2024.2–2026.1 使用 Java 21；
-- target 2026.2+ 使用 Java 25。
+| 项目 | 固定值 |
+|---|---|
+| IntelliJ Platform Gradle Plugin | 2.18.1 |
+| Gradle wrapper | 9.3.0 |
+| Kotlin | 2.3.20 |
+| target product | GoLand 2026.1.3 |
+| build JDK / Java release / Kotlin JVM target | 21 |
+| plugin `since-build` | 261 |
+| plugin `until-build` | 不设置 |
+| Plugin Verifier IDEs | GoLand 2026.1.3、GoLand 2026.2 |
 
-W0 比较两个候选：
-
-- **首选**：以 GoLand 2026.1 API / Java 21 编译，Plugin Verifier 对 2026.1 和 2026.2 验证，真实 GUI 使用本机当前稳定 GoLand；
-- **fallback**：若所需公开 API 只有 2026.2 可用，则以 262 / Java 25 构建，将 `since-build` 收窄到 262，并记录原因。
-
-`until-build` 初期不设置；通过 Plugin Verifier 和明确的测试矩阵控制兼容性。Gradle、Kotlin、JVM target、target IDE 和 plugin dependencies 在 W0 通过后锁定。
+本机 GoLand 2026.1.3（build `GO-261.25134.147`）及 bundled JBR 用于开发和 GUI 候选环境；Gradle 通过 `jvmToolchain(21)` 固定编译工具链，并把 Java release 与 Kotlin JVM target 固定为 21。Kotlin 使用 `JvmDefaultMode.NO_COMPATIBILITY`，避免为 IntelliJ 接口生成插件未调用的兼容 override；这些 synthetic stubs 会让 Plugin Verifier 把平台默认方法的 deprecated/experimental 标记误归因到插件。若 262 verifier 暴露二进制不兼容，必须修复或重新评审 build range，不能把 261 本机加载当成 262 兼容证据。
 
 ### 16.3 Gradle 任务
 
@@ -675,12 +711,12 @@ W0 比较两个候选：
 
 ```bash
 cd integrations/goland
-./gradlew test
-./gradlew verifyPlugin
-./gradlew runPluginVerifier
+./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
 ./gradlew buildPlugin
 ./gradlew runIde
 ```
+
+在 IntelliJ Platform Gradle Plugin 2.18.1 中，`verifyPlugin` 执行配置的 Plugin Verifier 矩阵；本项目不另设第二个 verifier 任务。`verifyPluginProjectConfiguration` 和 `verifyPluginStructure` 分别检查项目配置和 ZIP/descriptor 结构。
 
 根项目可增加窄化脚本：
 
@@ -692,7 +728,8 @@ npm run package:goland
 CI 建议：
 
 - 现有 Desktop job 保持 `npm run check` 和 macOS package smoke；
-- 新增独立 `goland-plugin` job，执行 tests、verifyPlugin、Plugin Verifier 和 buildPlugin；
+- 新增独立 `goland-plugin` job，在 macOS + JDK 21 下执行 `test`、两项项目/结构检查、`verifyPlugin` 和 `buildPlugin`；
+- 根 `npm run check` 与 `package:macos` 不隐式启动 Gradle；根级 `check:goland`、`package:goland` 是显式入口；
 - GUI smoke 由本地 macOS + 真实 GoLand 执行，不伪装成 headless unit test；
 - 任何 verifier incompatibility 必须修复或明确缩小支持范围，不使用 `continue-on-error` 掩盖。
 
@@ -704,15 +741,16 @@ CI 建议：
 integrations/goland/build/distributions/reqws-goland-0.1.0.zip
 ```
 
-ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → Plugins → Install Plugin from Disk 安装。仓库本次不建立签名、Marketplace、custom repository 或 updater 配置。
+ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → Plugins → Install Plugin from Disk 安装。插件不签名；仓库本次不建立 Marketplace、custom repository、updater 或 Release asset 配置。
 
 ## 17. 测试设计
 
 ### 17.1 Desktop
 
 - standard/user/Toolbox resolver；
+- 同路径的无效 Toolbox launcher 不得污染已验证的 standard/user candidate；
 - bundle/launcher canonical validation；
-- `/usr/bin/open` fallback 参数；
+- 固定 `/usr/bin/open -a <canonical-app> <validated-root>` 参数，并覆盖 macOS 第一层系统别名与更深层 symlink 拒绝；
 - spawn exception、child error、non-zero exit；
 - `SystemAvailability.goland`；
 - typed IPC、preload contract、renderer button 和 i18n；
@@ -723,8 +761,9 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 ### 17.2 插件纯逻辑
 
 - parser、digest、size、duplicate、unknown field；
+- TypeScript/Kotlin 共同消费 versioned URL safety corpus；
 - root identity、relative path、Unicode、symlink escape；
-- planner、ownership、adoption 和 conflict；
+- planner、ownership、created/borrowed 和 conflict；
 - debounce、single-flight、latest-wins 和 dispose；
 - diagnostics redaction。
 
@@ -732,10 +771,12 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 
 - selected Content Root/Workspace Model strategy；
 - add/remove/re-add；
-- restart serialization；
-- VCS mapping merge/adopt/remove-owned；
+- target/companion marker 成对增删、state reload 和独立 JPS exclude 序列化契约；真实 IDE close/reopen 仍由 GUI 覆盖；
+- marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
+- VCS mapping merge/borrow/remove-created；
 - user module/root/mapping preservation；
 - Safe Mode gate；
+- trust/dispose 在 model transaction 和每个 VCS/ownership commit boundary 翻转时 fail closed；
 - malformed manifest no mutation；
 - model/VCS failure recovery。
 
@@ -868,6 +909,8 @@ Remote Development frontend/backend split
 - [GoLand opening projects](https://www.jetbrains.com/help/go/open-close-and-move-projects.html)
 - [GoLand content roots](https://www.jetbrains.com/help/go/content-root.html)
 - [GoLand Go workspaces](https://www.jetbrains.com/help/go/go-workspaces.html)
+- [IntelliJ Platform Gradle Plugin 2.x](https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html)
+- [GoLand plugin project setup](https://plugins.jetbrains.com/docs/intellij/goland.html)
 - [IntelliJ Platform Workspace Model](https://plugins.jetbrains.com/docs/intellij/workspace-model.html)
 - [Workspace Model usage examples](https://plugins.jetbrains.com/docs/intellij/workspace-model-usages.html)
 - [Plugin compatibility](https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html)

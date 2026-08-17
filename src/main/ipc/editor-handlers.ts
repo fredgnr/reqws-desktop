@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 import { IPC_CHANNELS } from '../../shared/ipc-channels';
-import { idSchema } from '../../shared/schemas';
+import {
+  idSchema,
+  systemAvailabilitySchema,
+} from '../../shared/schemas';
 import type { SystemAvailability } from '../../shared/types';
 import type { EditorLauncher } from '../services/editor-launcher';
 import type { IpcHandlerMap } from './repository-handlers';
@@ -14,6 +17,7 @@ export interface EditorHandlerDependencies {
     | 'openVSCode'
     | 'openCursor'
     | 'openCursorRoot'
+    | 'openGoLand'
     | 'revealInFinder'
   >;
 }
@@ -35,9 +39,11 @@ export function createEditorHandlers(
 
   return {
     [IPC_CHANNELS.editors.availability]: (_event, ...args) =>
-      toIpcResult<SystemAvailability>(() => {
+      toIpcResult<SystemAvailability>(async () => {
         noArgumentsSchema.parse(args);
-        return dependencies.editorLauncher.getAvailability();
+        return systemAvailabilitySchema.parse(
+          await dependencies.editorLauncher.getAvailability(),
+        );
       }),
     [IPC_CHANNELS.editors.openVSCode]: (_event, ...args) =>
       invokeWithId(
@@ -60,6 +66,13 @@ export function createEditorHandlers(
         ),
         args,
       ),
+    [IPC_CHANNELS.editors.openGoLand]: (_event, ...args) =>
+      invokeWithId(
+        dependencies.editorLauncher.openGoLand.bind(
+          dependencies.editorLauncher,
+        ),
+        args,
+      ),
     [IPC_CHANNELS.editors.revealInFinder]: (_event, ...args) =>
       invokeWithId(
         dependencies.editorLauncher.revealInFinder.bind(
@@ -69,4 +82,3 @@ export function createEditorHandlers(
       ),
   };
 }
-

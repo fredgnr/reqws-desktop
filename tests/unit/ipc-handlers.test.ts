@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReqwsError } from '../../src/shared/errors';
 import { IPC_CHANNELS } from '../../src/shared/ipc-channels';
 import { createDialogHandlers } from '../../src/main/ipc/dialog-handlers';
+import { createEditorHandlers } from '../../src/main/ipc/editor-handlers';
 import { createRepositoryHandlers } from '../../src/main/ipc/repository-handlers';
 import { registerIpcHandlers } from '../../src/main/ipc/register-ipc';
 import { createSettingsHandlers } from '../../src/main/ipc/settings-handlers';
@@ -213,6 +214,69 @@ describe('main IPC handlers', () => {
     });
   });
 
+  it('validates the workspace ID before invoking the GoLand launcher', async () => {
+    const openGoLand = vi.fn().mockResolvedValue(undefined);
+    const handlers = createEditorHandlers({
+      editorLauncher: {
+        getAvailability: vi.fn(),
+        openVSCode: vi.fn(),
+        openCursor: vi.fn(),
+        openCursorRoot: vi.fn(),
+        openGoLand,
+        revealInFinder: vi.fn(),
+      },
+    });
+
+    await expect(
+      handlers[IPC_CHANNELS.editors.openGoLand]?.(event, 'ws_1'),
+    ).resolves.toEqual({ ok: true, value: undefined });
+    expect(openGoLand).toHaveBeenCalledWith('ws_1');
+
+    await expect(
+      handlers[IPC_CHANNELS.editors.openGoLand]?.(event, ''),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_INPUT' },
+    });
+    expect(openGoLand).toHaveBeenCalledOnce();
+  });
+
+  it('validates the discriminated editor availability response contract', async () => {
+    const getAvailability = vi.fn().mockResolvedValue({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: false, reasonCode: 'NOT_FOUND' },
+      cursor: { available: true, path: '/Applications/Cursor.app' },
+      goland: { available: true, path: '/Applications/GoLand.app' },
+    });
+    const handlers = createEditorHandlers({
+      editorLauncher: {
+        getAvailability,
+        openVSCode: vi.fn(),
+        openCursor: vi.fn(),
+        openCursorRoot: vi.fn(),
+        openGoLand: vi.fn(),
+        revealInFinder: vi.fn(),
+      },
+    });
+
+    await expect(
+      handlers[IPC_CHANNELS.editors.availability]?.(event),
+    ).resolves.toMatchObject({ ok: true });
+
+    getAvailability.mockResolvedValueOnce({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: false, path: '/Applications/Code.app' },
+      cursor: { available: false },
+      goland: { available: false },
+    });
+    await expect(
+      handlers[IPC_CHANNELS.editors.availability]?.(event),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_INPUT' },
+    });
+  });
+
   it('replaces every registered handler and cleanup is ownership-safe', () => {
     const ipcMain = {
       handle: vi.fn(),
@@ -233,7 +297,7 @@ describe('main IPC handlers', () => {
       settingsService: { get: vi.fn(), save: vi.fn() },
       editorLauncher: {
         getAvailability: vi.fn(), openVSCode: vi.fn(), openCursor: vi.fn(),
-        openCursorRoot: vi.fn(), revealInFinder: vi.fn(),
+        openCursorRoot: vi.fn(), openGoLand: vi.fn(), revealInFinder: vi.fn(),
       },
       dialog: { showOpenDialog: vi.fn() },
       windowFromWebContents: () => null,
@@ -242,13 +306,13 @@ describe('main IPC handlers', () => {
     const cleanupFirst = registerIpcHandlers(ipcMain, services);
     const channels = ipcMain.handle.mock.calls.map(([channel]) => channel);
     expect(new Set(channels).size).toBe(channels.length);
-    expect(channels).toHaveLength(20);
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(20);
+    expect(channels).toHaveLength(21);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(21);
 
     const cleanupSecond = registerIpcHandlers(ipcMain, services);
     cleanupFirst();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(40);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(42);
     cleanupSecond();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(60);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(63);
   });
 });

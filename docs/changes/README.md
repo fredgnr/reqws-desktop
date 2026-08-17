@@ -5,9 +5,9 @@
 | 需求 | 状态 | 说明 | 更新日期 |
 |---|---|---|---|
 | [Cursor IDE 工作区启动](cursor-ide-launch/README.md) | active | 让 Cursor 从 Agents Window 状态也能在新的 IDE 窗口中加载受管 `.code-workspace`。 | 2026-08-14 |
-| [GitHub Actions CI 与 Release](github-actions-ci-release/README.md) | active | 为 branch push 与 pull request 建立质量检查，并在版本 tag 后生成可校验的 macOS Release 资产。 | 2026-08-13 |
+| [GitHub Actions CI 与 Release](github-actions-ci-release/README.md) | active | 为 branch push 与 pull request 建立独立的 Desktop、GoLand 插件质量检查，并在版本 tag 后生成可校验的 macOS Release 资产。 | 2026-08-17 |
 | [全局设置与界面国际化](global-settings/README.md) | active | 新增 Settings 页面、全局默认目录与中英文界面支持。 | 2026-08-14 |
-| [GoLand 插件支持](goland-plugin-support/README.md) | draft | 同时建立跨 IDE manifest 契约、Desktop GoLand 入口和受管多仓库 GoLand 插件。 | 2026-08-14 |
+| [GoLand 插件支持](goland-plugin-support/README.md) | active | 已完成跨 IDE 契约、Desktop 入口与插件自动化实现；旧候选的真实 GUI 结论为 `NO-GO`，新候选已按原型收口并归档同步态截图，仍待以 exact candidate 复验 dispose、Project View 与完整矩阵。 | 2026-08-17 |
 | [ReqWS Desktop MVP](mvp/README.md) | archived | 保存 MVP 1.0 的覆盖矩阵、交付快照和目标机验证证据。 | 2026-08-13 |
 
 新增需求时使用 kebab-case 创建 `docs/changes/<需求标识或简短主题>/`，先建立局部 `README.md`，再按需添加文档并更新本索引。

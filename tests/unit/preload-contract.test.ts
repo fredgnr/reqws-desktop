@@ -86,6 +86,12 @@ describe('preload ReqwsAPI contract', () => {
       IPC_CHANNELS.editors.openCursorRoot,
       'ws_1',
     );
+
+    await api.editors.openGoLand('ws_1');
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(
+      IPC_CHANNELS.editors.openGoLand,
+      'ws_1',
+    );
   });
 
   it('preserves the stable serializable error payload across contextBridge', async () => {
