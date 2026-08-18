@@ -18,7 +18,7 @@ ReqWS 负责仓库目录、功能分支和工作区文件的创建与维护，�
 - 维护可搜索的 Git 仓库目录，并支持无凭据的 HTTPS 与 SSH 地址。
 - 为一项需求顺序 clone 多个仓库，并统一切换到指定功能分支。
 - 分别配置代码父目录和 `.code-workspace` 文件目录。
-- 用 VS Code、Cursor、GoLand 或 Finder 打开工作区；GoLand 插件从只读 manifest 投影活动项目范围和 Git roots。
+- 用 VS Code、Cursor、GoLand 或 Finder 打开工作区；GoLand 插件从只读 manifest 自动投影活动项目范围，并只读检查用户在 GoLand Directory Mappings 中维护的 Git roots。
 - 增加或逻辑移除工作区仓库、重新生成管理文件，以及遗忘索引但保留磁盘内容。
 - 提供简体中文、英文和跟随系统的界面语言。
 - 用稳定错误码、阶段信息和可复制日志说明失败，并保留已公开的可恢复工件。
@@ -62,7 +62,7 @@ GoLand 插件需要 JDK 21，Gradle 构建与根 `npm run check`、Electron pack
 - Preload 只暴露固定的 typed API，Main 对 IPC 输入再次做 Zod 校验。
 - Git 和编辑器命令使用参数数组及 `shell: false`，凭据交给系统 Git、SSH Agent 或 credential helper。
 - 路径和 manifest 在写入前执行 containment、realpath 与 symlink 校验。
-- GoLand 插件只读 manifest，不访问 repository URL、不执行 Git 生命周期命令；Safe Mode 不修改项目模型或 VCS。
+- GoLand 插件只读 manifest，不访问 repository URL、不执行 Git 生命周期命令；VCS Directory Mappings 在任何模式下都只读，Safe Mode 还禁止项目模型修改。
 - 状态、manifest 和 managed workspace 文件使用原子发布或替换；逻辑移除和遗忘不会删除磁盘内容。
 
 这些约束的实现细节和修改要求记录在[开发指南](docs/guides/development-guide.md)，需求来源及按次验证证据从[项目文档索引](docs/README.md)进入。

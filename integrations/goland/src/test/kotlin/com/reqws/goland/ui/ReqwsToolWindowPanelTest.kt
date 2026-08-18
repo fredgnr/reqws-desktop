@@ -1,5 +1,6 @@
 package com.reqws.goland.ui
 
+import com.reqws.goland.ReqwsBundle
 import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.RoundedLineBorder
@@ -281,6 +282,33 @@ class ReqwsToolWindowPanelTest {
     assertFalse(nameLabel.toolTipText.contains("<img"))
     assertEquals(name, nameLabel.accessibleContext.accessibleName)
     assertTrue(row.accessibleContext.accessibleName.contains(name))
+  }
+
+  @Test
+  fun `manual Git Root status remains visible in a narrow repository row`() {
+    val repository = ReqwsRepositoryViewModel(
+      name = "repository-with-a-long-name",
+      statusKey = "repository.gitRootMissing",
+      statusTone = ReqwsStatusTone.WARNING,
+    )
+    val list = JList(arrayOf(repository)).apply { fixedCellHeight = REPOSITORY_ROW_HEIGHT }
+    val row = ReqwsRepositoryListCellRenderer().getListCellRendererComponent(
+      list,
+      repository,
+      0,
+      false,
+      false,
+    ) as JComponent
+
+    row.setSize(NARROW_TOOL_WINDOW_WIDTH, REPOSITORY_ROW_HEIGHT)
+    row.doLayout()
+    val status = row.descendants()
+      .filterIsInstance<JBLabel>()
+      .single { it.text == ReqwsBundle.message("repository.gitRootMissing") }
+
+    assertTrue(status.x >= 0)
+    assertTrue(status.x + status.width <= row.width)
+    assertEquals(ReqwsBundle.message("repository.gitRootMissing"), status.accessibleContext.accessibleName)
   }
 
   @Test

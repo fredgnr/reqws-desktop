@@ -16,7 +16,6 @@ dependencies {
 
   intellijPlatform {
     goland("2026.1.3")
-    bundledPlugin("Git4Idea")
     bundledPlugin("org.jetbrains.plugins.go")
     testFramework(TestFrameworkType.Platform)
   }

@@ -14,10 +14,10 @@ updated: 2026-08-18
 验证 ReqWS Desktop 与 GoLand 插件在 macOS 本地环境中形成可靠的受管多仓库工作区：
 
 - Desktop 正确探测并打开 GoLand；
-- 插件把 manifest 活动仓库集合转换为项目内容和 Git Root；
-- 逻辑移除但仍留在磁盘的仓库不参与默认索引和 VCS；
+- 插件把 manifest 活动仓库集合自动转换为项目内容，并只读检查用户维护的 Git Root；
+- 逻辑移除但仍留在磁盘的仓库不参与默认索引；若仍有 Git mapping，插件只提示用户在 Directory Mappings 中复核；
 - manifest 原子替换、错误、快速连续更新和重启均可收敛；
-- 插件不越权执行 Git、删除目录或覆盖用户无关配置；
+- 插件不越权执行 Git、删除目录或覆盖用户无关配置，生产路径不调用 VCS mapping writer、不直接写 `.idea/vcs.xml`，旧 VCS ownership/lock 为零写入；GoLand 原生 auto-detection 独立归因；
 - VS Code、Cursor 和现有 workspace 事务不回归。
 
 ## 2. 测试环境记录
@@ -164,18 +164,17 @@ workspace/
 
 ### 5.3 Planner
 
-输入 current managed state + desired manifest，断言：
+输入 current Project Model managed state + desired manifest + current read-only VCS snapshot，断言：
 
 - add/keep/remove-owned；
 - no duplicate；
 - unknown user entries preserved；
-- borrowed existing mapping；
-- user modification conflict；
+- existing exact Git mapping 分类为 configured；缺失 mapping、同路径 wrong-VCS、retained mapping 分别产生稳定手动配置诊断；
+- unrelated/default/custom `rootSettings` mapping 不改变 Project Model plan，也不被转换为 ownership；
 - 同一 live coordinator 的 clean baseline 只让自动/VFS same-digest 请求 no-op；手动 same-digest 必须再次 apply 并能恢复 live projection 漂移；新 coordinator 不从持久摘要 skip；
-- active `CREATED` mapping 在 repository 暂时 missing/non-Git 时保留 mapping 与 ownership；
-- active `CREATED` mapping 已消失时丢弃 stale 删除权；同路径用户 mapping 后续出现也不得删除；
-- workspace 内额外 Git mapping 和 project-root mapping 保留但产生 degraded/ownership diagnostic；
-- mapping 完整 equality 含 `rootSettings`，NFD/NFC root identity 不漏掉 workspace 内覆盖；
+- active repository 暂时 missing/non-Git 时不修改 mapping，只产生 filesystem/VCS 诊断；
+- workspace 内所有额外 Git mapping 和 project-root mapping 均原样保留；project-root 宽范围 mapping 与可验证的 retained repository mapping 只产生 review-required 诊断，其他无关项不误报；
+- mapping canonical snapshot 保留完整 `rootSettings`，NFD/NFC root identity 不漏掉精确配置或冲突；
 - partial missing repo behavior。
 
 ### 5.4 Coordinator
@@ -222,32 +221,23 @@ workspace/
 
 ### 6.2 VCS
 
-当前自动化以纯 planner、persistent ownership 和注入 `VcsMappingPlatform` 的 adapter 测试覆盖以下语义；真实 `ProjectLevelVcsManager`/Git Tool Window 的最终发现行为由 macOS GUI 验收补足，不能把 fake platform adapter 测试表述为完整平台集成测试。
+当前自动化以纯 classifier、只读 platform adapter 与真实 IntelliJ Platform 组件覆盖以下语义；真实 Directory Mappings/Git Tool Window 的最终行为由 macOS GUI 验收补足。生产零 mutation 是硬性门禁，不以 fake adapter 的“没有调用”单独代替源码/平台/文件证据。
 
-- add two Git mappings；
-- existing equivalent mapping 标记为 `BORROWED`，且永不由插件删除；
-- 插件新增 mapping 标记为 `CREATED`，仅在当前条目仍精确匹配时删除；
-- remove owned mapping；
-- preserve user mapping；
-- duplicate path normalization；
-- apply 前实时重查 filesystem/.git，missing→appears 或 present→missing 按本轮真实状态规划；
-- 后台规划后在 EDT write context 内执行 final full-equality check 与 set；用户 Settings writer 在 final read 后尝试写入时必须被串行，不能丢 mapping 或 `rootSettings`；
-- final equality 发现同路径用户 `Git + rootSettings` 已落地时退出 EDT 重规划，保留原对象并记为 `BORROWED` 而不是错误的 `CREATED`；连续三次 stale 时 mapping/ownership/refresh 均不得写；
-- `.idea/reqws-vcs-ownership.json` v3 verified atomic round-trip，并同时验证 manifest workspaceId/root fingerprint binding、generation/project-service writer epoch；同 root/different workspaceId 不能读取或覆盖旧状态；pending add/remove 必须在平台 mutation 前落盘，write/move/readback 失败不得调用 mapping setter；
-- 独立 lock file 必须覆盖 locked read、generation/epoch compare、atomic replace 和 readback；两个独立 service 从同一 generation 通过 barrier 同时争锁时最多一个成功，winner 内容不得被 loser 覆盖；transition 成功后被外部 writer 推进 generation 时原 plan 的 final checkpoint 必须失败，不能在 prepare 时 rebase；
-- 旧 atomic v2 与 legacy VCS PSC v1 都只作为 migration input；`readForProject` 本身不得改写 atomic 文件或清空 PSC，旧 `CREATED` 必须降为 `BORROWED`，迁移发布前在 locked decode 后再次检查 trust/service dispose，翻转时 state/mapping 零写入；atomic 文件已存在但损坏、版本不支持、workspace identity 不匹配或回读不一致时必须 fail closed，不得 fallback PSC；
-- destructive remove 前先把 `CREATED` 转为 pending-remove tombstone 并落盘；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；cold pending add/remove 均不得授权删除；clean persisted `CREATED` 经新 project-service/JVM load 后必须降为 `BORROWED`，即使出现同路径 plain Git mapping 且 repository 已 inactive 也绝不删除；
-- 实际 plugin add 的 expected-present/actual-absent transition 必须在 set 前写 `PENDING_ADD`；pending-only external 恢复不尝试 set 或创建 pending，达到有界等待上限后 mapping/ownership/refresh 均为零；cold plain Git / customized rootSettings mapping 都只能 borrow/保留，不能继承旧删除权；
-- expected、set、自事件识别和 quiescence 使用与 261/262 平台相同的 exact-directory last-wins + directory sort canonical form；反序两个 active repository 与 `/z-user` 后追加 workspace repo 都只提交一次并保留 `CREATED`/用户 rootSettings；
-- mapping change tracker 保存单调 revision 与对应完整 snapshot；用不获取 EDT lock 的独立 pooled thread 和 latch 确定性覆盖外部 writer 在 final read 前后落地，并把 live list mutation 与 payload-less event publication 拆成两个可控阶段。pending 较旧时只合入不同 directory 的 live-only 完整 mapping/rootSettings；pending-only 或同 directory 对象不同时等待事件，事件发布前和有界等待到期后 mapping/ownership/refresh 均为零；只有当前 plugin write 的同步等列表回调被抑制，延迟等列表回调必须记作 external；
-- pooled writer 持 stale base 在 ReqWS set 后落地时，下一 revision 必须以保守重规划收敛；本轮观察到的 external event、snapshot mismatch 或 retry 都要在继续前把 stable `CREATED` 持久降为 `BORROWED`，并覆盖 final ownership 已落盘后才发现 drift、下一轮开始前 dispose 的 cold-read 回归；最终 verify 后到达的事件必须使 clean digest baseline dirty 并强制下一次 automatic reconcile。持续 revision churn 达上限时 fail closed；公开事件不持久化与 recovery I/O 失败边界不得被表述为平台级线性化；
-- 单独固定当前无法通过的隐藏窗口：pooled writer 在 ReqWS final read 后把内部列表从 `A` 改为 `A+U`，事件延迟到 ReqWS whole-list set `A+R` 之后才发布。通过条件是最终同时保留完整 `U/rootSettings` 与 `R`；261/262 公开 API 目前没有 CAS/per-entry mutation/shared lock，事件又无 payload，因此该场景仍是 `NO-GO`，不能用其他 pooled writer 绿色用例代替；
-- active、missing 和 inactive 三种路径下，只要用户给 `CREATED` mapping 增加 `rootSettings`，就必须丢弃删除资格、degraded 且绝不删除；
-- extra/root mapping 与 NFC/NFD root coverage 保留并 degraded；
-- VCS apply failure degraded state；
-- Git plugin disabled（明确诊断，不 crash）。
+- exact directory last-wins canonicalization，保留完整 VCS 类型与 `rootSettings`；
+- active present repository 的精确 Git mapping 分类为 configured；missing、wrong-VCS 分别产生可操作诊断；
+- workspace 直系、仍存在且带普通 `.git` 目录的 retained repository mapping 分类为 review required；不存在、普通目录、嵌套路径与 workspace 外 mapping 不误报 retained；
+- workspace-root/default 的宽范围 Git mapping 单独提示 review required；workspace 外 unrelated/extra mapping、顺序和 custom `rootSettings` 原样保留且不制造 ownership 诊断；
+- snapshot present 的 filesystem/.git 在检查前实时重查，present→missing 产生降级诊断且不触发 setter；snapshot missing 后目录才出现时，本 candidate 仍保持 missing，下一次 manifest refresh 或 `Sync Now` 读取新 candidate 后恢复，避免 Project Model/UI 分叉；
+- trusted、Safe Mode、startup/restart、manifest add/remove/re-add、automatic refresh、manual `Sync Now` 均不调用 mapping mutation API；
+- 生产源码和 plugin bytecode 不引用 `setDirectoryMappings`、`setDirectoryMapping` 或内部 mapping writer；
+- 纯 inspection、配置事件和只读复核前后 mapping 与 `.idea/vcs.xml` bytes/hash 不变；manifest 驱动 Project Model 后若 GoLand 原生 auto-detection 改变配置，记录 IDE 设置、事件和差异，不归因于 ReqWS writer；
+- `.idea/reqws-vcs-ownership.json` 与 lock 不创建、不读取、不迁移、不改写、不自动删除；预置任意内容也不得影响诊断或 mapping；
+- 配置 listener 同步注册 callback 时依赖已经初始化；事件只提交后台只读复核；用户应用 Settings 后状态自动更新；
+- 事件丢失时 `Sync Now` 重新读取当前 mappings，但仍不写 VCS；
+- Settings writer、`ModuleVcsDetector` 或其他插件在读取前后改变 mapping 时，ReqWS 最多短暂展示旧诊断，绝不覆盖未知 mapping/`rootSettings`；后续事件或 `Sync Now` 收敛视图；
+- Git plugin disabled 或读取失败时给出明确 degraded 诊断，不 crash、不回滚成功的 Project Model。
 
-上述自动化分别证明 Settings writer 串行、已观察 pooled writer 的 revision/full-snapshot quiescent merge-retry，以及 ownership fail-closed 行为；没有公开 CAS 时，未能判明的 pending-only 或同目录冲突走零写入。它们不证明 mutation-before-set / event-after-set 的未知 mapping 可恢复。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果，但 GUI 抽样同样不能关闭该确定性架构缺口。
+上述自动化与 GUI 共同证明 ReqWS 没有 VCS writer，因此不再需要 CAS、ownership、pending/tombstone、self-event 或 merge-retry 协议。不得把用户手动 Settings 操作造成的 `.idea/vcs.xml` 变化归因于插件。
 
 ### 6.3 Safe Mode
 
@@ -255,7 +245,7 @@ workspace/
 - no model mutation；
 - no external process；
 - trust/dispose 在 Workspace Model transaction commit boundary 翻转时回滚 model/state；model 已在 trusted 时提交而随后 gate 翻转时不得 mint ownership 或推进 digest；
-- service terminal dispose 与 `Project.isDisposed` 都必须贯穿投影；VCS 在 planning、ownership pre-revoke、mapping set、final ownership record、refresh 后与 overall digest 前翻转时不得执行下一项写或推进 clean digest；
+- service terminal dispose 与 `Project.isDisposed` 都必须贯穿 Project Model 投影、VCS 读取、refresh 与 overall digest；VCS 没有写阶段；
 - 只在 blocked 期间通过稳定 trust probe 低频检测，trust transition triggers one sync；
 - repeated trust event idempotent。
 
@@ -268,12 +258,14 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - synchronized；
 - pending；
 - degraded；
+- VCS missing/wrong-VCS/retained 手动配置诊断；
+- Git integration unavailable 与 inspection failure 均显示 `Git Root Status Unavailable`，分别保留 `GIT_PLUGIN_UNAVAILABLE` / `VCS_DIAGNOSTIC_FAILED` 稳定码，不误显示为 Active；
 - invalid manifest；
 - missing repo；
 - copy diagnostics redaction；
 - sync action enabled rules。
 
-组件级回归同时锁定：manifest 文本不触发 Swing HTML、状态文字与辅助色同时存在、状态徽标保持内容宽度且不横向拉满、workspace 摘要与 repository 列表分别位于独立卡片、repository header 的标题与 count 分列、repository row 使用紧凑固定高度和主题分隔线、列表内容高度按可见行数计算、1–6 行无滚动条且 7 行起在固定六行高度内滚动、长文本提供完整 tooltip、`Sync Now` 全宽且具有主操作语义，以及两个次级动作在常用窄宽度居中且均可访问。像素、主题和最终排版仍由真实 GUI 对照原型验收。
+组件级回归同时锁定：manifest 文本不触发 Swing HTML、状态文字与辅助色同时存在、状态徽标保持内容宽度且不横向拉满、workspace 摘要与 repository 列表分别位于独立卡片、repository header 的标题与 count 分列、repository row 使用紧凑固定高度和主题分隔线、列表内容高度按可见行数计算、1–6 行无滚动条且 7 行起在固定六行高度内滚动、长文本提供完整 tooltip、VCS 手动配置说明可达、`Sync Now` 全宽且只重新检查而不暗示自动修改 VCS，以及两个次级动作在常用窄宽度居中且均可访问。像素、主题和最终排版仍由真实 GUI 对照原型验收。
 
 ### 6.5 VFS / lifecycle wiring
 
@@ -335,8 +327,9 @@ W0 固定的阻塞矩阵是：
 - ReqWS Tool Window；
 - 与[归档原型](../ui/tool-window-visual-design.md)对照同步态的信息层级、仓库行密度和操作区；
 - repo-a/repo-b 可见；
-- repo-c 默认不在 Project/Search/VCS；
-- 两个活动 Git roots；
+- repo-c 默认不在 Project/Search；若仍有 Git mapping，Tool Window 显示待用户复核而不自动删除；
+- 初始缺失 Git Roots 时显示 Settings → Version Control → Directory Mappings 手动步骤；
+- 用户手动添加 repo-a/repo-b 的精确 `Git` mappings 后，配置事件自动把 VCS 状态复核为 configured；
 - no repeated indexing loop。
 
 ### 8.3 增删
@@ -344,12 +337,14 @@ W0 固定的阻塞矩阵是：
 在 Desktop：
 
 1. 添加 repo-c；
-2. 观察 GoLand 自动加入；
-3. 移除 repo-b；
-4. 确认 repo-b 目录仍在 Finder；
-5. 确认它退出 Content Root、Find in Files 默认范围和 Git roots；
-6. 重新添加 repo-b；
-7. 确认无重复 root/module/mapping。
+2. 观察 GoLand 自动加入项目内容，并显示 Git Root 待手动配置；
+3. 在 Directory Mappings 手动添加 repo-c，确认配置事件自动更新状态；
+4. 移除 repo-b；
+5. 确认 repo-b 目录仍在 Finder，且退出 Content Root 和 Find in Files 默认范围；
+6. 确认插件未删除 repo-b mapping，而是提示用户复核；由用户手动移除后状态自动更新；
+7. 重新添加 repo-b；
+8. 确认项目内容恢复、Git Root 再次显示待配置，且插件未制造重复 root/module/mapping；
+9. 手动恢复 repo-b mapping 并确认最终状态。
 
 ### 8.4 Go 功能
 
@@ -372,6 +367,7 @@ W0 固定的阻塞矩阵是：
 - sleep/wake；
 - plugin disable/enable；
 - manual Sync Now。
+- 每次 `Sync Now` 分别记录 Project Model 阶段与只读 VCS 阶段；确认插件未调用 mapping writer，并将可能的 GoLand 原生 auto-detection 单独归因。
 
 ### 8.6 Tool Window 视觉与可用性
 
@@ -385,12 +381,13 @@ W0 固定的阻塞矩阵是：
 
 ### 8.7 用户配置保护
 
-- 增加用户 VCS mapping；
+- 增加用户 VCS mapping，并记录顺序、VCS 类型、`rootSettings` 与 `.idea/vcs.xml` hash；
 - 增加非 ReqWS module/content root；
 - 同步；
-- 验证未被删除；
+- 验证纯 VCS inspection/配置事件不改变 mapping、顺序、`rootSettings` 或 `.idea/vcs.xml`；Project Model 可能触发的 GoLand 原生 auto-detection 另行记录；
 - 制造所有权冲突；
-- 验证插件保守报错而不是强制覆盖。
+- 验证插件只报告手动配置差异而不是强制覆盖；
+- 预置旧 `.idea/reqws-vcs-ownership.json` 与 lock，验证插件不读、不改、不删且结果不受其内容影响。
 
 ## 9. 对抗与安全
 
@@ -404,10 +401,11 @@ W0 固定的阻塞矩阵是：
 | S-06 | manifest 字段伪装 command | 仅当字符串，不执行。 |
 | S-07 | rapid 100 writes | 最终一致、无线程泄漏。 |
 | S-08 | atomic delete/rename gap | 不立即清空项目。 |
-| S-09 | Safe Mode | 无模型/进程副作用。 |
+| S-09 | Safe Mode | 无模型/进程副作用，VCS 仍只读。 |
 | S-10 | malicious app candidate | 不执行未经验证的任意 binary。 |
-| S-11 | plugin state tamper | 保守恢复，不删除 unknown entries。 |
+| S-11 | Project Model state tamper | 保守恢复，不删除 unknown entries。 |
 | S-12 | real workspace deletion request | 插件没有该能力。 |
+| S-13 | old VCS ownership/lock tamper | 文件保持 inert，不影响诊断、不触发迁移/清理或 mapping 写入。 |
 
 ## 10. 规模与性能
 
@@ -459,7 +457,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-前序候选曾取得 261/262 Plugin Verifier Compatible 结果和本地 ZIP，但代码在其后继续收口，当前候选尚无满足下列格式的同一 exact-candidate 报告。最终 261/262 Verifier、ZIP SHA-256、真实 GoLand GUI 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补该缺口。
+2026-08-18 当前源码候选已在 JDK 21 下通过 220 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `d4ee9ee6352cf8a8c0ee3ca7e198fb37357f967ca881644dcd0c1790136b7652`，大小 394,894 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
 
 dated verification 建议结构：
 

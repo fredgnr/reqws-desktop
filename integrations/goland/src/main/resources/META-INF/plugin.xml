@@ -6,13 +6,12 @@
   <resource-bundle>messages.ReqwsBundle</resource-bundle>
 
   <description><![CDATA[
-    Projects the active repositories from a ReqWS workspace manifest into GoLand.
+    Projects active content from a ReqWS workspace manifest and reports manual Git Root setup.
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>
   <depends>com.intellij.modules.goland</depends>
   <depends>com.intellij.modules.vcs</depends>
-  <depends>Git4Idea</depends>
   <depends>org.jetbrains.plugins.go</depends>
 
   <extensions defaultExtensionNs="com.intellij">

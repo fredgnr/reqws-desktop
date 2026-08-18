@@ -18,7 +18,7 @@ manifest v1 跨 IDE 契约
         +
 Desktop GoLand availability/open flow
         +
-GoLand plugin v0.1 项目内容、VCS、监听和 Tool Window
+GoLand plugin v0.1 项目内容、VCS 只读诊断、监听和 Tool Window
         +
 真实 macOS GoLand 验收
 ```
@@ -103,7 +103,7 @@ chore(goland): scaffold plugin build
 spike(goland): validate content root strategy
 feat(goland): add manifest reader and tool window
 feat(goland): synchronize managed project roots
-feat(goland): synchronize git roots
+feat(goland): observe git root configuration
 feat(desktop): add GoLand launcher
 fix(goland): recover from atomic manifest replace
 test(goland): cover project model ownership
@@ -177,12 +177,12 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 | 工作包 | 目标 | 当前状态 |
 |---|---|---|
-| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；当前修复候选对 GO-261.25134.147 / GO-262.8665.270 fresh Verifier 均为 Compatible，exact-head 报告待 GUI 后形成。 |
+| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；只读 VCS 当前源码候选已通过 GO-261.25134.147 / GO-262.8665.270 Verifier。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
 | W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
-| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现/test。 |
-| W4 | 完成 VCS 与 Desktop 启动 | verified atomic v3 workspace/session fencing、pending/tombstone、旧 v2 降权迁移及 Settings writer 串行已实现；公开 API 只有 whole-list setter，无法封闭 pooled auto-detect 的 mutation-before-set / event-after-set 窗口，W4 仍被 GL-04/06/13 的架构冲突阻塞。 |
-| W5 | 完成功能、规模和安全验证 | 当前 Desktop/插件自动化、结构检查、插件 ZIP 与 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen 和规模证据仍未完成。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现，并纳入本轮 220 项插件测试。 |
+| W4 | 完成 VCS 与 Desktop 启动 | 产品边界已改为生产零 VCS mutation：插件只读 mappings、显示手动 Directory Mappings 步骤并监听配置事件复核；旧 VCS ownership/lock inert，不自动迁移或清理。实现、项目/结构检查与 261/262 Verifier 已通过，真实 GoLand 手动配置路径待验收。 |
+| W5 | 完成功能、规模和安全验证 | 当前源码候选的 Desktop `npm run check`、220 项插件测试、结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -248,7 +248,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 - valid fixture 展示 workspace、branch 和 active repositories；
 - Tool Window 与归档原型具有同一信息层级，状态不只靠颜色表达，窄宽度下仓库行不拉伸且三个动作都可达；
 - malformed、oversized、unsupported、root mismatch 和 path escape 有稳定错误；
-- Safe Mode 无 model/VCS/external-process 副作用；
+- Safe Mode 无 model/external-process 副作用，VCS 在所有模式下都只读；
 - project dispose 后无未管理 task；
 - 尚未修改 Content Root、module 或 VCS mapping；
 - plugin tests、verifyPlugin、buildPlugin 通过。
@@ -351,30 +351,30 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 无持续 indexing loop 或 VFS event storm；
 - 自动测试覆盖 debounce、latest-wins、dispose 和恢复。
 
-## 10. W4：VCS Root 与 Desktop GoLand 启动
+## 10. W4：VCS 只读诊断与 Desktop GoLand 启动
 
 ### 10.1 目标
 
-完成用户从 Desktop 打开 GoLand，并让活动 repository 同时成为正确 Git Root 的端到端路径。
+完成用户从 Desktop 打开 GoLand、插件自动同步项目内容，并由用户根据只读诊断手动维护正确 Git Root 的端到端路径。
 
 ### 10.2 插件 VCS
 
 实现：
 
-- 读取现存 VCS mappings；
-- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；expected/set/self-event/quiescence 全部使用平台 observable canonical form（exact directory last-wins，再按 directory 排序）。后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，且不把 pending external 误当作最新 live：只保留不同 directory 的 live-only 完整对象；pending-only 或同 directory 不等对象均等待事件，达到上限就在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复 pending-only。只有当前 plugin write 的同步回调可识别为 self-event，延迟的相同列表回调仍记作 external。EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；已发布或再次读取时仍可见的 pooled auto-detect revision/snapshot 进入下一轮有界 quiescent 重规划；
-- 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
-- 添加缺失 active mappings；
-- `.idea/reqws-vcs-ownership.json` v3 以 verified atomic write 保存 manifest workspaceId/root fingerprint、generation/project-service writer epoch、stable、pending add 与 pending remove；独立 lock file 把 read/check/replace/readback 放在同一 OS lock 内，一次 plan 从首次 load 固定 generation/epoch 并只按自身成功 checkpoint 推进，禁止 prepare-time rebase。真正的 plugin add 按 actual live → expected whole-list 的真实变化在 mutation 前写 pending add，pending-only external 恢复不尝试写入。只有当前 writer epoch 的平台提交、同步 ack 和静止检查成功后才记录为 `CREATED`；foreign service/JVM load 以及本轮 observer 已观察到的 external event、snapshot mismatch 或 retry 都在继续前将 `CREATED` 降为 `BORROWED`，最终 verify 后才到达的事件则使 baseline dirty 并由下一轮 automatic reconcile 先降权。移除前先持久化已撤权 tombstone，cold pending 永不授权删除；旧 atomic v2 与 legacy PSC v1 read 都只返回 migration input、不改写文件，旧 `CREATED` 降为 `BORROWED`，迁移仅在当前 workspaceId 已绑定且 trust/dispose gate 通过的 checkpoint 发布，atomic 文件存在但不可验证时禁止 fallback；
-- 保留用户 mapping；
-- workspace 内额外/root mapping 保留并进入 degraded，stale `CREATED` 删除权在 mapping 消失时丢弃；
+- 读取现存 VCS mappings，并按 exact directory last-wins canonicalize，保留 VCS 类型与完整 `rootSettings`；
+- apply/复核前重新检查 snapshot-present repository 的实时 filesystem identity 和普通 `.git` 状态；snapshot-missing 只在下一份完整 candidate 中恢复；
+- 把活动 repository 分类为 configured、missing 或 wrong-VCS，把已移除但仍有 mapping 的 repository 分类为 retained/review required；
+- Tool Window 展示 Settings → Version Control → Directory Mappings 手动步骤；不新增未经实现验证的跳转按钮；
+- 配置变化 listener 只使诊断失效并提交后台复核；同步注册 callback、dispose 和事件丢失由 lifecycle/`Sync Now` 回归覆盖；
+- 删除所有 mapping setter、self-event、revision/quiescence merge writer、Git repository manager 强制刷新和 VCS ownership writer；
+- `.idea/reqws-vcs-ownership.json` 与 lock 不读取、不迁移、不压缩、不自动删除；
+- 保留所有用户 mapping、顺序和 `rootSettings`；
 - path identity normalization；
 - Git plugin unavailable 的稳定诊断；
-- apply failure 的 degraded state；
-- Git repository manager refresh；
-- Tool Window 展示 model/VCS 分层状态。
+- read/配置差异的 degraded state；
+- Tool Window 展示 model/VCS 分层状态，`Sync Now` 重放 Project Model reconcile 并重新检查 VCS；其中 VCS 阶段始终只读。
 
-261/262 public API 没有 mapping CAS、per-entry production mutation，也不暴露后台 auto-detect 使用的内部锁。当前 revision/完整 snapshot 协议只能收敛已观察变化，不能恢复 `ModuleVcsDetector` 在 ReqWS final read 后内部写入、却在 ReqWS whole-list set 覆盖后才发布事件的未知 mapping/`rootSettings`。这不是 GUI 抽样或增加 retry 可以关闭的窗口；在产品选择放宽 GL-04/06 或 GL-13，或 JetBrains 提供稳定原子写 API 前，W4 不满足退出条件。
+261/262 没有适合本契约的稳定原子 mapping mutation API，因此 production 选择零 VCS mutation。ReqWS 不再与 Settings、`ModuleVcsDetector` 或其他插件竞争写入；payload-less event 与读取并发最多造成短暂旧诊断，下一事件或 `Sync Now` 重新读取，不会覆盖未知 mapping 或 `rootSettings`。
 
 ### 10.3 Desktop
 
@@ -408,12 +408,11 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - Desktop 打开 manifest 绑定的正确 root；
 - command/args 分离并使用 `shell: false`；
 - app missing、root missing、spawn error、non-zero exit 有稳定错误；
-- active repository Git roots 与 manifest 一致；
-- retained repository 不在 Git roots；
-- 用户 mapping 不丢失；
-- verified atomic VCS state 在失败窗口不授予陈旧删除权，cold pending 与 foreign-session `CREATED` 不删除 mapping；同 root/different workspaceId、跨 service/JVM generation 竞争和 transition/final 间外部推进全部 fail closed；legacy read 无写副作用且迁移提交受 trust/dispose gate；
-- Settings writer 与已观察 pooled writer 的反序时序由 canonical revision/full-snapshot merge-retry 保留不同 directory 的 live-only mapping 和 `rootSettings`；mutation 与 event publication 分离时，pending-only 或同 directory ambiguity 都零写入，actual plugin add 才先持久 pending add；本轮观察到的 external event 会在重规划前撤销 `CREATED`，最终 verify 后到达的事件使 baseline dirty并强制下一次 automatic reconcile；
-- pooled writer 在 ReqWS final read 后内部提交未知 mapping、但在 ReqWS set 覆盖后才发布 payload-less event 的时序必须能够保留完整对象；当前公开 API 无法满足，因此 W4 exit criteria 未达成；
+- missing/wrong-VCS/retained Git Root 产生明确、可执行的手动 Directory Mappings 诊断；用户配置后事件自动复核，`Sync Now` 可在丢事件时重新检查；
+- trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh、manual sync 与 restart 的 ReqWS 调用链均没有 VCS mutation API；
+- 用户 mapping、顺序、VCS 类型与 `rootSettings` 不被 ReqWS writer 覆盖；Project Model 触发的 GoLand 原生 auto-detection 另行记录和归因；
+- 生产源码不引用 mapping setter 或 VCS ownership writer；旧 ownership/lock 文件保持 inert 且不自动清理；
+- Settings/pooled writer 与 ReqWS 读取交错时只影响短暂诊断，不产生 lost update；
 - Tool Window 能区分 model 与 VCS degraded；
 - Desktop 相关全量测试通过。
 
@@ -456,6 +455,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - plugin disable/enable；
 - plugin ZIP reinstall；
 - sleep/wake。
+- 按 Tool Window 提示在 Directory Mappings 手动添加活动 Git Root、复核 retained mapping，并确认配置事件自动刷新状态；
+- 对纯 VCS inspection、配置事件和 `Sync Now` 的 VCS 阶段做 mapping/`.idea/vcs.xml` 保持性检查；manifest 驱动的 Project Model 若触发 GoLand 原生 auto-detection，记录其前后差异与 IDE 设置，不归因于 ReqWS writer。
 
 ### 11.4 规模和性能
 
@@ -485,10 +486,12 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - duplicate repo identity；
 - URL/field 伪装 command；
 - malicious PATH `goland`；
-- plugin state tamper；
+- Project Model ownership state tamper；
+- 旧 VCS ownership/lock 存在且保持 inert；
 - Safe Mode；
 - ownership conflict；
-- 用户 mapping/module/root 保护；
+- 用户 module/root 保护，以及所有 mapping/`rootSettings` 的无条件保持；
+- 生产路径静态与运行时零 mapping setter/ownership write；
 - 插件不存在任何 delete/clone/checkout 入口。
 
 ### 11.6 Exit criteria
@@ -569,10 +572,10 @@ cd integrations/goland
 | Desktop contract | Vitest | IPC、preload、errors、renderer/i18n |
 | Desktop integration | Vitest + temp fixtures | workspace ready、root/manifest validation、回归 |
 | Plugin pure unit | JUnit/Kotlin | parser、path、digest、planner、coordinator |
-| Plugin platform | IntelliJ test framework | roots、VCS、persistent ownership、Safe Mode |
+| Plugin platform | IntelliJ test framework | roots、VCS 只读诊断/配置事件、Project Model persistent ownership、Safe Mode |
 | Binary compatibility | verifyPlugin / Plugin Verifier | descriptor、dependency、API、bytecode |
 | macOS GUI smoke | 真实 GoLand | Project、Search、Git、Go、launch、restart |
-| Scale/adversarial | fixture generator + GoLand | 50+20、rapid rewrite、symlink、ownership conflict |
+| Scale/adversarial | fixture generator + GoLand | 50+20、rapid rewrite、symlink、ownership conflict、VCS 零写入 |
 
 不要用大面积 mocks 替代平台模型测试。纯逻辑可隔离测试，项目模型、VCS 和 lifecycle 必须尽量使用真实 platform components。
 
@@ -624,7 +627,8 @@ cd integrations/goland
 审查：
 
 - Desktop resolver 与 launcher 安全；
-- VCS mapping merge 与 created/borrowed ownership；
+- VCS configured/missing/wrong-VCS/retained 只读分类、手动配置说明与事件复核；
+- 生产零 mapping mutation、旧 VCS ownership/lock inert；
 - VFS 并发与错误恢复；
 - add/remove/re-add 端到端；
 - Desktop 回归和 i18n。
@@ -648,12 +652,12 @@ cd integrations/goland
 - Desktop 有受测试的 GoLand availability/open flow；
 - plugin ZIP 可构建并通过磁盘安装；
 - manifest contract 由 TypeScript 和 Kotlin fixtures 覆盖；
-- 活动项目内容和 Git Root 与 manifest 一致；
-- retained repository 不进入默认项目范围或 VCS；
+- 活动项目内容与 manifest 自动一致；活动 Git Root 差异有可执行的手动配置提示，用户配置后可自动复核；
+- retained repository 不进入默认项目范围；其 Git mapping 保持原样并提示用户复核；
 - add/remove/re-add 无需重启；
 - manifest 原子替换、快速连续变化和错误恢复可收敛；
 - Safe Mode、root identity、path containment 和 symlink 安全通过；
-- 用户 module/root/mapping 不被越权删除；
+- 用户 module/root 不被越权删除，VCS mapping、顺序与 `rootSettings` 从不被插件修改；
 - Go completion/navigation/test/debug 通过；
 - restart 冷恢复且不依赖 Desktop；
 - 50+20 规模无事件风暴、持续 CPU 或无限 indexing；

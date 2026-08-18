@@ -16,6 +16,7 @@ import com.reqws.goland.sync.SyncCoordinatorObserver
 import com.reqws.goland.sync.SyncFailureStage
 import com.reqws.goland.sync.SyncTrigger
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
+import com.reqws.goland.vcs.ReqwsVcsDiagnosticsService
 import com.reqws.goland.watch.ManifestSyncRequest
 import com.reqws.goland.watch.ManifestVfsWatcher
 import java.nio.file.Path
@@ -143,12 +144,11 @@ class ReqwsProjectService(
 
   private fun handleExternalVcsConfigurationChange(): Job? {
     if (disposed.get() || project.isDisposed) return null
-    // A platform writer may publish after a previously successful same-digest apply. Carry a
-    // monotonic dirty epoch into the automatic candidate so an in-flight older apply cannot make
-    // this recovery request look clean again.
-    coordinator.invalidateAppliedDigest()
     // Registration-time callbacks must not re-enter the STARTING state. Once the platform can
     // invoke this listener, the current registration attempt already owns the startup boundary.
+    // Manifest loading always performs the read-only VCS inspection before offering a candidate;
+    // an automatic same-digest NoOp therefore still publishes the fresh diagnostics without
+    // replaying the independently owned Project Model transaction.
     return requestRefresh(SyncTrigger.AUTOMATIC)
   }
 
@@ -179,11 +179,13 @@ class ReqwsProjectService(
   ): ReqwsProjectState {
     var loaded = loader.load(projectRoot, previous)
     repeat(MANIFEST_RETRY_COUNT - 1) {
-      if (!loaded.isRetryableManifestGap()) return loaded.withPersistedDigest()
+      if (!loaded.isRetryableManifestGap()) {
+        return loaded.withPersistedDigest().withVcsInspection()
+      }
       delay(MANIFEST_RETRY_DELAY_MILLIS)
       loaded = loader.load(projectRoot, previous)
     }
-    return loaded.withPersistedDigest()
+    return loaded.withPersistedDigest().withVcsInspection()
   }
 
   private fun acceptLoadedState(loaded: ReqwsProjectState, request: SyncReadRequest) {
@@ -246,10 +248,8 @@ class ReqwsProjectService(
       is SyncCoordinatorEvent.Applied -> {
         val candidate = takeApplying(event.digestSha256)
         publish(
-          (candidate?.state ?: state).copy(
-            lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
-            lastAppliedDigest = persistence.lastAppliedDigest() ?: event.digestSha256,
-            lastError = null,
+          (candidate?.state ?: state).afterSuccessfulProjection(
+            persistence.lastAppliedDigest() ?: event.digestSha256,
           ),
         )
       }
@@ -257,14 +257,8 @@ class ReqwsProjectService(
         val candidate = takeCandidate(event.digestSha256)
         val loaded = candidate?.state ?: state
         publish(
-          loaded.copy(
-            lifecycle = if (loaded.snapshot?.missingRepositoryCount == 0) {
-              ReqwsLifecycleState.SYNCHRONIZED
-            } else {
-              ReqwsLifecycleState.DEGRADED
-            },
-            lastAppliedDigest = persistence.lastAppliedDigest() ?: event.digestSha256,
-            lastError = null,
+          loaded.afterSuccessfulProjection(
+            persistence.lastAppliedDigest() ?: event.digestSha256,
           ),
         )
       }
@@ -312,6 +306,13 @@ class ReqwsProjectService(
   private fun ReqwsProjectState.withPersistedDigest(): ReqwsProjectState = copy(
     lastAppliedDigest = persistence.lastAppliedDigest() ?: lastAppliedDigest,
   )
+
+  private fun ReqwsProjectState.withVcsInspection(): ReqwsProjectState {
+    val currentSnapshot = snapshot ?: return copy(vcsInspection = null)
+    return copy(
+      vcsInspection = project.service<ReqwsVcsDiagnosticsService>().inspect(currentSnapshot),
+    )
+  }
 
   private fun ReqwsProjectState.isRetryableManifestGap(): Boolean =
     lifecycle == ReqwsLifecycleState.ERROR &&

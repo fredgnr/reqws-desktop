@@ -3,22 +3,19 @@ package com.reqws.goland.project
 import com.intellij.ide.trustedProjects.TrustedProjects
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.reqws.goland.manifest.ManifestErrorCode
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
 import com.reqws.goland.projectmodel.ReqwsProjectModelAdapter
-import com.reqws.goland.vcs.ReqwsVcsMappingService
-import com.reqws.goland.vcs.VcsMappingApplyException
-import com.reqws.goland.vcs.VcsMappingApplyErrorCode
-import com.reqws.goland.vcs.VcsMappingApplyResult
-import com.reqws.goland.vcs.VcsMappingDiagnosticCode
 
 internal object ReqwsStableErrorCode {
   const val PROJECT_MODEL_APPLY_FAILED = "PROJECT_MODEL_APPLY_FAILED"
-  const val VCS_MAPPING_APPLY_FAILED = "VCS_MAPPING_APPLY_FAILED"
   const val OWNERSHIP_CONFLICT = "OWNERSHIP_CONFLICT"
   const val SAFE_MODE_BLOCKED = "SAFE_MODE_BLOCKED"
+  const val VCS_CONFIGURATION_MISMATCH = "VCS_CONFIGURATION_MISMATCH"
+  const val VCS_DIAGNOSTIC_FAILED = "VCS_DIAGNOSTIC_FAILED"
+  const val GIT_PLUGIN_UNAVAILABLE = "GIT_PLUGIN_UNAVAILABLE"
+  const val REPOSITORY_NOT_GIT = "REPOSITORY_NOT_GIT"
 }
 
 internal class ReqwsProjectionApplyException(
@@ -34,20 +31,15 @@ internal fun interface ProjectModelProjection {
   suspend fun apply(snapshot: ManifestSnapshot)
 }
 
-internal fun interface VcsMappingProjection {
-  suspend fun apply(snapshot: ManifestSnapshot): VcsMappingApplyResult
-}
-
 internal fun interface AppliedDigestRecorder {
   fun markApplied(digestSha256: String)
 }
 
-/** Applies both projection layers and advances the overall digest only after both fully converge. */
+/** Applies the managed project model and advances the digest after that owned projection converges. */
 internal class ReqwsProjectionApplier(
   private val isTrusted: () -> Boolean,
   private val isProjectDisposed: () -> Boolean = { false },
   private val projectModel: ProjectModelProjection,
-  private val vcsMappings: VcsMappingProjection,
   private val digestRecorder: AppliedDigestRecorder,
 ) {
   suspend fun apply(snapshot: ManifestSnapshot) {
@@ -65,34 +57,8 @@ internal class ReqwsProjectionApplier(
       )
     }
 
-    // Trust is checked again before the independently committed VCS layer. The model adapter
-    // performs its own pre-transaction gate as well.
-    ensureProjectionAllowed()
-
-    val vcsResult = try {
-      vcsMappings.apply(snapshot)
-    } catch (exception: VcsMappingApplyException) {
-      if (exception.code == VcsMappingApplyErrorCode.SAFE_MODE_BLOCKED) {
-        throw safeModeFailure()
-      }
-      throw ReqwsProjectionApplyException(
-        stableCode = ReqwsStableErrorCode.VCS_MAPPING_APPLY_FAILED,
-        degraded = true,
-        cause = exception,
-      )
-    } catch (exception: Exception) {
-      throw ReqwsProjectionApplyException(
-        stableCode = ReqwsStableErrorCode.VCS_MAPPING_APPLY_FAILED,
-        degraded = true,
-        cause = exception,
-      )
-    }
-
-    degradedCode(vcsResult)?.let { stableCode ->
-      throw ReqwsProjectionApplyException(stableCode = stableCode, degraded = true)
-    }
-    // Service disposal can precede Project.isDisposed while a synchronous platform call is in
-    // flight. Never publish a clean digest after that project-level lifecycle boundary.
+    // The model adapter performs its own transaction gates. Recheck the service lifecycle before
+    // publishing a clean digest because service disposal can precede Project.isDisposed.
     ensureProjectionAllowed()
     digestRecorder.markApplied(snapshot.digestSha256)
   }
@@ -122,20 +88,6 @@ internal class ReqwsProjectionApplier(
     )
   }
 
-  private fun degradedCode(result: VcsMappingApplyResult): String? {
-    val codes = result.plan.diagnostics.mapTo(mutableSetOf()) { it.code }
-    return when {
-      VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT in codes ||
-        VcsMappingDiagnosticCode.DUPLICATE_MAPPING in codes ->
-        ReqwsStableErrorCode.OWNERSHIP_CONFLICT
-      VcsMappingDiagnosticCode.REPOSITORY_NOT_GIT in codes ->
-        ReqwsStableErrorCode.VCS_MAPPING_APPLY_FAILED
-      VcsMappingDiagnosticCode.REPOSITORY_MISSING in codes ->
-        ManifestErrorCode.REPOSITORY_MISSING.name
-      else -> null
-    }
-  }
-
   private fun safeModeFailure() = ReqwsProjectionApplyException(
     stableCode = ReqwsStableErrorCode.SAFE_MODE_BLOCKED,
     degraded = false,
@@ -153,9 +105,6 @@ internal class ReqwsProjectionApplier(
         isProjectDisposed = isDisposed,
         projectModel = ProjectModelProjection { snapshot ->
           project.service<ReqwsProjectModelAdapter>().apply(snapshot, isDisposed)
-        },
-        vcsMappings = VcsMappingProjection { snapshot ->
-          project.service<ReqwsVcsMappingService>().apply(snapshot, isDisposed)
         },
         digestRecorder = AppliedDigestRecorder(persistence::markApplied),
       )

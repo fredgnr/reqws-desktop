@@ -2,7 +2,7 @@
 title: GoLand 插件支持需求说明
 type: requirements
 status: active
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # GoLand 插件支持需求说明
@@ -25,7 +25,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 因此工作区根目录下可能同时存在活动仓库、已移除但保留的仓库和普通目录；
 - 如果 GoLand 把整个父目录无差别纳入项目，已移除仓库仍会参与索引、搜索、代码分析和 Git 操作，违背 ReqWS 的活动仓库语义。
 
-本需求通过 Desktop 与专用 GoLand 插件协作，让 GoLand 的项目内容和 Git Root 始终向 `.reqws/workspace.json` 收敛。
+本需求通过 Desktop 与专用 GoLand 插件协作，让 GoLand 的项目内容自动向 `.reqws/workspace.json` 收敛；Git Root 由插件只读比对并提示用户在 GoLand Directory Mappings 中手动维护。
 
 ## 2. 本次目标
 
@@ -33,11 +33,11 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 
 1. **跨 IDE manifest 契约**：明确 Desktop 与 IDE 适配器的读写边界、活动仓库语义、兼容规则和安全校验。
 2. **ReqWS Desktop GoLand 入口**：探测本机 GoLand，并用受控进程参数打开 workspace root。
-3. **GoLand 插件 v0.1**：识别 ReqWS workspace，同步活动仓库的项目内容和 Git Root，监听 manifest 变化，并提供只读状态和诊断。
+3. **GoLand 插件 v0.1**：识别 ReqWS workspace，自动同步活动仓库的项目内容，只读检查 Git Root，监听 manifest 与 VCS 配置变化，并提供状态和手动配置诊断。
 
 成功标准不是让 GoLand 支持 VS Code 的 workspace 文件，而是：
 
-> 同一个 ReqWS workspace 在 GoLand 中表现为一个受管多仓库项目，活动仓库集合与 Desktop 写入的 manifest 一致。
+> 同一个 ReqWS workspace 在 GoLand 中表现为一个受管多仓库项目；活动项目内容与 manifest 自动一致，Git Root 差异可见并由用户在 GoLand 中明确配置。
 
 ## 3. 完成定义
 
@@ -46,11 +46,11 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - Desktop 能正确展示 GoLand 可用性并打开目标 workspace root；
 - 插件 ZIP 可由仓库源码构建、测试并通过 GoLand 的磁盘安装入口安装；
 - manifest v1 由 TypeScript 和 Kotlin 契约测试共同覆盖；
-- 首次打开、自动同步、手动同步和重启恢复均可用；
-- 活动仓库对应的项目内容和 Git Root 与 manifest 一致；
-- 已逻辑移除但仍在磁盘上的仓库不参与默认索引、搜索、代码分析和 Git 操作；
+- 首次打开、自动同步、手动复核和重启恢复均可用；
+- 活动仓库对应的项目内容与 manifest 一致，Git Root 缺失或冲突有明确的手动配置步骤；
+- 已逻辑移除但仍在磁盘上的仓库自动退出默认索引、搜索和代码分析；若仍是 Git Root，插件提示用户在 Directory Mappings 中手动移除；
 - 插件不执行 Git 生命周期操作，不删除目录，不绕过 Trusted Project / Safe Mode；
-- 用户已有、且不属于 ReqWS 的 module、Content Root 和 VCS mapping 不被删除；
+- 用户已有、且不属于 ReqWS 的 module、Content Root 不被删除；所有 VCS mapping、顺序和 `rootSettings` 均不被插件修改；
 - Desktop、插件、Plugin Verifier、真实 macOS GoLand GUI 和文档检查均有 exact-head 证据；
 - 用户指南和开发指南反映实际本地流程，需求包完成状态只按 exact-head 证据调整。
 
@@ -94,17 +94,18 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 只在项目根存在有效 ReqWS manifest 时启用项目级能力；
 - 解析和校验 manifest，但不根据 URL、branch 或其他字段执行网络或命令；
 - 把活动仓库转换为受管 Content Root、Workspace Model 实体或经过 spike 验证的等价项目模型；
-- 为每个活动仓库建立 Git VCS Directory Mapping；
-- 逻辑移除仓库后，从插件受管项目内容和 Git Root 中移除，但不删除目录；
-- 重新添加同一仓库时恢复映射，且不制造重复 root、module 或 mapping；
+- 只读比对每个活动仓库与现有 Git VCS Directory Mapping，为缺失、VCS 类型冲突或保留仓库 mapping 提供手动配置诊断；
+- 逻辑移除仓库后，从插件受管项目内容中移除但不删除目录；Git Root 只提示用户手动调整；
+- 重新添加同一仓库时恢复受管项目内容并重新检查 mapping；插件不创建重复 root/module，也不创建或修改任何 mapping；
 - 监听 manifest 的 create、move、replace 和 content change，并对原子写入事件做防抖；
 - 同步串行、幂等、latest-wins，重复同一内容不重复刷新项目模型；
 - 项目重启后从 manifest 冷恢复，不依赖 Desktop 正在运行；
-- 提供 ReqWS Tool Window，至少展示 workspace、feature branch、活动仓库、同步状态、最近错误和“立即同步”；
+- 提供 ReqWS Tool Window，至少展示 workspace、feature branch、活动仓库、项目模型同步状态、Git Root 配置诊断、最近错误和“立即同步”；
 - Tool Window 必须与 GoLand 原生主题和控件密度一致，清晰区分状态、工作区摘要、仓库列表、诊断摘要和操作区；状态不能只靠颜色表达，常用窄宽度下不得出现仓库行异常拉伸、控件裁切或不可达操作；
-- 只删除插件明确拥有且当前不再需要的项目模型和 VCS 条目；
+- 只删除插件明确拥有且当前不再需要的项目模型条目；VCS Directory Mappings 完全由用户与 GoLand 所有；
+- 生产代码不得调用 VCS mapping mutation API，不得直接写 `.idea/vcs.xml` 或 VCS ownership state；GoLand 原生 auto-detection 仍由 IDE/用户设置控制，插件既不调用也不禁用；旧 `.idea/reqws-vcs-ownership.json` 及其 lock 为 inert 文件，不读取、不迁移、不自动清理；
 - 普通非 ReqWS 项目不受到行为或 UI 干扰；
-- Safe Mode 下只允许读取和诊断，不修改项目模型或启动外部进程。
+- Safe Mode 下只允许读取和诊断，不修改项目模型或启动外部进程；VCS 在 trusted 与 Safe Mode 下都保持只读。
 - Safe Mode 使用稳定的 `TrustedProjects.isProjectTrusted` 查询；仅在有效 ReqWS project 被阻塞期间低频检查信任状态，转为 trusted 后只提交一次同步，不依赖 261 中的 experimental trust listener。
 
 ### 4.4 构建、测试和文档
@@ -129,8 +130,8 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 2. Desktop 检查 root 和 manifest 仍存在；
 3. Desktop 解析受信任的 GoLand 安装候选；
 4. Desktop 用参数数组打开 workspace root；
-5. 插件检测 manifest，并在项目已受信时同步活动仓库；
-6. Project 和 Git 工具窗口展示与 manifest 一致的活动仓库。
+5. 插件检测 manifest，并在项目已受信时同步活动项目内容、只读检查 Git Roots；
+6. 缺失或保留的 Git Root 在 ReqWS Tool Window 中显示手动配置提示；用户在 Directory Mappings 应用变更后，插件自动复核状态。
 
 GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` 类错误，其他编辑器入口不受影响。
 
@@ -139,8 +140,8 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 用户也可以直接打开 workspace root：
 
 - 插件检测固定 manifest 路径；
-- manifest 有效且项目 trusted 时执行首次同步；
-- Safe Mode 时只显示 workspace 信息和信任提示；
+- manifest 有效且项目 trusted 时执行首次项目模型同步和 VCS 只读检查；
+- Safe Mode 时只读显示 workspace、当前 VCS 配置诊断和信任提示，不修改 Project Model 或 VCS；
 - manifest 无效时不修改已有项目模型，并在 Tool Window 给出错误码和恢复动作。
 
 ### 5.3 Desktop 新增仓库
@@ -149,8 +150,8 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - Desktop 继续负责 clone、分支切换、路径校验、manifest 和 `.code-workspace` 写入；
 - 插件观察到最新有效 manifest；
-- 新仓库进入项目内容和 Git Root；
-- 不要求关闭或重启 GoLand。
+- 新仓库进入项目内容；若缺少精确 Git mapping，Tool Window 提示用户在 Settings → Version Control → Directory Mappings 中添加为 `Git`；
+- 用户应用配置后，VCS 配置事件触发自动复核，不要求关闭或重启 GoLand。
 
 ### 5.4 Desktop 逻辑移除仓库
 
@@ -158,14 +159,14 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - Desktop 只从 manifest 和 `.code-workspace` 移除记录；
 - 磁盘仓库目录继续保留；
-- 插件仅移除自己管理的项目内容和 Git mapping；
-- 该目录不再参与默认 Project View、搜索范围、代码分析和 Git Root；
+- 插件仅移除自己管理的项目内容，不删除或改写 Git mapping；
+- 该目录不再参与默认 Project View、搜索范围和代码分析；若它仍是 Git Root，Tool Window 提示用户按自身意图手动移除；
 - 已打开文件可以由 GoLand 按平台行为保留为外部文件，但不得因此重新成为受管 root。
 
 ### 5.5 重新添加与恢复
 
-- 重新添加保留仓库时，插件恢复同一路径的受管条目；
-- 文件监听丢失、Mac 休眠恢复或同步失败后，用户可执行“立即同步”；
+- 重新添加保留仓库时，插件恢复同一路径的受管项目模型条目并重新检查 Git mapping；
+- 文件监听丢失、Mac 休眠恢复或同步失败后，用户可执行“立即同步”；该动作只重放项目模型同步并重新读取 VCS，不修改 Directory Mappings；
 - GoLand 重启后重新读取 manifest；
 - 重复同步不产生重复条目；
 - manifest 临时缺失或损坏时保留上次有效模型，不立即清空全部仓库。
@@ -176,14 +177,14 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - manifest 是 IDE 活动仓库集合的唯一事实来源；
 - Desktop 是 manifest、Git clone 和 branch 生命周期的唯一 owner；
-- 插件只负责把 manifest 投影到 GoLand 项目模型；
-- 插件状态不得成为第二份业务事实来源；其持久化数据只记录受管条目所有权和最近应用摘要。
+- 插件只负责把 manifest 投影到 GoLand 项目模型，并只读比较期望 Git Root 与 GoLand 当前配置；
+- 插件状态不得成为第二份业务事实来源；其持久化数据只记录项目模型受管条目所有权和最近应用摘要，不记录 VCS 删除权。
 
 ### 6.2 项目模型保护
 
-- 插件必须对每个受管 Content Root、exclude、module 或 VCS mapping 保留可验证的所有权；
+- 插件必须对每个受管 Content Root、exclude 或 module 保留可验证的所有权；
 - apply 前计算 `add / keep / remove-owned`，不能用“把当前全部 roots 替换成 manifest”实现同步；
-- 不属于插件的 module、SDK、library、source root、exclude 和 VCS mapping 必须保留；
+- 不属于插件的 module、SDK、library、source root 和 exclude 必须保留；所有 VCS mapping 无条件保留；
 - 所有权不确定时停止破坏性移除并显示诊断，不猜测用户意图；
 - 未选项目模型 spike 的实验代码必须删除，生产实现只保留经过验证的策略和确有证据的 fallback。
 
@@ -197,7 +198,16 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - 删除 repository 或 workspace 目录；
 - 自动执行仓库内脚本、Gradle task、Go command 或任意 manifest 字段。
 
-GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插件只负责正确登记活动 Git Root。
+GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插件只负责检测当前 Directory Mappings 是否包含活动仓库的精确 Git Root，并显示如何手动修正，不负责登记或移除。
+
+### 6.4 VCS Directory Mappings
+
+- VCS 配置完全由用户和 GoLand 所有；ReqWS 在 trusted、Safe Mode、自动同步、手动同步和重启恢复中都不得调用 mapping mutation API。
+- 对每个存在且为普通 Git repository 的活动路径，精确的 `Git` mapping 视为已配置；同路径非 Git mapping 视为冲突，缺失 mapping 视为待配置。
+- 已从 manifest 移除但仍存在的 repository mapping 只显示为待用户复核；插件不得根据历史状态删除它。其他无关 mapping 不影响 ReqWS 项目模型同步，也不得被重排或覆盖。
+- VCS 配置事件触发后台刷新，VCS 阶段始终只读；若同一 service 的 Project Model baseline 尚未建立或因前次失败保持 dirty，该刷新可与本来就需要的 ReqWS-owned Project Model reconcile 合并，但不得写 manifest、VCS mapping 或其他用户项目配置。
+- `Sync Now` 强制重新读取当前 mapping，但不自动 add/remove，不修改 `rootSettings` 或 `.idea/vcs.xml`。
+- 旧开发候选留下的 `.idea/reqws-vcs-ownership.json` 及其 lock 不再是契约输入；插件不读取、不迁移、不压缩，也不自动删除。
 
 ## 7. 非功能需求
 
@@ -217,7 +227,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 
 - 同一项目同一时刻最多一个 apply；
 - apply 期间收到的新内容合并为下一轮最新目标；
-- 同一 live project service/coordinator 生命周期内，只有上一次 model/VCS 完整 apply 成功后，相同 digest 才不重复 apply；
+- 同一 live project service/coordinator 生命周期内，只有上一次项目模型 apply 和 VCS 只读快照均完成后，相同 manifest digest 才可跳过自动项目模型重放；VCS 配置事件仍必须触发一次只读复核；
 - 原子 rename 产生的多个 VFS 事件合并为一次稳定读取；
 - manifest 临时不存在时有限重试，不因单个 delete 事件立即清空 roots；
 - invalid manifest 保留上次有效状态，并在文件恢复后自动重试；
@@ -269,25 +279,25 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为，插
 | GL-01 | GoLand 未安装 | Desktop 明确显示不可用，其他编辑器入口正常。 |
 | GL-02 | 标准路径安装 | Desktop 可打开正确 workspace root，启动不经过 shell。 |
 | GL-03 | Toolbox 安装 | 探测和启动策略经真实安装验证，失败时有明确诊断或稳定 fallback。 |
-| GL-04 | 首次打开 | 插件识别 manifest，活动项目根和 Git Root 数量、路径一致。 |
-| GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入仓库。 |
-| GL-06 | 逻辑移除 | 磁盘目录保留，但该仓库退出受管项目内容、默认搜索范围和 Git Root。 |
-| GL-07 | 重新添加 | 同一目录恢复，且无重复 root、module 或 mapping。 |
-| GL-08 | 原子替换和快速连续变更 | 最终状态与最新 manifest 一致，无并发异常或持续索引循环。 |
+| GL-04 | 首次打开 | 插件识别 manifest 并自动同步活动项目内容；缺失 Git Root 有明确 Directory Mappings 手动步骤，用户配置后事件自动复核为已配置。 |
+| GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入项目内容；缺失 Git Root 显示待用户配置且插件零 VCS 写入。 |
+| GL-06 | 逻辑移除 | 磁盘目录保留并退出受管项目内容与默认搜索；原 Git mapping 原样保留，直到用户按提示在 Directory Mappings 中手动决定是否移除。 |
+| GL-07 | 重新添加 | 同一目录的项目内容恢复；插件重新检查现有 mapping，不创建重复 root/module 或任何 mapping。 |
+| GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环。 |
 | GL-09 | manifest 损坏或临时缺失 | 保留上次有效模型，不应用部分数据，并提供稳定诊断和恢复入口。 |
 | GL-10 | 路径攻击 | root mismatch、绝对 relativePath、`..` 或 symlink escape 被拒绝。 |
-| GL-11 | Safe Mode | 可读诊断保留，受管模型更新和外部进程动作禁用。 |
-| GL-12 | 重启恢复 | GoLand 重启后从 manifest 幂等重建，不依赖 Desktop 正在运行。 |
-| GL-13 | 用户自定义配置 | 插件同步不删除非 ReqWS-owned module、Content Root 或 VCS mapping。 |
+| GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新和外部进程动作禁用。 |
+| GL-12 | 重启恢复 | GoLand 重启后从 manifest 幂等重建项目模型并重新读取 VCS 配置，不依赖 Desktop 正在运行。 |
+| GL-13 | 用户自定义配置 | 插件同步不删除非 ReqWS-owned module/Content Root，并且不调用 API 新增、删除、替换、重排 VCS mapping 或修改 `rootSettings`/`.idea/vcs.xml`；GoLand 原生 auto-detection 的独立行为必须单独记录。 |
 | GL-14 | 50+20 仓库样例 | 同步完成，无重复事件风暴、持续 CPU 或无限 indexing。 |
 | GL-15 | 全面回归 | VS Code、Cursor、Finder、workspace 增删、i18n、Desktop package 和现有测试通过。 |
-| GL-16 | Tool Window 视觉与可用性 | 实现不只包含与原型相同的元素，还应尽可能复现其空间结构与主次层级：紧凑状态徽标、带边界的工作区摘要、右侧独立计数的仓库卡片、固定高度且有行分隔的仓库列表，以及全宽主同步按钮和居中的次级动作；因原生 Tool Window chrome 无法复现的差异必须明确记录。同步、降级、错误和 Safe Mode 均有文字语义，窄宽度与浅/深主题无异常拉伸、裁切或操作不可达，并保存真实 GoLand 候选截图供后续验收。 |
+| GL-16 | Tool Window 视觉与可用性 | 实现不只包含与原型相同的元素，还应尽可能复现其空间结构与主次层级：紧凑状态徽标、带边界的工作区摘要、右侧独立计数的仓库卡片、固定高度且有行分隔的仓库列表，以及全宽主同步按钮和居中的次级动作；因原生 Tool Window chrome 无法复现的差异必须明确记录。同步、VCS 待手动配置、降级、错误和 Safe Mode 均有文字语义；`Sync Now` 明示为重新检查而非自动修改 VCS；窄宽度与浅/深主题无异常拉伸、裁切或操作不可达，并保存真实 GoLand 候选截图供后续验收。 |
 
 ## 10. 术语
 
 - **活动仓库**：当前存在于 manifest `repositories` 数组中的仓库。
-- **保留仓库**：曾属于 workspace、已从 manifest 移除但目录仍留在磁盘的仓库。
-- **受管条目**：由 ReqWS GoLand 插件创建、采用或修改，且插件能证明所有权的项目模型或 VCS 条目。
-- **目标状态**：对当前 manifest 完整校验后得到的活动仓库路径集合及摘要。
-- **同步**：把插件拥有的 GoLand 项目模型和 Git mapping 收敛到目标状态，同时保留用户的无关配置。
+- **保留仓库候选**：当前不在 manifest、但位于 workspace root 直系目录且仍包含普通 `.git` 的仓库目录；只读 VCS 诊断不宣称或证明它曾属于 manifest，用户必须自行确认 mapping 是否应保留。
+- **受管条目**：由 ReqWS GoLand 插件创建或修改、且插件能证明所有权的项目模型条目；VCS mapping 不属于受管条目。
+- **目标状态**：对当前 manifest 完整校验后得到的活动仓库路径集合、项目模型投影及期望 Git Root 检查集合。
+- **同步**：把插件拥有的 GoLand 项目模型收敛到目标状态，并只读刷新 Git Root 配置诊断。
 - **Desktop**：ReqWS Electron 主程序，是 workspace、Git 生命周期和 manifest 的唯一写入方。

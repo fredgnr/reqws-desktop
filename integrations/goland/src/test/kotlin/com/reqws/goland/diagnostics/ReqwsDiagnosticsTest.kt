@@ -7,6 +7,10 @@ import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
 import com.reqws.goland.project.ReqwsLifecycleState
 import com.reqws.goland.project.ReqwsProjectState
+import com.reqws.goland.vcs.VcsRepositoryInspection
+import com.reqws.goland.vcs.VcsRepositoryStatus
+import com.reqws.goland.vcs.VcsRootInspection
+import com.reqws.goland.vcs.VcsWorkspaceDiagnosticCode
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -54,17 +58,32 @@ class ReqwsDiagnosticsTest {
       pluginVersion = "0.1.0",
       ideBuild = "GO-261.1",
       projectRoot = root,
-      state = ReqwsProjectState(ReqwsLifecycleState.SYNCHRONIZED, snapshot),
+      state = ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot,
+        vcsInspection = VcsRootInspection(
+          repositoryStatuses = listOf(
+            VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
+          ),
+          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+        ),
+      ),
       userHome = home,
     )
 
     assertTrue(output.contains("projectRoot=~/work/private-workspace"))
     assertTrue(output.contains("manifestPath=~/work/private-workspace/.reqws/workspace.json"))
     assertTrue(output.contains("repositoryCount=1"))
+    assertTrue(output.contains("vcsMode=READ_ONLY_MANUAL"))
+    assertTrue(output.contains("manualGitRootCount=1"))
+    assertTrue(output.contains("vcsDiagnosticCode=VCS_CONFIGURATION_MISMATCH"))
+    assertTrue(output.contains("vcsRepositoryStatuses=0:NOT_CONFIGURED"))
+    assertTrue(output.contains("vcsWorkspaceDiagnostics=INACTIVE_GIT_ROOT"))
     assertFalse(output.contains("alice:token"))
     assertFalse(output.contains("example.test"))
     assertFalse(output.contains("secret-workspace-id"))
     assertFalse(output.contains("Secret Workspace"))
+    assertFalse(output.contains("rootSettings"))
   }
 
   @Test

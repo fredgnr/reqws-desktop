@@ -2,6 +2,9 @@ package com.reqws.goland.project
 
 import com.reqws.goland.manifest.ManifestErrorCode
 import com.reqws.goland.manifest.ManifestReader
+import com.reqws.goland.vcs.VcsRepositoryInspection
+import com.reqws.goland.vcs.VcsRepositoryStatus
+import com.reqws.goland.vcs.VcsRootInspection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -71,6 +74,28 @@ class ReqwsProjectLoadEngineTest {
     assertEquals(ManifestErrorCode.MANIFEST_NOT_FOUND.name, failed.lastError?.code)
     assertEquals(valid.snapshot, failed.snapshot)
     assertEquals(valid.lastAppliedDigest, failed.lastAppliedDigest)
+  }
+
+  @Test
+  fun `records a clean model digest while preserving read-only VCS degradation`() {
+    val root = createWorkspace("manual-vcs", listOf("api"))
+    val engine = ReqwsProjectLoadEngine(ManifestReader(), ReqwsTrustGate { true })
+    val loaded = engine.load(root, ReqwsProjectState.INACTIVE).copy(
+      lastError = ReqwsProjectError("stale-error"),
+      vcsInspection = VcsRootInspection(
+        repositoryStatuses = listOf(
+          VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
+        ),
+        workspaceDiagnostics = emptyList(),
+      ),
+    )
+
+    val applied = loaded.afterSuccessfulProjection("d".repeat(64))
+
+    assertEquals(ReqwsLifecycleState.DEGRADED, applied.lifecycle)
+    assertEquals("d".repeat(64), applied.lastAppliedDigest)
+    assertNull(applied.lastError)
+    assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, applied.vcsInspection?.repositoryStatuses?.single()?.status)
   }
 
   private fun createWorkspace(

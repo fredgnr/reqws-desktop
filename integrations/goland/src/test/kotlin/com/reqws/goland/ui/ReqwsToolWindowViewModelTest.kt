@@ -11,6 +11,11 @@ import com.reqws.goland.manifest.WorkspaceRepository
 import com.reqws.goland.project.ReqwsLifecycleState
 import com.reqws.goland.project.ReqwsProjectError
 import com.reqws.goland.project.ReqwsProjectState
+import com.reqws.goland.project.ReqwsStableErrorCode
+import com.reqws.goland.vcs.VcsRepositoryInspection
+import com.reqws.goland.vcs.VcsRepositoryStatus
+import com.reqws.goland.vcs.VcsRootInspection
+import com.reqws.goland.vcs.VcsWorkspaceDiagnosticCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -157,6 +162,107 @@ class ReqwsToolWindowViewModelTest {
     assertEquals(ReqwsStatusTone.WARNING, model.statusTone)
   }
 
+  @Test
+  fun `shows actionable read-only Git Root diagnostics without claiming the model was preserved`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot(),
+        lastAppliedDigest = snapshot().digestSha256,
+        vcsInspection = VcsRootInspection(
+          repositoryStatuses = listOf(
+            VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
+          ),
+          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+        ),
+      ),
+    )
+
+    assertEquals("state.degraded", model.statusKey)
+    assertEquals(ReqwsStableErrorCode.VCS_CONFIGURATION_MISMATCH, model.vcsDiagnosticCode)
+    assertEquals("message.vcsManualConfigurationRequired", model.statusDetailKey)
+    assertEquals(
+      listOf("repository.gitRootMissing", "repository.missing"),
+      model.repositories.map { it.statusKey },
+    )
+    assertFalse(model.preservedSnapshot)
+    val details = formatDetailsText(model).orEmpty()
+    assertTrue(details.contains(ReqwsStableErrorCode.VCS_CONFIGURATION_MISMATCH))
+    assertTrue(details.contains(ReqwsBundle.message("message.vcsManualConfigurationRequired")))
+    assertFalse(details.contains(ReqwsBundle.message("message.preservedModel")))
+  }
+
+  @Test
+  fun `shows a missing repository when it disappears during the VCS inspection`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot(),
+        vcsInspection = VcsRootInspection(
+          repositoryStatuses = listOf(
+            VcsRepositoryInspection(0, VcsRepositoryStatus.MISSING_DIRECTORY),
+          ),
+          workspaceDiagnostics = emptyList(),
+        ),
+      ),
+    )
+
+    assertEquals("repository.missing", model.repositories.first().statusKey)
+    assertEquals(ReqwsStatusTone.WARNING, model.repositories.first().statusTone)
+  }
+
+  @Test
+  fun `shows inspection failures as unavailable instead of active or unconfigured`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot(),
+        vcsInspection = VcsRootInspection.inspectionFailed(),
+      ),
+    )
+
+    assertEquals("message.vcsInspectionFailed", model.statusDetailKey)
+    assertEquals(ReqwsStableErrorCode.VCS_DIAGNOSTIC_FAILED, model.vcsDiagnosticCode)
+    assertEquals("repository.gitStatusUnavailable", model.repositories.first().statusKey)
+    assertEquals(ReqwsStatusTone.WARNING, model.repositories.first().statusTone)
+  }
+
+  @Test
+  fun `fails closed when an inspection omits a present repository index`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
+        snapshot = snapshot(),
+        vcsInspection = VcsRootInspection(
+          repositoryStatuses = emptyList(),
+          workspaceDiagnostics = emptyList(),
+        ),
+      ),
+    )
+
+    assertEquals("repository.gitStatusUnavailable", model.repositories.first().statusKey)
+    assertEquals(ReqwsStatusTone.WARNING, model.repositories.first().statusTone)
+  }
+
+  @Test
+  fun `keeps Safe Mode guidance ahead of read-only Git Root diagnostics`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.SAFE_MODE_BLOCKED,
+        snapshot = snapshot(),
+        vcsInspection = VcsRootInspection(
+          repositoryStatuses = listOf(
+            VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
+          ),
+          workspaceDiagnostics = emptyList(),
+        ),
+      ),
+    )
+
+    assertEquals(null, model.vcsDiagnosticCode)
+    assertEquals("message.safeModeHint", model.statusDetailKey)
+  }
+
   private fun snapshot(): ManifestSnapshot {
     val root = Path.of("/tmp/workspace")
     val repositories = listOf(
@@ -197,7 +303,7 @@ class ReqwsToolWindowViewModelTest {
     repository = WorkspaceRepository(
       catalogRepositoryId = "repo_$name",
       name = name,
-      url = "https://secret@example.test/$name.git",
+      url = "https://example.invalid/$name.git",
       defaultBranch = "main",
       relativePath = name,
     ),

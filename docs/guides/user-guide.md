@@ -2,7 +2,7 @@
 title: ReqWS 使用说明
 type: guide
 status: active
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # ReqWS 使用说明
@@ -158,9 +158,11 @@ npm run package:goland
 
 产物位于 `integrations/goland/build/distributions/`。安装后可从 ReqWS 工作区列表或详情选择“GoLand”，也可以直接在 GoLand 打开含有 `.reqws/workspace.json` 的 workspace root。插件未安装时 Desktop 仍可打开 root，但 GoLand 只按自身默认项目模型处理该目录，ReqWS 不承诺活动/保留 repository 隔离。
 
+插件会自动同步 ReqWS-owned 项目内容，但不会自动增删 Git Roots。Tool Window 显示缺失、VCS 类型冲突或已保留仓库的 mapping 时，请打开 **GoLand Settings → Version Control → Directory Mappings**，为每个活动仓库添加精确目录并选择 `Git`，只按自己的意图移除 retained mapping，然后点击 Apply/OK。配置事件会自动刷新插件状态；必要时使用 `Sync Now` 重新检查。该动作不会修改 Directory Mappings。
+
 完整的磁盘安装、首次信任、界面分区、状态、`Sync Now`、`Open Manifest File`、`Copy Diagnostics`、逻辑移除/重加和故障恢复步骤见[GoLand 插件使用指南](goland-plugin-guide.md)。
 
-当前功能仍处于实现与验证阶段。GoLand 2026.1.3/2026.2 Plugin Verifier 和真实 GUI 的完整 exact-head 证据尚未形成；本节描述本地操作入口，不代表已有签名插件或公开发布资产。验证状态见 [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
+当前功能仍处于实现与验证阶段。当前源码候选已通过 GoLand 2026.1.3/2026.2 Plugin Verifier，但真实 GUI 的完整 exact-head 证据尚未形成；本节描述本地操作入口，不代表已有签名插件或公开发布资产。验证状态见 [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
 
 在详情面板中可以：
 
@@ -214,15 +216,16 @@ macOS 上的典型全局状态位置是：
 - 不提供 pull、merge、rebase、push、PR/MR、测试运行器或 Git worktree。
 - `.code-workspace` 由 ReqWS 整体维护，不合并手工 settings。
 - Cursor 正常路径会为每次打开操作新建一个 IDE 窗口；旧版或非标准 bundle 缺少内置 CLI 时只能降级为 LaunchServices 打开。
-- GoLand 插件仅支持本地 macOS GoLand，采用 `since-build: 261`，当前不签名、不发布到 Marketplace，也没有自动安装或更新；262 兼容性仍以 Plugin Verifier 证据为准。
+- GoLand 插件仅支持本地 macOS GoLand，采用 `since-build: 261`，当前不签名、不发布到 Marketplace，也没有自动安装或更新；当前源码候选的 261/262 Plugin Verifier 均为 `Compatible`，真实 GUI 仍须按 exact commit 验收。
 - GoLand 插件不生成或修改 `go.work`，也不提供从 IDE 回写 ReqWS、仓库增删或分支操作。
+- GoLand 插件只读 VCS Directory Mappings；Git Roots 由用户在 GoLand Settings 中手动维护。旧开发候选留下的 VCS ownership/lock 文件不会自动迁移或清理。
 - 逻辑移除和遗忘操作有意保留磁盘文件；需要删除时由用户在核对路径后自行处理。
 - 本机构建采用 ad-hoc 签名，不含 Developer ID、公证、DMG 或自动更新。
 
 ## 12. 依据与进一步资料
 
 - [Cursor IDE 工作区启动](../changes/cursor-ide-launch/README.md)记录 Agents Window 兼容修复、启动策略和当前验证证据。
-- [GoLand 插件支持](../changes/goland-plugin-support/README.md)记录 manifest 契约、磁盘安装插件、项目模型/VCS 设计和仍待完成的验证。
+- [GoLand 插件支持](../changes/goland-plugin-support/README.md)记录 manifest 契约、磁盘安装插件、自动项目模型与只读 VCS/手动 Directory Mappings 设计，以及仍待完成的验证。
 - [全局设置需求包](../changes/global-settings/README.md)记录语言和默认目录的当前设计、验收范围与验证证据。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始需求覆盖、交付和验证历史；其状态为 archived，不代替当前代码和测试。
 - [历史参考](../reference/README.md)保存冻结的原始方案与原型，只用于追溯来源。

@@ -5,10 +5,6 @@ import com.reqws.goland.manifest.RepositoryAvailability
 import com.reqws.goland.manifest.ResolvedRepository
 import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
-import com.reqws.goland.vcs.VcsMappingApplyResult
-import com.reqws.goland.vcs.VcsMappingDiagnostic
-import com.reqws.goland.vcs.VcsMappingDiagnosticCode
-import com.reqws.goland.vcs.VcsMappingPlan
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -17,55 +13,26 @@ import org.junit.Test
 
 class ReqwsProjectionApplierTest {
   @Test
-  fun `advances digest only after model and VCS fully converge`() = runBlocking {
+  fun `advances digest after the managed project model converges`() = runBlocking {
     val events = mutableListOf<String>()
     val snapshot = snapshot()
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       projectModel = ProjectModelProjection { events.add("model") },
-      vcsMappings = VcsMappingProjection {
-        events.add("vcs")
-        vcsResult()
-      },
       digestRecorder = AppliedDigestRecorder { events.add("digest:$it") },
     )
 
     applier.apply(snapshot)
 
-    assertEquals(listOf("model", "vcs", "digest:${snapshot.digestSha256}"), events)
+    assertEquals(listOf("model", "digest:${snapshot.digestSha256}"), events)
   }
 
   @Test
-  fun `keeps digest pending after a partial missing-repository projection`() {
-    var digestRecorded = false
-    val applier = ReqwsProjectionApplier(
-      isTrusted = { true },
-      projectModel = ProjectModelProjection {},
-      vcsMappings = VcsMappingProjection {
-        vcsResult(VcsMappingDiagnostic(VcsMappingDiagnosticCode.REPOSITORY_MISSING, 0))
-      },
-      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
-    )
-
-    val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
-      runBlocking { applier.apply(snapshot()) }
-    }
-
-    assertEquals("REPOSITORY_MISSING", failure.stableCode)
-    assertEquals(true, failure.degraded)
-    assertEquals(false, digestRecorded)
-  }
-
-  @Test
-  fun `does not call either adapter while Safe Mode blocks the project`() {
+  fun `does not apply the project model while Safe Mode blocks the project`() {
     var sideEffects = 0
     val applier = ReqwsProjectionApplier(
       isTrusted = { false },
       projectModel = ProjectModelProjection { sideEffects += 1 },
-      vcsMappings = VcsMappingProjection {
-        sideEffects += 1
-        vcsResult()
-      },
       digestRecorder = AppliedDigestRecorder { sideEffects += 1 },
     )
 
@@ -78,16 +45,12 @@ class ReqwsProjectionApplierTest {
   }
 
   @Test
-  fun `does not call either adapter after the project service is disposed`() {
+  fun `does not apply the project model after the project service is disposed`() {
     var sideEffects = 0
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { true },
       projectModel = ProjectModelProjection { sideEffects += 1 },
-      vcsMappings = VcsMappingProjection {
-        sideEffects += 1
-        vcsResult()
-      },
       digestRecorder = AppliedDigestRecorder { sideEffects += 1 },
     )
 
@@ -99,41 +62,13 @@ class ReqwsProjectionApplierTest {
   }
 
   @Test
-  fun `stops before VCS when service disposal follows the model commit`() {
+  fun `does not record a clean digest when service disposal follows the model commit`() {
     var disposed = false
-    var vcsApplied = false
     var digestRecorded = false
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { disposed },
       projectModel = ProjectModelProjection { disposed = true },
-      vcsMappings = VcsMappingProjection {
-        vcsApplied = true
-        vcsResult()
-      },
-      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
-    )
-
-    assertThrows(ReqwsProjectionApplyException::class.java) {
-      runBlocking { applier.apply(snapshot()) }
-    }
-
-    assertEquals(false, vcsApplied)
-    assertEquals(false, digestRecorded)
-  }
-
-  @Test
-  fun `does not record a clean digest when disposal follows the VCS commit`() {
-    var disposed = false
-    var digestRecorded = false
-    val applier = ReqwsProjectionApplier(
-      isTrusted = { true },
-      isProjectDisposed = { disposed },
-      projectModel = ProjectModelProjection {},
-      vcsMappings = VcsMappingProjection {
-        disposed = true
-        vcsResult()
-      },
       digestRecorder = AppliedDigestRecorder { digestRecorded = true },
     )
 
@@ -143,18 +78,6 @@ class ReqwsProjectionApplierTest {
 
     assertEquals(false, digestRecorded)
   }
-
-  private fun vcsResult(vararg diagnostics: VcsMappingDiagnostic) = VcsMappingApplyResult(
-    plan = VcsMappingPlan(
-      additions = emptyList(),
-      removalIndices = emptySet(),
-      nextOwnership = emptyList(),
-      diagnostics = diagnostics.toList(),
-    ),
-    mappingsCommitted = false,
-    ownershipCommitted = true,
-    refreshed = true,
-  )
 
   private fun snapshot(): ManifestSnapshot {
     val root = Path.of("/tmp/reqws-projection-test")

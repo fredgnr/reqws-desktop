@@ -543,6 +543,9 @@ internal fun formatDetailsText(model: ReqwsToolWindowViewModel): String? = when 
   model.errorCode != null && model.preservedSnapshot ->
     "${model.errorCode} · ${ReqwsBundle.message("message.preservedModel")}"
   model.errorCode != null -> model.errorCode
+  model.vcsDiagnosticCode != null && model.statusDetailKey != null ->
+    "${model.vcsDiagnosticCode} · ${ReqwsBundle.message(model.statusDetailKey)}"
+  model.vcsDiagnosticCode != null -> model.vcsDiagnosticCode
   model.statusDetailKey != null -> ReqwsBundle.message(model.statusDetailKey)
   model.digest != null -> ReqwsBundle.message("message.currentDigest", model.digest)
   !model.visible -> ReqwsBundle.message("message.noManifest")

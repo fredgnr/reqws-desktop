@@ -27,8 +27,8 @@ ReqWS GoLand Plugin（IDE adapter）
   ├─ 读取并校验 manifest
   ├─ 计算活动仓库目标状态
   ├─ 同步受管项目内容
-  ├─ 同步受管 Git VCS mappings
-  ├─ 监听 manifest 原子替换
+  ├─ 只读检查 Git VCS mappings
+  ├─ 监听 manifest 原子替换与 VCS 配置变化
   └─ 提供 ReqWS Tool Window 与诊断
 ```
 
@@ -42,6 +42,7 @@ ReqWS GoLand Plugin（IDE adapter）
 6. 插件源码与 Desktop 同仓，放在 `integrations/goland/`，使用独立 Gradle 构建。
 7. 本次产物是本地可安装 ZIP；不实现签名、Marketplace、自动更新或发布服务。
 8. 本次不引入 Desktop 与插件的双向通信，不生成或修改 `go.work`。
+9. VCS Directory Mappings 完全由用户与 GoLand 所有；插件只读比较并提示手动配置，任何模式下都不调用 mapping mutation API。
 
 本文状态为 active，表示上述设计是当前实现依据，不表示功能已完成交付。Desktop 自动化、插件单元/平台测试、261/262 Plugin Verifier、ZIP 哈希和真实 GUI 分属不同证据层；在同一 exact commit 的 Verifier 与 GUI 结果形成前，不给出兼容性或 `GO` 结论。
 
@@ -116,14 +117,14 @@ Initial version: 0.1.0
 | `.code-workspace` 写入 | 是 | 忽略 |
 | GoLand workspace root | 否 | 保留平台既有条目，不接管 |
 | `.reqws` 与保留 Git repo excludes | 否 | 仅 owner 自己创建的条目 |
-| GoLand 受管 VCS mapping | 否 | owner 自建项；只借用现存等价项 |
-| `.idea` 中插件私有状态 | 否 | owner |
-| 用户自定义 module/root/mapping | 否 | 只保留，不接管 |
+| GoLand VCS Directory Mappings | 否 | 只读观察；全部由用户与 GoLand 管理 |
+| `.idea` 中插件私有状态 | 否 | 仅管理 Project Model ownership；旧 VCS ownership 文件 inert |
+| 用户自定义 module/root/mapping | 否 | module/root 只保留；mapping 绝不修改 |
 | repository/workspace 删除 | 当前不自动执行 | 绝不执行 |
 | `go.work` | 本次不写 | 本次不写 |
 | 外部进程 | 仅 Desktop 启动 GoLand | 不启动 |
 
-插件持久化状态只记录技术所有权和恢复所需摘要，不能成为 repository membership 的第二份事实来源。
+插件持久化状态只记录 Project Model 技术所有权和恢复所需摘要，不能成为 repository membership 的第二份事实来源。VCS 不保存 ownership、删除权或迁移状态；旧 `.idea/reqws-vcs-ownership.json` 及其 lock 不再读取，也不自动清理。
 
 ## 5. Manifest 跨 IDE 契约
 
@@ -183,12 +184,12 @@ ManifestDigest = SHA-256(fileBytes)
 
 摘要用于：
 
-- 同一 live coordinator 生命周期内，上次完整 model/VCS apply 成功后，自动/VFS 触发的相同内容幂等 no-op；用户触发的 `Sync Now` 即使 digest 相同也强制重新核对实时 Workspace Model、VCS mappings 和文件系统投影；
+- 同一 live coordinator 生命周期内，上次 Project Model apply 与 VCS 只读检查完成后，自动/VFS 触发的相同 manifest 内容可跳过项目模型重放；用户触发的 `Sync Now` 即使 digest 相同也强制重新核对实时 Workspace Model、VCS mappings 和文件系统投影；
 - VFS 事件乱序或合并时重新识别最终内容；
 - 项目冷启动重新收敛和诊断关联；
 - 错误去重和诊断关联。
 
-持久化的最近摘要只供 UI 和诊断展示，不作为 project reopen 后跳过 apply 的依据。每个新 project service 都从 manifest、当前 Workspace Model 和 ownership state 重新收敛，避免把进程外变化或部分持久化状态误判为 no-op。
+持久化的最近摘要只供 UI 和诊断展示，不作为 project reopen 后跳过 apply 的依据。每个新 project service 都从 manifest、当前 Workspace Model、Project Model ownership state 和当前 VCS mappings 重新计算，避免把进程外变化或部分持久化状态误判为 no-op。
 
 不在 schema v1 中增加递增 revision，避免旧 Desktop、回滚内容和跨文件事务引入额外兼容路径。
 
@@ -341,7 +342,7 @@ ManifestReader
 ReqwsProjectService
   ├─ current snapshot
   ├─ last applied digest
-  ├─ managed ownership
+  ├─ Project Model managed ownership
   ├─ lifecycle state
   └─ diagnostics
 
@@ -360,10 +361,10 @@ ProjectModelAdapter
   ├─ ownership protection
   └─ write transaction
 
-VcsMappingAdapter
-  ├─ borrow equivalent user mapping
-  ├─ add missing active roots
-  └─ remove ReqWS-owned inactive roots
+VcsConfigurationObserver
+  ├─ read canonical directory mappings
+  ├─ compare expected active/retained repositories
+  └─ publish manual-configuration diagnostics
 
 ReqwsToolWindowFactory
   ├─ workspace summary
@@ -378,11 +379,11 @@ ReqwsToolWindowFactory
 1. 每个有 file-based root 的 project opened 后启动轻量项目服务，并在后台 canonicalize root；
 2. watcher 在第一次读取前安装，因此固定 manifest 尚不存在时也能接收后续 create；项目状态保持 inactive，Tool Window 不显示；
 3. manifest 存在：后台读取、digest 和校验；
-4. Safe Mode：保存只读 snapshot，但不执行 model/VCS apply；
-5. trusted：提交首次同步；
+4. Safe Mode：保存只读 snapshot 和 VCS 检查结果，但不执行 Project Model apply；
+5. trusted：提交首次 Project Model 同步与 VCS 只读检查；
 6. project-level VFS listener 只关注 manifest exact path 及直接父目录；
 7. project close/dispose：取消 debounce、IO 和 pending sync；
-8. reopen：不使用持久摘要作 skip，从 manifest、当前模型和插件 ownership state 强制重新收敛。
+8. reopen：不使用持久摘要作 skip，从 manifest、当前模型、Project Model ownership state 和当前 VCS 配置重新收敛/复核。
 
 ### 7.3 状态机
 
@@ -403,10 +404,10 @@ DISPOSED
 
 - invalid manifest、root mismatch 和 path escape 进入 `ERROR`，保留上次有效模型；
 - 单个活动仓库 missing 可同步其他有效仓库，整体为 `DEGRADED`；
-- project model 成功但 VCS mapping 失败为 `DEGRADED`，允许重试；
-- model 和 VCS 均成功后才更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；
+- project model 成功但缺失、冲突或仍有 retained Git mapping 时为 `DEGRADED`，提示用户手动配置；
+- model apply 与 VCS 快照读取完成后更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；只有没有 Project Model 或 VCS 诊断时才显示 `SYNCHRONIZED`；
 - 相同 digest 只在同一个 coordinator 生命周期、内存 baseline 仍为 clean 且触发源不是手动 `Sync Now` 时 no-op；
-- 手动 `Sync Now` 始终进入 apply；若重放失败，内存 baseline 保持 dirty，使后续自动或手动同 digest 请求继续尝试恢复；
+- 手动 `Sync Now` 始终进入 Project Model reconcile 并重新读取 VCS；它不会 add/remove mapping。若项目模型重放失败，内存 baseline 保持 dirty，使后续自动或手动同 digest 请求继续尝试恢复；
 - 手动 reconcile intent 跨 manifest read generation 与 pending coalescing 保留：后到的自动 candidate 仍以最新内容为准但继承 manual trigger；后到的 read failure 仍作为最新失败发布，同时 intent 保留到下一份 valid candidate 真正开始 apply，不能通过应用旧 snapshot 隐藏读取错误；
 - 开始应用不同 digest 时先使内存 no-op baseline 失效；若后层失败，回退到先前 digest 也必须重放，不能把部分提交状态误判为 no-op；
 - 文件恢复后自动重新进入 `READING`。
@@ -418,9 +419,9 @@ DISPOSED
 - VFS listener callback 不做阻塞 IO；
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
-- VCS mapping 的文件系统身份、候选 plan 与 verified atomic ownership checkpoint 都在后台执行；EDT closure 只做最终完整 mapping equality/revision gate 和整表 `setDirectoryMappings`，避免 Settings writer 在 final read/set 之间插入且不把文件 IO 带上 EDT。expected、set、自事件标记、external snapshot 和 quiescence 都先复刻平台可观察的 canonical 形式：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。只有当前插件 write 的同步回调才是 self-event；同列表的延迟回调也按 external 处理。项目级 mapping change tracker 维护单调 revision 与待确认的完整 external snapshot，只能处理已经发布或再次读取时仍可见的 pooled auto-detect 变化；它不能观察平台先完成内部 mutation、却在 ReqWS whole-list set 覆盖后才发布的更新；
-- trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿两层投影；Workspace Model transaction 的写入/提交边界、VCS ownership pre-revoke、mapping set、最终 ownership record、refresh 后以及 overall digest 前都重新 gate；事务内翻转通过异常回滚；
-- Workspace Model 与 ownership 文件不是同一事务，因此模型 authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界；VCS v3 state 同时绑定 manifest `workspaceId` 与 canonical root fingerprint，并记录 generation/project-service writer epoch；独立 lock file 把 locked read、generation/epoch compare、atomic replace 与 readback 放在同一 OS file lock 内。一次 apply 必须从首次 load 捕获 fence，transition 成功后只按自身返回值推进到 final，外部 writer 推进时旧 plan 失败，禁止在 prepare 时重读并 rebase；
+- VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
+- trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
+- Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
 - 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
 - Tool Window view model 转 Swing component 在 EDT 更新；
 - 同一项目最多一个 apply；pending 只保存最新 candidate。
@@ -442,14 +443,14 @@ syncCoordinator {
     inMemoryCleanAppliedDigest = null
     val plan = planner.plan(currentModel(), state.ownership, latest)
     applyProjectModel(plan)
-    applyVcsMappings(plan)
+    inspectVcsMappings(latest)
     inMemoryCleanAppliedDigest = latest.digest
     state.markApplied(latest)
   }
 }
 ```
 
-新 service 的 `inMemoryCleanAppliedDigest` 从 `null` 开始；持久化摘要不注入它。任一不同 digest 的 apply 可能已提交前一层，因此进入 apply 前先清空 baseline，只有两层完全成功才恢复。
+新 service 的 `inMemoryCleanAppliedDigest` 从 `null` 开始；持久化摘要不注入它。任一不同 digest 的 apply 可能已提交 Project Model，因此进入 apply 前先清空 baseline，只有 Project Model reconcile 与 VCS snapshot read 都完成才恢复。VCS 配置事件不依赖 manifest digest，始终触发一次新的 VCS 只读检查；clean same-digest 走 no-op 并只发布新诊断，baseline 尚未建立或 dirty 时则可顺带完成本来就需要的 ReqWS-owned Project Model reconcile。
 
 生产实现必须使用当前 JetBrains 推荐的 coroutine/lifecycle API；伪代码不授权阻塞 EDT 或使用全局 unmanaged executor。
 
@@ -494,17 +495,13 @@ marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Con
 
 ## 9. 受管条目所有权
 
-插件不得把当前全部项目 roots 或 VCS mappings 替换为 manifest 集合。
+插件不得把当前全部项目 roots 替换为 manifest 集合，也不得写入任何 VCS mapping。
 
-项目私有状态分为两个插件自有的 verified atomic ownership 文件与一个非授权性的同步摘要。示意：
+项目私有状态只有 Project Model verified atomic ownership 文件与一个非授权性的同步摘要。示意：
 
 ```text
 <workspace-root>/.idea/reqws-managed-project-model.json
   strategy + targetModuleName + managedClaims + recoveryClaims
-
-<workspace-root>/.idea/reqws-vcs-ownership.json
-  stateVersion: 3 + workspaceId/rootFingerprint + generation/writerEpoch
-                  + stableMappings + pendingAdds + pendingRemovals
 
 ReqwsSynchronization PersistentStateComponent
   lastAppliedDigest（只供 UI/诊断，不授权删除或 reopen skip）
@@ -515,44 +512,41 @@ ReqwsSynchronization PersistentStateComponent
 - 路径以 workspace-relative 形式保存，读取时重新 containment 校验；
 - 不保存 repository URL、remote 或 Git credential；marker token 是本地随机 ownership nonce，不来自 manifest，也不是访问凭据；
 - planner 计算 `add / keep / remove-owned / conflict`；
-- 两个 ownership 文件均在 `.idea` 内使用同目录临时文件、原子替换、大小/版本/schema 校验和回读等值校验。Project Model 的下一份 intent 与 VCS 的 transition/pre-revoke 必须在对应平台 mutation 前验证；VCS final stable checkpoint 只在 mapping set 与 quiescence 之后发布。任一必需 checkpoint 失败都不得报告收敛或推进 digest，也不能退回只更新内存 PSC；
+- Project Model ownership 文件在 `.idea` 内使用同目录临时文件、原子替换、大小/版本/schema 校验和回读等值校验；下一份 intent 必须在对应平台 mutation 前验证。任一必需 checkpoint 失败都不得报告模型收敛或推进 digest，也不能退回只更新内存 PSC；
 - Project Model 每次 mutation 前写入下一份 managed + recovery claims；model transaction 后同 JVM 保留 recovery，使进程在任意终止点都留下可 cold-load 验证的 proof。只有进程重启后的 cold service 从 verified 文件和已序列化 target+marker 得出完整一致结论后才清理 recovery；legacy PSC 只迁移，不再参与写入顺序；
-- VCS state v3 在 add/remove 前先写入 pending；remove 前必须先从稳定 `CREATED` 权利移出并持久化 tombstone。只有当前 project-service writer epoch 确认 mapping set 成功后才能把 pending add 提升为 `CREATED`；任何 foreign service/JVM load 都把 persisted `CREATED` 降为 `BORROWED`，因为同形 plain Git mapping 不能跨 session 证明对象身份；cold-load 的 pending add/remove 同样不授权删除，宁可遗留 mapping；
-- 旧 atomic v2（只有 generation/root fingerprint）与 legacy VCS PSC v1 都只作为 migration input；`readForProject` 只解码并返回待迁移输入，不创建或改写 atomic 文件。迁移只能在当前 manifest workspaceId 已明确、trust/service-dispose 在 locked decode 后和 atomic replace 前再次通过的 ownership checkpoint 发布，旧 `CREATED` 按 foreign proof 降为 `BORROWED`。已存在但损坏、版本不支持、workspace/root identity 不匹配或回读失败的 atomic 文件必须 fail closed，不得 fallback 到 PSC 重新取得删除权；
-- 只删除上次由插件记录并且当前不再需要的条目；
-- 现存等价 exclude 或 VCS mapping 只标记为 borrowed，不变成可删除的 ReqWS-owned 条目；
+- 只删除上次由插件记录并且当前不再需要的 Project Model 条目；
+- 现存等价 exclude 只借用，不变成可删除的 ReqWS-owned 条目；
 - 用户手工修改使所有权不确定时，不做破坏性移除，状态转为 `DEGRADED` 并显示稳定诊断；
-- 不删除其他 module、SDK、library、source root、exclude 或 VCS mapping。
+- 不删除其他 module、SDK、library、source root 或 exclude；VCS mapping 无条件保持只读。
+
+未发布开发候选可能留下 `.idea/reqws-vcs-ownership.json` 或匹配 lock。它们不是当前状态源，不参与启动、诊断或删除判断；插件不读取、不迁移、不压缩，也不自动删除。这样避免用旧 state 重新取得任何 VCS 权利，同时保持用户磁盘工件可恢复。
 
 模型删除使用 verified managed/recovery claim + target entity + companion marker entity 三份可重建证据；任一证据不唯一或不能验证 filesystem identity 都不删除。recovery claim 不是仅凭文件字段即可转移的删除权，必须和同 token 的完整 model proof 一起解释；partial proof 必须冲突。状态只保存相对路径、marker nonce 和恢复元数据，不保存 repository URL 或完整 manifest。
 
 ## 10. VCS Mapping
 
-目标：每个有效活动仓库对应一个 Git directory mapping。
+目标：只读判断每个有效活动仓库是否已有精确的 Git directory mapping，并把需要用户处理的差异显示出来。
 
 算法：
 
-1. 从 validated manifest 得到目标 active repo paths，并在 apply 前按实时文件系统重新判定 present/missing/普通 `.git`；
-2. mapping change tracker 对每次已发布配置事件记录单调 revision 和对应完整 immutable snapshot；pending external 只代表最新已发布事件，不假定它比当前 live list 更新。后台规划只合入不同 directory 的 live-only 完整对象（包括 `rootSettings`）。pending-only 项或同 directory 的不等对象均无法由公开 API 判定为覆盖还是删除，必须等待对应 payload-less 事件；达到重试上限仍不明确时，在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复或保留 pending-only 项。随后进入 EDT 串行 write context 重新读取平台 canonical 列表，以完整 equality 与 revision 双重校验；任一变化都退出 EDT 并等待有界 quiescence 后重规划；
-3. 保留所有非 ReqWS-owned mappings；
-4. 对已有等价 Git mapping 标记为 `BORROWED`，不制造重复，也不取得删除权；
-5. 对缺失 active path 添加 `Git` mapping；
-6. 对已不活动且明确 owned 的 mapping，先把 stable claim 转成 `PENDING_REMOVE` tombstone 并 verified atomic 落盘，再尝试移除 mapping；失败宁可遗留无删除权的 mapping，不能遗留可误删的陈旧权利；
-7. 真正由本次 plugin apply 添加的 mapping 在平台 mutation 前先写 `PENDING_ADD`；这里的“新增”按 actual live → expected whole-list 的真实平台变化判断，不只看 planner `additions`。pending-only 的 expected-present/actual-absent 恢复属于不明外部状态，不尝试 restoration，也不写 `PENDING_ADD`。只有 mapping set、quiescence 和同步 write ack 都完成后，当前 project-service writer epoch 才能提升为 `CREATED`；foreign service/JVM load、本轮已观察到的 external event、snapshot mismatch 或 retry 都先把已有 `CREATED` 降为 `BORROWED`，不保留删除权。ownership transition/final checkpoint 共用首次 load 的 generation/writer-epoch fence 与跨进程 file lock，旧 plan 不得追上外部 generation。Settings writer 由 EDT 串行；已发布或再次读取时仍可见的 pooled auto-detect 变化由 revision/full-snapshot observer 触发 quiescent merge-retry；最终 verify 之后才到达的 external event 使 digest baseline dirty，并强制下一次 automatic reconcile 先降权再重规划；
-8. 通过公开 API刷新 Git repository manager；
-9. 验证 Git Tool Window 最终 root 集合。
+1. 从 validated manifest snapshot 得到 expected active repository paths；snapshot 已判定 missing 的条目在本 candidate 内保持 missing，present 条目在只读 VCS 检查前再次核对实时目录与普通 `.git`，从而避免用晚到磁盘变化让 Project Model 与 UI 对同一 candidate 得出相反结论；
+2. 从公开 API 读取完整 Directory Mappings，按 exact directory last-wins canonicalize，同时保留每个对象的 VCS 类型与完整 `rootSettings`；
+3. 对存在的活动 repository：精确 `Git` mapping 为 configured；没有精确 mapping 为 missing；同路径非 Git mapping 为 conflict。插件只报告，不添加、不替换；
+4. 对 workspace root 的直接子目录中，已从 manifest 移除、磁盘仍存在且带普通 `.git` 目录的 repository mapping，报告为 retained/review required，由用户决定是否在 Directory Mappings 中移除；不存在、普通目录或嵌套目录的额外 mapping 不据此误报 retained；
+5. workspace-root/default 的宽范围 Git mapping 单独报告为 review required；workspace 外、与 ReqWS repository 路径无关的额外或定制 mapping 不参与目标判断，始终保持原样；exact directory 重复项先按平台可观察的 last-wins 结果收口，仍指向同一 filesystem identity 的不同 alias 则作为 duplicate/conflict 提示；
+6. 发布 Project Model 状态与 VCS 配置诊断；没有差异时整体可显示 `SYNCHRONIZED`，存在差异时显示 `DEGRADED` 和 Settings → Version Control → Directory Mappings 手动步骤；
+7. VCS 配置事件使当前检查结果失效并提交后台复核；`Sync Now` 也强制重新读取当前 mappings，但两条路径都不调用 setter；
+8. 用户应用 GoLand Settings 后，以新的公开快照复核 Git Tool Window/Directory Mappings 结果。
 
-VCS mapping failure 不得回滚或删除用户 mapping。项目内容已经成功时，状态显示 `DEGRADED`，同一 digest 可通过自动或手动同步重试 VCS apply。
+生产不引用 `setDirectoryMappings`、`setDirectoryMapping` 或其他 mapping mutation API，不主动刷新或调用可能重写 Directory Mappings 的内部 detector，也不直接写 `.idea/vcs.xml`。因此 Settings、`ModuleVcsDetector` 或其他插件的并发更新不会被 ReqWS 的 whole-list writer 覆盖；读取与 payload-less event 竞态最多造成短暂旧诊断，下一事件或手动 `Sync Now` 会重新读取，而不会由 ReqWS 丢失 mapping 或 `rootSettings`。Project Model 更新仍可能使 GoLand 按用户的原生设置自行运行 auto-detection；插件不调用、不禁用也不把该平台行为宣称为自己的同步结果。
 
-插件自己添加的 mapping 记录为 `CREATED`，只有当前 project-service writer epoch 的 verified v3 stable claim 与当前唯一、精确、为 Git 且 `rootSettings` 为空的 mapping 同时成立时，才可在 repository 退出活动集合后删除；project reopen、foreign service/JVM load、observer 已观察到的 external event、snapshot mismatch、retry、用户改动或 mapping 消失都会撤销该资格并降为 `BORROWED`。`PENDING_REMOVE` 是已经撤权的 tombstone，cold load 不得据此继续删除；cold-load 的 `PENDING_ADD` 也不能提升为删除权，最多在重新核对后按非破坏性状态收敛。旧 atomic v2 与 legacy PSC v1 都只作为无写副作用的 migration input，并在受 gate 的下一 checkpoint 绑定当前 manifest workspaceId、以 `BORROWED` 发布旧 `CREATED`；已存在但不可验证的 atomic 文件禁止 fallback。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace identity 不匹配、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
-
-261/262 的公开项目级 mapping API 没有 compare-and-set、per-entry production mutation，也没有与后台 auto-detect 共享的公开锁。现有 revision/full-snapshot、平台 canonical form 和有界 quiescent merge-retry 只能保守处理已经可观察的变化：不同 directory 的 live-only 完整对象保留；pending-only 或同 directory 不等对象不猜测 winner，等待上限后零写入 fail closed；本轮观察到的 external/mismatch/retry 在继续前持久撤销 `CREATED`。它无法关闭这一确定窗口：ReqWS final read 得到 `A` 后，pooled `ModuleVcsDetector` 先把内部列表写成 `A+U`，尚未发布 payload-less event；ReqWS 随后整表写入 `A+R` 覆盖 `U`；迟到事件只能读取 `A+R`，因此未知 mapping 及其 `rootSettings` 已不可恢复。`setDirectoryMapping` 在两版均为 `@TestOnly`，内部 add/remove 也仍是 whole-list read-modify-write；仅放宽 internal API 禁令不能解决。故当前设计没有证明同时满足 GL-04、GL-06 与 GL-13，该窗口是 Draft / `NO-GO` 架构阻塞而非 GUI 残余。除非产品明确放宽自动 Git Root 收敛或用户 mapping 零丢失要求，或 JetBrains 提供稳定 CAS/共享序列化 API，否则不得把该评审线程标为 resolved。
+用户手动配置的标准流程是：在 Tool Window 核对缺失/待复核路径，打开 GoLand Settings → Version Control → Directory Mappings，为活动 repository 添加精确 `Git` mapping，并只按用户意图移除 retained mapping。应用后由配置事件自动复核；若事件丢失可使用 `Sync Now` 重新检查。插件不承诺也不尝试一次性清理旧 mapping。
 
 ## 11. VFS 监听与收敛
 
 Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target delete、move、rename、replace 和 content change 的组合。
 
-项目服务在所有 file-based project 上安装这个固定路径 watcher；manifest 不存在时只保持 inactive，不运行模型/VCS 同步，也不显示 Tool Window。监听器必须：
+项目服务在所有 file-based project 上安装这个固定路径 watcher；manifest 不存在时只保持 inactive，不运行 Project Model 同步或 VCS 复核，也不显示 Tool Window。监听器必须：
 
 - 在后台把 project root canonicalize 后，只关注 canonical manifest path 及直接父目录；
 - 支持 target create、delete、move、rename、replace 和 content change；
@@ -563,7 +557,8 @@ Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target de
 - 连续变化 latest-wins，只 apply 最新完整 candidate；
 - invalid candidate 保留上次有效模型；
 - manifest 恢复后自动清除可恢复错误；
-- “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 candidate；它不能因 clean digest 相同而跳过对实时模型、VCS 与文件系统状态的 reconcile。
+- “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 Project Model candidate、重新读取 VCS 与文件系统状态；VCS 阶段始终只读。
+- VCS configuration listener 只能在 callback 所需依赖全部初始化后注册；配置事件不读取 manifest 或 mapping，只提交一次后台复核。dispose 后不再接收或提交刷新。
 
 W3 必须用与 Desktop `writeJsonAtomically` 等价的脚本模拟连续替换、无效 JSON 恢复、100 次快速变化和 project dispose。
 
@@ -601,10 +596,13 @@ REPOSITORY_DUPLICATE
 REPOSITORY_PATH_INVALID
 REPOSITORY_PATH_ESCAPE
 REPOSITORY_MISSING
+REPOSITORY_NOT_GIT
 PROJECT_MODEL_APPLY_FAILED
-VCS_MAPPING_APPLY_FAILED
 OWNERSHIP_CONFLICT
 SAFE_MODE_BLOCKED
+VCS_CONFIGURATION_MISMATCH
+VCS_DIAGNOSTIC_FAILED
+GIT_PLUGIN_UNAVAILABLE
 ```
 
 错误码进入 Tool Window、测试和 diagnostics；普通通知应去重，避免同一 digest 重复弹窗。
@@ -620,12 +618,13 @@ Tool Window 名称：`ReqWS`。
 ```text
 Workspace: feature-login
 Branch: feature/login
-Status: Synchronized
+Status: Partially Available
 
 Repositories
 ✓ api          active
 ✓ web          active
 ! worker       directory missing
+! api          Git Root requires manual configuration
 
 Last applied: a1b2c3d4e5f6
 [Sync Now] [Open Manifest] [Copy Diagnostics]
@@ -640,12 +639,13 @@ Last applied: a1b2c3d4e5f6
 - `Open Manifest` 只打开固定路径的 manifest；
 - `Copy Diagnostics` 包含插件版本、GoLand build、strategy、digest、repository count、错误码和脱敏路径；
 - 不提供 add/remove、branch、Git 或 Desktop 控制按钮；
+- VCS 差异在仓库行或诊断摘要中显示 missing、conflict 或 retained/review required，并给出 Settings → Version Control → Directory Mappings 路径；不承诺新增跳转按钮；
 - 首次错误可显示 balloon，同一 digest 的重复错误只更新 Tool Window；
 - 插件文案使用 JetBrains resource bundle，不在 Kotlin UI 中散落硬编码字符串。
 - 面板按状态徽标、workspace 摘要、紧凑 repository rows、诊断摘要和操作区分层；repository rows 顶部对齐且高度固定，不随 viewport 拉伸；只有 repository 区域滚动。
 - 状态徽标保持内容宽度并靠右，不拉伸成整行边框；workspace 摘要使用独立卡片边界，并显示活动仓库数量。
 - repository 区域使用独立卡片：标题与 count 分列，列表高度按可见行数计算，行间有主题感知分隔线；1–6 行不显示滚动条，7 行起固定显示六行并只在卡片内部滚动，少量仓库时卡片不吞满整个 Tool Window 高度。
-- `Sync Now` 使用全宽主操作视觉，`Open Manifest File` 与 `Copy Diagnostics` 居中作为次级动作；业务行为、enable 规则和可访问名称保持不变。
+- `Sync Now` 使用全宽主操作视觉，`Open Manifest File` 与 `Copy Diagnostics` 居中作为次级动作；它只重放 Project Model reconcile 并重新检查 VCS，不自动修改 Directory Mappings。既有 enable 规则和可访问名称保持不变。
 - 状态色使用稳定的 JetBrains 主题颜色并始终伴随文字；浅色/深色主题、键盘焦点、窄 Tool Window、长 workspace/branch/repository name 和 tooltip 都进入 GUI 验收。
 - manifest 文本继续设置 `html.disable=true`，避免 Swing 把不可信值解释为 HTML；颜色、图标和截断不得削弱现有错误码、Safe Mode 提示或动作 enable 规则。
 
@@ -659,12 +659,14 @@ Safe Mode 下允许：
 
 Safe Mode 下禁止：
 
-- 修改 Content Root、module、exclude 或 VCS mapping；
+- 修改 Content Root、module 或 exclude；
 - 启动外部进程；
 - 自动执行 repository 内任何代码或构建工具；
 - 以插件代码把项目直接标记为 trusted。
 
 261 的 trust listener 带 `@Experimental`，生产实现不订阅它。插件只使用稳定的 `TrustedProjects.isProjectTrusted(project)`：有效 ReqWS project 在 `SAFE_MODE_BLOCKED` 期间以 1 秒间隔低频检查，观察到用户通过 JetBrains 原生流程完成信任后停止检查，并只向同一串行 coordinator 提交一次同步。项目 trusted、inactive 或 dispose 后没有常驻轮询；插件不会自行修改 trust。
+
+VCS Directory Mappings 在所有信任状态下都只读；trusted 只决定能否修改 ReqWS-owned Project Model 条目，不会为插件授予任何 VCS 写权限。
 
 ## 15. Go module 与 `go.work`
 
@@ -765,7 +767,7 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - parser、digest、size、duplicate、unknown field；
 - TypeScript/Kotlin 共同消费 versioned URL safety corpus；
 - root identity、relative path、Unicode、symlink escape；
-- planner、ownership、created/borrowed 和 conflict；
+- Project Model planner/ownership 与 VCS 只读 configured/missing/conflict/retained 分类；
 - debounce、single-flight、latest-wins 和 dispose；
 - diagnostics redaction。
 
@@ -776,16 +778,16 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - target/companion marker 成对增删、state reload 和独立 JPS exclude 序列化契约；真实 IDE close/reopen 仍由 GUI 覆盖；
 - `.idea/reqws-managed-project-model.json` 的 verified atomic write/readback、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
-- VCS mapping merge/borrow/remove-created；
-- `.idea/reqws-vcs-ownership.json` v3 的 workspaceId/root fingerprint binding、generation/writer epoch plan fence、独立 OS file lock、pending add/remove、remove-before tombstone、写入失败无平台 mutation，以及 cold pending/foreign `CREATED` 永不授权删除；旧 atomic v2 只读迁移且旧 `CREATED` 降为 `BORROWED`；两个 service/JVM 从同一 generation 通过 barrier 同时争锁时最多一个提交，外部 writer 插入 transition/final 之间时旧 plan 失败；只有实际 plugin add 才会在 mutation 前写 pending add，pending-only external 恢复不尝试写入；
-- legacy VCS PSC read path 不产生 atomic file 写副作用；迁移提交覆盖 decode 后到 locked atomic replace 前 trust/dispose 翻转的零 state/mapping 写入；
-- expected/set/self-event/quiescence 使用平台 last-wins + directory sort canonical form；反序 active repositories 与已有高排序 user mapping 不能制造假 external event 或把新建 mapping 降为 `BORROWED`；只有当前 plugin write 的同步回调可判为 self-event，延迟的相同列表回调仍是 external；
-- final EDT equality-check/set 与用户 Settings writer 串行；mapping revision/full-snapshot 测试以独立 pooled writer 的可观察反序时序覆盖 final-read 前后变化，并把 live mutation 与 payload-less event 发布拆成可控阶段；不同 directory 的未发布 live-only mapping/rootSettings 必须被完整保留，pending-only 或同 directory 对象冲突在事件到达前零写入，持续 revision churn 时不得写 stable ownership；任何已观察 external/mismatch/retry 都撤销 `CREATED`，更晚 external event 必须使 digest baseline dirty并强制 automatic reconcile；另以“内部 mutation 位于 final read 与 ReqWS set 之间、event 位于覆盖之后”的负向时序固定公开 API 架构阻塞，不得用其余绿色用例推断未知 mapping 可恢复；
-- user module/root/mapping preservation；
+- VCS configured/missing/wrong-VCS/retained 分类，以及无关 default/extra/custom `rootSettings` mapping 不影响 Project Model 同步；
+- trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh 与 `Sync Now` 的 ReqWS 生产调用链均没有 mapping setter、直接 `.idea/vcs.xml` 或 VCS ownership state 写入；Project Model 引发的 GoLand 原生 auto-detection 单独归因；
+- VCS 配置事件自动触发复核；同步 registration callback、并发事件、dispose 和丢事件后的 `Sync Now` 只读恢复；
+- 用户 Settings writer、`ModuleVcsDetector` 或其他插件并发改变 mappings 时，ReqWS 只更新诊断，不覆盖 mapping 或 `rootSettings`；
+- 旧 `.idea/reqws-vcs-ownership.json` 与 lock 保持 inert、不读取、不迁移、不自动删除；
+- user module/root preservation 与全部 VCS mapping preservation；
 - Safe Mode gate；
-- trust/dispose 在 model transaction 和每个 VCS/ownership commit boundary 翻转时 fail closed；
+- trust/dispose 在 model transaction boundary 翻转时 fail closed；VCS 读取无 mutation boundary；
 - malformed manifest no mutation；
-- model/VCS failure recovery。
+- model failure recovery 与 VCS 读取/诊断恢复。
 
 ### 17.4 真实 macOS GUI
 
@@ -793,6 +795,7 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - 从 Desktop 打开 GoLand；
 - first trust flow；
 - Project、Search、Git Tool Window；
+- 按 Tool Window 提示在 Settings → Version Control → Directory Mappings 手动添加活动 Git Roots、复核 retained mapping，并确认配置事件自动更新状态；
 - add repo-c、remove repo-b、re-add repo-b；
 - Go completion/navigation/test/debug；
 - restart、Desktop not running、plugin disable/enable/reinstall；
@@ -841,9 +844,10 @@ Desktop 继续使用现有 `ReqwsError` payload；GoLand 启动失败只增加�
 | root mismatch / path escape | 全量拒绝本次 candidate。 |
 | 单个活动目录缺失 | 不创建目录；同步其他有效仓库并标记 degraded。 |
 | 项目模型更新失败 | 使用平台事务保证不提交部分 model 变更，记录 error。 |
-| VCS 更新失败 | 保留成功项目内容，状态 degraded，同 digest 可重试。 |
+| VCS 读取失败 | 保留成功项目内容与用户配置，状态 degraded；配置事件或 Sync Now 重新读取。 |
 | VFS 丢事件 / Mac sleep | 手动 Sync Now；reopen 自动恢复。 |
-| plugin ownership state 损坏 | 从 manifest 与当前 model 进入保守恢复，不批量删除 unknown entries。 |
+| Project Model ownership state 损坏 | 从 manifest 与当前 model 进入保守恢复，不批量删除 unknown entries。 |
+| 旧 VCS ownership/lock 存在 | 视为 inert 文件；不读取、不迁移、不自动删除，也不据此修改 mapping。 |
 | Desktop 未运行 | 插件继续只读和冷启动，不受影响。 |
 | 插件未安装 | Desktop 仍可打开 root，但不承诺受管隔离；指南明确安装要求。 |
 | GoLand launcher 失败 | Desktop 返回稳定错误，不静默切换到不可信 PATH executable。 |

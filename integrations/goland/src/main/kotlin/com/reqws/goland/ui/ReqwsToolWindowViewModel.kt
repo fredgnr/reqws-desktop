@@ -3,6 +3,9 @@ package com.reqws.goland.ui
 import com.reqws.goland.manifest.RepositoryAvailability
 import com.reqws.goland.project.ReqwsLifecycleState
 import com.reqws.goland.project.ReqwsProjectState
+import com.reqws.goland.project.ReqwsStableErrorCode
+import com.reqws.goland.vcs.VcsRepositoryStatus
+import com.reqws.goland.vcs.VcsWorkspaceDiagnosticCode
 
 data class ReqwsRepositoryViewModel(
   val name: String,
@@ -28,6 +31,7 @@ data class ReqwsToolWindowViewModel(
   val repositories: List<ReqwsRepositoryViewModel>,
   val digest: String?,
   val errorCode: String?,
+  val vcsDiagnosticCode: String?,
   val preservedSnapshot: Boolean,
   val syncEnabled: Boolean,
   val openManifestEnabled: Boolean,
@@ -37,6 +41,20 @@ data class ReqwsToolWindowViewModel(
     fun from(state: ReqwsProjectState): ReqwsToolWindowViewModel {
       val snapshot = state.snapshot
       val lifecycle = state.lifecycle
+      val vcsInspection = state.vcsInspection
+      val repositoryVcsStatuses = vcsInspection
+        ?.repositoryStatuses
+        .orEmpty()
+        .associate { it.repositoryIndex to it.status }
+      val showVcsDiagnostics = lifecycle == ReqwsLifecycleState.SYNCHRONIZED ||
+        lifecycle == ReqwsLifecycleState.DEGRADED
+      val vcsDiagnosticCode = vcsInspection?.stableErrorCode().takeIf {
+        showVcsDiagnostics
+      }
+      val gitIntegrationUnavailable = vcsInspection?.workspaceDiagnostics.orEmpty()
+        .contains(VcsWorkspaceDiagnosticCode.GIT_PLUGIN_UNAVAILABLE)
+      val inspectionFailed = vcsInspection?.workspaceDiagnostics.orEmpty()
+        .contains(VcsWorkspaceDiagnosticCode.INSPECTION_FAILED)
       return ReqwsToolWindowViewModel(
         visible = lifecycle != ReqwsLifecycleState.DISPOSED &&
           (snapshot != null ||
@@ -44,28 +62,47 @@ data class ReqwsToolWindowViewModel(
         workspaceName = snapshot?.manifest?.name,
         featureBranch = snapshot?.manifest?.featureBranch,
         statusKey = lifecycle.resourceKey(),
-        statusDetailKey = if (lifecycle == ReqwsLifecycleState.SAFE_MODE_BLOCKED) {
-          "message.safeModeHint"
-        } else {
-          null
+        statusDetailKey = when {
+          lifecycle == ReqwsLifecycleState.SAFE_MODE_BLOCKED -> "message.safeModeHint"
+          showVcsDiagnostics && gitIntegrationUnavailable ->
+            "message.vcsGitIntegrationUnavailable"
+          showVcsDiagnostics && inspectionFailed -> "message.vcsInspectionFailed"
+          showVcsDiagnostics && vcsInspection?.requiresManualConfiguration == true ->
+            "message.vcsManualConfigurationRequired"
+          else -> null
         },
         statusTone = lifecycle.statusTone(),
-        repositories = snapshot?.repositories.orEmpty().map { repository ->
+        repositories = snapshot?.repositories.orEmpty().mapIndexed { index, repository ->
+          val vcsStatus = repositoryVcsStatuses[index]
           ReqwsRepositoryViewModel(
             name = repository.repository.name,
-            statusKey = when (repository.availability) {
-              RepositoryAvailability.PRESENT -> "repository.active"
-              RepositoryAvailability.MISSING -> "repository.missing"
+            statusKey = when {
+              repository.availability == RepositoryAvailability.MISSING ||
+                vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> "repository.missing"
+              gitIntegrationUnavailable || inspectionFailed -> "repository.gitStatusUnavailable"
+              vcsInspection != null && vcsStatus == null -> "repository.gitStatusUnavailable"
+              vcsStatus == VcsRepositoryStatus.NOT_GIT -> "repository.notGit"
+              vcsStatus == VcsRepositoryStatus.NOT_CONFIGURED -> "repository.gitRootMissing"
+              vcsStatus == VcsRepositoryStatus.WRONG_VCS ||
+                vcsStatus == VcsRepositoryStatus.DUPLICATE -> "repository.gitRootConflict"
+              else -> "repository.active"
             },
-            statusTone = when (repository.availability) {
-              RepositoryAvailability.PRESENT -> ReqwsStatusTone.SUCCESS
-              RepositoryAvailability.MISSING -> ReqwsStatusTone.WARNING
+            statusTone = when {
+              repository.availability == RepositoryAvailability.MISSING ||
+                vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> ReqwsStatusTone.WARNING
+              gitIntegrationUnavailable || inspectionFailed -> ReqwsStatusTone.WARNING
+              vcsInspection != null && vcsStatus == null -> ReqwsStatusTone.WARNING
+              vcsStatus == VcsRepositoryStatus.CONFIGURED || vcsInspection == null ->
+                ReqwsStatusTone.SUCCESS
+              else -> ReqwsStatusTone.WARNING
             },
           )
         },
         digest = state.lastAppliedDigest?.take(DIGEST_DISPLAY_LENGTH),
         errorCode = state.lastError?.code,
-        preservedSnapshot = state.lastError != null && snapshot != null,
+        vcsDiagnosticCode = vcsDiagnosticCode,
+        preservedSnapshot = lifecycle == ReqwsLifecycleState.ERROR &&
+          state.lastError != null && snapshot != null,
         syncEnabled = lifecycle != ReqwsLifecycleState.INACTIVE &&
           lifecycle != ReqwsLifecycleState.READING &&
           lifecycle != ReqwsLifecycleState.DISPOSED,

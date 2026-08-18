@@ -63,66 +63,6 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
-  fun `external invalidation racing with an in-flight apply forces automatic same digest replay`() =
-    runBlocking {
-      val firstApplyStarted = CompletableDeferred<Unit>()
-      val releaseFirstApply = CompletableDeferred<Unit>()
-      val attempts = mutableListOf<String>()
-      val events = eventChannel()
-      val coordinator = coordinator(
-        scope = this,
-        events = events,
-        apply = { candidate ->
-          if (attempts.isEmpty()) {
-            firstApplyStarted.complete(Unit)
-            releaseFirstApply.await()
-          }
-          attempts += candidate.value
-        },
-      )
-
-      coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC)
-      firstApplyStarted.await()
-      coordinator.invalidateAppliedDigest()
-      coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC)
-      releaseFirstApply.complete(Unit)
-      assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
-      val replay = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
-
-      assertEquals(SyncTrigger.AUTOMATIC, replay.trigger)
-      assertEquals(listOf("a", "a"), attempts)
-      assertEquals("a", coordinator.lastAppliedDigest)
-      coordinator.close()
-    }
-
-  @Test
-  fun `external invalidation survives a read failure until the next valid automatic candidate`() =
-    runBlocking {
-      val attempts = mutableListOf<String>()
-      val events = eventChannel()
-      val coordinator = coordinator(
-        scope = this,
-        events = events,
-        apply = { candidate -> attempts += candidate.value },
-      )
-
-      coordinator.offer(candidate("a"))
-      assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
-      coordinator.invalidateAppliedDigest()
-      coordinator.offerReadFailure(
-        cause = IllegalArgumentException("temporary read failure"),
-        digestSha256 = "invalid",
-      )
-      assertEvent<SyncCoordinatorEvent.Failed>(events, "invalid")
-      coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC)
-      val replay = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
-
-      assertEquals(SyncTrigger.AUTOMATIC, replay.trigger)
-      assertEquals(listOf("a", "a"), attempts)
-      coordinator.close()
-    }
-
-  @Test
   fun `a failed manual reconciliation dirties the baseline for automatic recovery`() = runBlocking {
     val attempts = mutableListOf<String>()
     var failManualReconciliation = false

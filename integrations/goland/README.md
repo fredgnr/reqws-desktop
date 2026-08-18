@@ -1,6 +1,6 @@
 # ReqWS GoLand Plugin
 
-This Gradle project builds the local-only ReqWS plugin that projects a Desktop-owned workspace manifest into GoLand without writing the manifest or running Git lifecycle commands.
+This Gradle project builds the local-only ReqWS plugin that projects a Desktop-owned workspace manifest into GoLand, observes Git Root configuration, and never writes the manifest, VCS Directory Mappings, or Git lifecycle state.
 
 ## Compatibility and toolchain
 
@@ -48,7 +48,9 @@ cd integrations/goland
 
 For the real application, build the ZIP and in GoLand choose Settings → Plugins → the gear menu → Install Plugin from Disk, select the generated ZIP, and restart when prompted. The plugin is unsigned and is not published to JetBrains Marketplace or a custom repository.
 
-Open a directory that contains `.reqws/workspace.json`, or use ReqWS Desktop's GoLand action. In Safe Mode the plugin only reads and displays diagnostics. After the user trusts the project through GoLand's native flow, the plugin performs one synchronization. The ReqWS Tool Window provides status, repository rows, Sync Now, Open Manifest and redacted diagnostics.
+Open a directory that contains `.reqws/workspace.json`, or use ReqWS Desktop's GoLand action. In Safe Mode the plugin only reads and displays diagnostics. After the user trusts the project through GoLand's native flow, the plugin synchronizes the ReqWS-owned project model and compares the expected active repositories with the current VCS Directory Mappings. Missing or stale Git Roots remain a manual GoLand setting; `Sync Now` only rechecks them. A VCS configuration event triggers the same read-only check automatically. The ReqWS Tool Window provides status, repository rows, Sync Now, Open Manifest and redacted diagnostics.
+
+To configure Git Roots, open Settings → Version Control → Directory Mappings, add each active repository directory as `Git`, and remove a retained repository mapping only when that matches the user's intent. Apply the settings, then wait for the Tool Window to refresh or choose Sync Now. The plugin never changes unrelated mappings or `rootSettings`.
 
 The illustrated [GoLand plugin user guide](../../docs/guides/goland-plugin-guide.md) explains installation, project trust, every Tool Window region and action, lifecycle states, normal add/remove/re-add behavior, and safe troubleshooting.
 
@@ -56,8 +58,9 @@ The illustrated [GoLand plugin user guide](../../docs/guides/goland-plugin-guide
 
 - ReqWS Desktop is the only manifest writer; the plugin treats the file as untrusted, read-only input.
 - Manifest schema v1 and safe paths stay aligned through shared golden fixtures; TypeScript and Kotlin both consume the versioned repository URL safety corpus.
-- The selected project-model strategy preserves the existing workspace-root Content Root. Every plugin-created target exclude for `.reqws` or a retained Git repository has a virtual companion marker exclude plus a state-v2 relative-path/token claim; deletion requires the unique state claim, target and marker to agree. Existing equivalent excludes are borrowed.
-- Existing equivalent VCS mappings are borrowed; only mappings created and still provably owned by ReqWS may be removed.
+- The selected project-model strategy preserves the existing workspace-root Content Root. Every plugin-created target exclude for `.reqws` or a retained Git repository has a virtual companion marker exclude plus a verified relative-path/token claim; deletion requires the unique state claim, target and marker to agree. Existing equivalent excludes are borrowed.
+- VCS Directory Mappings are entirely user/GoLand owned. Production code only reads them and listens for configuration changes; it never invokes a mapping mutation API or writes `.idea/vcs.xml`. GoLand may still apply its own native auto-detection policy, which the plugin neither invokes nor suppresses.
+- Any `.idea/reqws-vcs-ownership.json` or matching lock file left by an unpublished development build is inert. The plugin neither consults nor migrates it and does not remove it automatically.
 - The plugin does not clone, fetch, checkout, delete directories, modify `go.work`, access repository URLs, or launch external processes.
 - Production code must not use JetBrains `@Internal`, `@Experimental`, reflection or private APIs.
 
