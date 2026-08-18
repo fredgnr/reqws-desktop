@@ -349,6 +349,14 @@ class IntellijVcsMappingAdapterTest {
           assertEquals(1L, userWriteFinished.count)
         }
       },
+      onAwaitQuiescence = { call ->
+        if (call == 1) {
+          // The ownership assertion below intentionally covers an external event observed by this
+          // apply. Without this latch, the queued writer may legally finish after apply returns,
+          // leaving eventual reconciliation to the production service listener.
+          assertTrue(userWriteFinished.await(5, TimeUnit.SECONDS))
+        }
+      },
     )
     var recorded = emptyList<VcsMappingOwnership>()
 
