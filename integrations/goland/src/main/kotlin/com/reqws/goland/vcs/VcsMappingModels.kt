@@ -17,6 +17,21 @@ internal data class VcsMappingOwnership(
   val kind: VcsMappingOwnershipKind,
 )
 
+/**
+ * A durable transition tombstone. It deliberately carries no deletion authority: only the live
+ * apply that created the random operation token may finish its already-validated mapping write.
+ */
+internal data class VcsMappingPendingOwnership(
+  val relativeDirectory: String,
+  val operationToken: String,
+)
+
+internal data class VcsMappingOwnershipState(
+  val stableMappings: List<VcsMappingOwnership>,
+  val pendingAdds: List<VcsMappingPendingOwnership> = emptyList(),
+  val pendingRemovals: List<VcsMappingPendingOwnership> = emptyList(),
+)
+
 internal enum class DesiredVcsRootAvailability {
   PRESENT_GIT,
   MISSING,
@@ -105,15 +120,27 @@ internal data class VcsMappingApplyResult(
   val refreshed: Boolean,
 )
 
+internal data class VersionedVcsMappings(
+  val revision: Long,
+  val mappings: List<com.intellij.openapi.vcs.VcsDirectoryMapping>,
+  val quiescent: Boolean = true,
+  val pendingExternal: ExternalVcsMappings? = null,
+)
+
+internal data class ExternalVcsMappings(
+  val revision: Long,
+  val mappings: List<com.intellij.openapi.vcs.VcsDirectoryMapping>,
+)
+
 internal fun interface VcsMappingOwnershipRecorder {
   /**
-   * Performs any path validation and returns a pure in-memory commit prepared for the supplied
-   * ownership. The adapter invokes this before entering the serialized VCS mapping write context.
+   * Returns a commit for one immutable ownership phase. The adapter invokes persistence only on
+   * its background caller, and prepares the final phase after the transition phase has completed.
    */
-  fun prepare(ownership: List<VcsMappingOwnership>): VcsMappingOwnershipCommit
+  fun prepare(state: VcsMappingOwnershipState): VcsMappingOwnershipCommit
 }
 
 internal fun interface VcsMappingOwnershipCommit {
-  /** Must update in-memory ownership synchronously without filesystem access. */
-  fun commit()
+  /** Must atomically persist and strictly read back the prepared state outside EDT. */
+  fun persistAndVerify()
 }

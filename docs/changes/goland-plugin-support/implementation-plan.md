@@ -177,12 +177,12 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 | 工作包 | 目标 | 当前状态 |
 |---|---|---|
-| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；前序候选对 261/262 Verifier 均为 Compatible，当前修复候选仍待 fresh Verifier，exact-head 报告待 GUI 后形成。 |
+| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；当前修复候选对 GO-261.25134.147 / GO-262.8665.270 fresh Verifier 均为 Compatible，exact-head 报告待 GUI 后形成。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
-| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B 并实现 state v3 + pending add/remove journal + companion-marker owned-exclude adapter；v2 migration、异常窗口与 JPS serialization 自动化已覆盖，真实 IDE reopen 待 GUI。 |
+| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
 | W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现/test。 |
-| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS、EDT final equality/set 串行提交、安全 GoLand launcher、Desktop/Renderer 回归已通过；后台 auto-detect 竞争与真实启动待 GUI。 |
-| W5 | 完成功能、规模和安全验证 | 当前 Desktop/插件自动化、结构检查与插件 ZIP 已通过；fresh 261/262 Verifier、GUI、Go 功能、reopen 和规模证据仍未完成。 |
+| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS 改用 verified atomic v2 pending/tombstone，并以 mapping revision/full-snapshot quiescent merge-retry 同时覆盖 Settings 与 pooled auto-detect writer；安全 GoLand launcher 已实现，最终自动化与真实启动待验证。 |
+| W5 | 完成功能、规模和安全验证 | 当前 Desktop/插件自动化、结构检查、插件 ZIP 与 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen 和规模证据仍未完成。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -277,7 +277,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 ### 8.3 EXP-02B：workspace root + owned excludes（已选择）
 
-B 保留默认 workspace-root Content Root，只排除 `.reqws` 和 root 直接子级中已确认的非活动 Git repository，不排除普通未知目录。每个新 target exclude 在同一 Workspace Model transaction 中增加一个指向虚拟 `.reqws/.goland-ownership/<128-bit-token>` 的 companion marker exclude；persistent state v3 保存 module、workspace-relative target、token 与 `OWNED / PENDING_ADD / PENDING_REMOVE` phase，并兼容 v2 stable state。新增前先保存 token intent，删除前先保存降级后的 stable 删除权；model commit 后仍以 pending 再保存一次，完整复核后才保存 stable，因此异常或冷加载后只凭 target+marker 完整 proof 完成/撤销 journal。已有等价用户 exclude 只借用，任何 partial、重复、跨 phase 或物理 marker namespace 冲突均保守失败。
+B 保留默认 workspace-root Content Root，只排除 `.reqws` 和 root 直接子级中已确认的非活动 Git repository，不排除普通未知目录。每个新 target exclude 在同一 Workspace Model transaction 中增加一个指向虚拟 `.reqws/.goland-ownership/<128-bit-token>` 的 companion marker exclude；权威 ownership 位于 `.idea/reqws-managed-project-model.json`，以同目录临时文件、原子替换和回读校验发布。每次 model mutation 前先保存下一份 managed + recovery claims；同一 JVM 不清 recovery，进程重启后的 cold load 若 target+marker pair 仍完整就保留 recovery 并完成删除，只有两者都不存在时才压缩恢复信息。旧 PSC v2/v3 仅在 atomic 文件不存在时迁移。已有等价用户 exclude 只借用，任何 partial、重复、跨集合或物理 marker namespace 冲突均保守失败。
 
 ### 8.4 EXP-02C：每活动仓库一个 module（未执行）
 
@@ -292,9 +292,9 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - ownership state；
 - `add / keep / remove-owned / conflict` planner；
 - write transaction；
-- persistent state；
-- state reload、独立 JPS serialization contract 与 reopen recovery；
-- post-commit trust/dispose 的 pending journal recovery、v2 migration 与 remove/re-add new-token recovery；
+- `.idea/reqws-managed-project-model.json` verified atomic store；
+- legacy PSC migration、atomic state reload、独立 JPS serialization contract 与 reopen recovery；
+- pre-mutation managed/recovery 落盘、同 JVM recovery 保留、post-commit trust/dispose 与 remove/re-add new-token recovery；
 - user-owned entries preservation；
 - ownership conflict 的保守失败。
 
@@ -303,7 +303,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 选择符合 active 技术方案所有权/API 门禁并最终通过完整验收矩阵的策略；
 - 形成唯一 production `ProjectModelAdapter`；
 - 未选 spike 代码、依赖和配置已删除；
-- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、state v3 pending recovery、v2 migration、cold state reload 与 JPS serialization；真实 GoLand reopen 由 GUI 补足；
+- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、verified atomic 发布/回读失败、legacy PSC migration、同 JVM recovery 保留、cold state reload 与 JPS serialization；真实 GoLand reopen 由 GUI 补足；
 - 用户无关 module/root 不丢失；
 - retained repo 不进入默认项目内容；
 - Plugin Verifier 无禁止 API；
@@ -362,10 +362,10 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 实现：
 
 - 读取现存 VCS mappings；
-- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；后台规划后在 EDT closure 内执行 final 完整 equality（含 root settings）与整表 set，Settings writer 不能插入其间；mappings 变化时退出 EDT 有界重规划，不稳定则在 mapping/ownership 写入前失败；
+- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；pooled auto-detect 的外部 revision/snapshot 也会被合入下一轮有界 quiescent 重规划，持续不稳定则 fail closed；
 - 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
 - 添加缺失 active mappings；
-- 新增 mapping 只在平台提交成功后记录为 `CREATED`；移除仍能精确验证 ownership 的 inactive mapping 前先持久撤销删除权；
+- `.idea/reqws-vcs-ownership.json` v2 以 verified atomic write 保存 stable、pending add 与 pending remove；新增前先写 pending，只有同 JVM 平台提交成功后才记录为 `CREATED`；移除前先持久化已撤权 tombstone，cold pending 永不授权删除；legacy PSC v1 只在 atomic 文件不存在时迁移，atomic 文件存在但不可验证时禁止 fallback；
 - 保留用户 mapping；
 - workspace 内额外/root mapping 保留并进入 degraded，stale `CREATED` 删除权在 mapping 消失时丢弃；
 - path identity normalization；
@@ -374,7 +374,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - Git repository manager refresh；
 - Tool Window 展示 model/VCS 分层状态。
 
-261 public API 没有 mapping CAS，也不暴露后台 auto-detect 使用的内部锁；EDT 方案关闭用户 Settings Apply 窗口，但后台 scanner 的残余竞争必须在 exact-head GUI 中单独验证和记录。
+261 public API 没有 mapping CAS，也不暴露后台 auto-detect 使用的内部锁，因此 production 以公开 `VCS_CONFIGURATION_CHANGED` 的 revision/完整 snapshot capture 建立乐观并发协议；更晚 external event 使 digest baseline dirty 并强制 automatic reconcile。自动化用独立 pooled writer 的两种反序时序证明不会静默丢未知 mapping/`rootSettings`；exact-head GUI 仍验证真实平台事件和 Git UI，但不把后台 scanner 竞态降级为仅 GUI 才处理的残余风险，也不宣称平台级线性化。
 
 ### 10.3 Desktop
 
@@ -411,6 +411,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - active repository Git roots 与 manifest 一致；
 - retained repository 不在 Git roots；
 - 用户 mapping 不丢失；
+- verified atomic VCS state 在失败窗口不授予陈旧删除权，cold pending 不删除 mapping；
+- Settings 与独立 pooled writer 的两种反序时序都由 revision/full-snapshot merge-retry 保留未知 mapping 和 `rootSettings`，更晚 external event 会强制 automatic reconcile；
 - Tool Window 能区分 model 与 VCS degraded；
 - Desktop 相关全量测试通过。
 

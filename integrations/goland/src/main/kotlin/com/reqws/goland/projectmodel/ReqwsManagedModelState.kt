@@ -6,8 +6,9 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.StoragePathMacros
 
-internal const val REQWS_MODEL_STATE_VERSION = 3
+internal const val REQWS_MODEL_STATE_VERSION = 4
 internal const val REQWS_LEGACY_MODEL_STATE_VERSION = 2
+internal const val REQWS_LEGACY_JOURNAL_STATE_VERSION = 3
 internal const val REQWS_MODEL_STRATEGY = "workspace-root-excludes"
 
 internal data class ManagedExcludeOwnership(
@@ -22,6 +23,7 @@ internal data class ManagedModelOwnership(
   val managedExcludes: List<ManagedExcludeOwnership>,
   val pendingAdds: List<ManagedExcludeOwnership>,
   val pendingRemovals: List<ManagedExcludeOwnership>,
+  val recoveryClaims: List<ManagedExcludeOwnership>,
 )
 
 @Service(Service.Level.PROJECT)
@@ -47,6 +49,7 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
     var managedExcludes: MutableList<PersistedManagedExclude> = mutableListOf()
     var pendingAdds: MutableList<PersistedManagedExclude> = mutableListOf()
     var pendingRemovals: MutableList<PersistedManagedExclude> = mutableListOf()
+    var recoveryClaims: MutableList<PersistedManagedExclude> = mutableListOf()
 
     internal fun deepCopy(): Data = Data().also { copy ->
       copy.stateVersion = stateVersion
@@ -55,6 +58,7 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
       copy.managedExcludes = managedExcludes.map { it.deepCopy() }.toMutableList()
       copy.pendingAdds = pendingAdds.map { it.deepCopy() }.toMutableList()
       copy.pendingRemovals = pendingRemovals.map { it.deepCopy() }.toMutableList()
+      copy.recoveryClaims = recoveryClaims.map { it.deepCopy() }.toMutableList()
     }
   }
 
@@ -91,6 +95,12 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
         markerToken = persisted.markerToken,
       )
     },
+    recoveryClaims = data.recoveryClaims.map { persisted ->
+      ManagedExcludeOwnership(
+        relativePath = persisted.relativePath,
+        markerToken = persisted.markerToken,
+      )
+    },
   )
 
   @Synchronized
@@ -99,12 +109,36 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
     managedExcludes: Map<String, String>,
     pendingAdds: Map<String, String> = emptyMap(),
     pendingRemovals: Map<String, String> = emptyMap(),
+    recoveryClaims: Collection<ManagedExcludeOwnership> = emptyList(),
   ) {
     data = Data().also { next ->
+      // This mutator remains only for v2/v3 migration tests and old persisted state. Production
+      // ownership is written through VerifiedManagedModelStateRepository and mirrored below.
+      next.stateVersion = REQWS_LEGACY_JOURNAL_STATE_VERSION
       next.targetModuleName = moduleName
       next.managedExcludes = persistedClaims(managedExcludes)
       next.pendingAdds = persistedClaims(pendingAdds)
       next.pendingRemovals = persistedClaims(pendingRemovals)
+      next.recoveryClaims = persistedClaims(recoveryClaims)
+    }
+  }
+
+  @Synchronized
+  internal fun replaceExternalMirror(
+    moduleName: String,
+    managedClaims: Collection<DurableManagedClaim>,
+    recoveryClaims: Collection<DurableManagedClaim>,
+  ) {
+    data = Data().also { next ->
+      next.targetModuleName = moduleName
+      next.managedExcludes = persistedClaims(
+        managedClaims.associate { claim -> claim.relativePath to claim.markerToken },
+      )
+      next.recoveryClaims = persistedClaims(
+        recoveryClaims.map { claim ->
+          ManagedExcludeOwnership(claim.relativePath, claim.markerToken)
+        },
+      )
     }
   }
 
@@ -118,4 +152,16 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
         }
       }
       .toMutableList()
+
+  private fun persistedClaims(
+    claims: Collection<ManagedExcludeOwnership>,
+  ): MutableList<PersistedManagedExclude> = claims
+    .sortedWith(compareBy(ManagedExcludeOwnership::relativePath, ManagedExcludeOwnership::markerToken))
+    .map { claim ->
+      PersistedManagedExclude().also { persisted ->
+        persisted.relativePath = claim.relativePath
+        persisted.markerToken = claim.markerToken
+      }
+    }
+    .toMutableList()
 }

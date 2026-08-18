@@ -418,10 +418,10 @@ DISPOSED
 - VFS listener callback 不做阻塞 IO；
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
-- VCS mapping 的文件系统身份与候选 plan 在后台计算；最终完整 mapping equality 检查、ownership 提交和整表 `setDirectoryMappings` 在 EDT 的同一串行 closure 内执行，避免 Settings writer 在 final read/set 之间插入；
+- VCS mapping 的文件系统身份、候选 plan 与 verified atomic ownership checkpoint 都在后台执行；EDT closure 只做最终完整 mapping equality/revision gate 和整表 `setDirectoryMappings`，避免 Settings writer 在 final read/set 之间插入且不把文件 IO 带上 EDT。项目级 mapping change tracker 同时维护单调 revision 与待确认的完整 external snapshot，用来恢复不走 EDT 的 pooled auto-detect writer 并进入有界 quiescent merge-retry；
 - trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿两层投影；Workspace Model transaction 的写入/提交边界、VCS ownership pre-revoke、mapping set、最终 ownership record、refresh 后以及 overall digest 前都重新 gate；事务内翻转通过异常回滚；
-- Workspace Model 与 persistent ownership 不是同一事务，因此模型 state v3 使用 `OWNED / PENDING_ADD / PENDING_REMOVE` 恢复 journal：新增 target+marker 前先持久化 token intent，删除前先把 stable claim 降级为 pending removal；顺序固定为 pending + old model 持久化、model transaction、仍为 pending + new model 持久化、完整复核后再提升 stable，必要时持久化最终 stable；model 提交后的 trust/dispose gate 失败只保留 pending phase，不推进 digest；
-- 下次 trusted sync 或冷启动根据同一 relative path/token 检查 target 与 marker：两者同时存在时完成或重放精确操作，两者同时不存在时清理已完成 journal，partial、重复或跨阶段冲突均 fail closed；
+- Workspace Model 与 ownership 文件不是同一事务，因此模型 authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界；legacy `PersistentStateComponent` 只作为一次迁移来源，不再承担 mutation journal 的 durability；
+- 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
 - Tool Window view model 转 Swing component 在 EDT 更新；
 - 同一项目最多一个 apply；pending 只保存最新 candidate。
 
@@ -480,7 +480,7 @@ Workspace Model 不持久化单个 exclude 的自定义 entity-source tag，因�
 <workspace-root>/.reqws/.goland-ownership/<32-lowercase-hex-random-token>
 ```
 
-marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Content Root 的 entity source，从而由标准 `.iml` exclude 序列化保存；插件不在磁盘创建 marker directory 或文件。persistent state v3 保存 target module、workspace-relative target、128-bit random marker token 和 stable/pending phase，并兼容读取既有 v2 stable state。删除权必须同时由有效 stable 或精确 pending claim、唯一 target entity 和唯一 marker entity 三者证明，target 与 marker 在同一事务中增删；删除前 stable claim 必须先转为 `PENDING_REMOVE`，新增前必须先写入 `PENDING_ADD` token。marker namespace 真实存在、为 symlink，或 state/target/marker 缺失、重复、跨 phase 冲突时均 fail closed。用户已有的等价 exclude 只借用，不取得删除权。
+marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Content Root 的 entity source，从而由标准 `.iml` exclude 序列化保存；插件不在磁盘创建 marker directory 或文件。`<workspace-root>/.idea/reqws-managed-project-model.json` 保存 target module、workspace-relative target、128-bit random marker token、managed claims 和 recovery claims；写入必须原子发布并回读验证。legacy PSC v2/v3 只允许在 atomic 文件尚不存在时迁移，迁移成功后所有权判断只读 atomic 文件。删除权必须同时由 verified managed/recovery claim、唯一 target entity 和唯一 marker entity 三者证明，target 与 marker 在同一事务中增删；任何变更前先落盘下一份 managed + recovery 集合，且同一 JVM 不清 recovery。marker namespace 真实存在、为 symlink，或 file/state/target/marker 缺失、重复、跨集合冲突时均 fail closed。用户已有的等价 exclude 只借用，不取得删除权。
 
 该策略会保留 workspace root 的一般内容范围；被排除的保留 repository 在用户显式显示 excluded files 时仍可能可见。其真实 Project/Search/Go 行为仍必须由 GUI smoke 证明，不能仅由 API spike 推断。
 
@@ -496,25 +496,17 @@ marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Con
 
 插件不得把当前全部项目 roots 或 VCS mappings 替换为 manifest 集合。
 
-项目私有 persistent state 分为模型、VCS 和同步摘要三部分，示意：
+项目私有状态分为两个插件自有的 verified atomic ownership 文件与一个非授权性的同步摘要。示意：
 
-```xml
-<component name="ReqwsManagedProjectModel">
-  <option name="stateVersion" value="3" />
-  <option name="strategy" value="workspace-root-excludes" />
-  <option name="targetModuleName" value="..." />
-  <option name="managedExcludes">
-    ... workspace-relative target + random marker token claims ...
-  </option>
-  <option name="pendingAdds">...</option>
-  <option name="pendingRemovals">...</option>
-</component>
-<component name="ReqwsVcsOwnershipState">
-  ... CREATED / BORROWED workspace-relative mappings ...
-</component>
-<component name="ReqwsSynchronization">
-  <option name="lastAppliedDigest" value="..." />
-</component>
+```text
+<workspace-root>/.idea/reqws-managed-project-model.json
+  strategy + targetModuleName + managedClaims + recoveryClaims
+
+<workspace-root>/.idea/reqws-vcs-ownership.json
+  stateVersion: 2 + managedMappings + pendingAdds + pendingRemovals
+
+ReqwsSynchronization PersistentStateComponent
+  lastAppliedDigest（只供 UI/诊断，不授权删除或 reopen skip）
 ```
 
 规则：
@@ -522,13 +514,16 @@ marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Con
 - 路径以 workspace-relative 形式保存，读取时重新 containment 校验；
 - 不保存 repository URL、remote 或 Git credential；marker token 是本地随机 ownership nonce，不来自 manifest，也不是访问凭据；
 - planner 计算 `add / keep / remove-owned / conflict`；
-- state v3 在 Workspace Model mutation 前写入并保存可恢复 pending journal；model 提交后保持 pending 再保存一次，证明新 model 与 journal 已共同进入 project store，随后才提升并保存 stable。任意终止点只会留下 old-model + pending、new-model + pending 或 new-model + stable；post-commit trust/dispose、进程终止或冷加载后都用相同 token 收敛，不把 orphan target 当成普通 borrowed entry；
+- 两个 ownership 文件均在 `.idea` 内使用同目录临时文件、原子替换、大小/版本/schema 校验和回读等值校验。Project Model 的下一份 intent 与 VCS 的 transition/pre-revoke 必须在对应平台 mutation 前验证；VCS final stable checkpoint 只在 mapping set 与 quiescence 之后发布。任一必需 checkpoint 失败都不得报告收敛或推进 digest，也不能退回只更新内存 PSC；
+- Project Model 每次 mutation 前写入下一份 managed + recovery claims；model transaction 后同 JVM 保留 recovery，使进程在任意终止点都留下可 cold-load 验证的 proof。只有进程重启后的 cold service 从 verified 文件和已序列化 target+marker 得出完整一致结论后才清理 recovery；legacy PSC 只迁移，不再参与写入顺序；
+- VCS state v2 在 add/remove 前先写入 pending；remove 前必须先从稳定 `CREATED` 权利移出并持久化 tombstone。只有同 JVM 确认 mapping set 成功后才能把 pending add 提升为 `CREATED`；cold-load 的 pending add/remove 都不授权删除，宁可遗留 mapping；
+- legacy VCS PSC v1 也只在 `.idea/reqws-vcs-ownership.json` 不存在时作为一次迁移输入；atomic 文件一旦存在，损坏、版本不支持、workspace identity 不匹配或回读失败都必须 fail closed，不得 fallback 到 PSC 重新取得删除权；
 - 只删除上次由插件记录并且当前不再需要的条目；
 - 现存等价 exclude 或 VCS mapping 只标记为 borrowed，不变成可删除的 ReqWS-owned 条目；
 - 用户手工修改使所有权不确定时，不做破坏性移除，状态转为 `DEGRADED` 并显示稳定诊断；
 - 不删除其他 module、SDK、library、source root、exclude 或 VCS mapping。
 
-模型删除使用 state claim + target entity + companion marker entity 三份可重建证据；任一证据不唯一或不能验证 filesystem identity 都不删除。`PENDING_REMOVE` 不作为可转移的长期删除权：target/marker 已同时消失时只清 journal，仍同时存在时只完成该 token 对应的精确移除；partial proof 必须冲突。状态只保存相对路径、marker nonce 和 phase，不保存 repository URL 或完整 manifest。
+模型删除使用 verified managed/recovery claim + target entity + companion marker entity 三份可重建证据；任一证据不唯一或不能验证 filesystem identity 都不删除。recovery claim 不是仅凭文件字段即可转移的删除权，必须和同 token 的完整 model proof 一起解释；partial proof 必须冲突。状态只保存相对路径、marker nonce 和恢复元数据，不保存 repository URL 或完整 manifest。
 
 ## 10. VCS Mapping
 
@@ -537,20 +532,20 @@ marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Con
 算法：
 
 1. 从 validated manifest 得到目标 active repo paths，并在 apply 前按实时文件系统重新判定 present/missing/普通 `.git`；
-2. 在后台读取当前 `ProjectLevelVcsManager` mappings 并规划；进入 EDT 串行 write context 后重新读取完整列表，以包含 `rootSettings` 的 equality 校验 planned snapshot；不相等则退出 EDT 重新规划，连续三次不稳定时在任何 mapping/ownership 写入前失败；
+2. mapping change tracker 对每次配置变化记录单调 revision 和对应完整 immutable snapshot；后台规划同时绑定 base revision/snapshot，进入 EDT 串行 write context 后重新读取完整列表，以包含 `rootSettings` 的 equality 与 revision 双重校验；任一变化都退出 EDT，把 observer 保存的非 ReqWS mapping/rootSettings 合入下一轮并等待有界 quiescence 后重规划；
 3. 保留所有非 ReqWS-owned mappings；
 4. 对已有等价 Git mapping 标记为 `BORROWED`，不制造重复，也不取得删除权；
 5. 对缺失 active path 添加 `Git` mapping；
-6. 对已不活动且明确 owned 的 mapping，先持久化撤销对应删除权，再移除 mapping；失败宁可遗留无 ownership 的 mapping，不能遗留可误删的陈旧权利；
-7. final equality、删除权 pre-revoke、一次整表 mapping 提交和新增 `CREATED` 记录位于同一个 EDT closure；Settings 中的用户 Apply 无法插入 final read/set 窗口；
+6. 对已不活动且明确 owned 的 mapping，先把 stable claim 转成 `PENDING_REMOVE` tombstone 并 verified atomic 落盘，再尝试移除 mapping；失败宁可遗留无删除权的 mapping，不能遗留可误删的陈旧权利；
+7. 新增前先写 `PENDING_ADD`；final equality/revision check、mapping 提交和同 JVM 的最终 ownership transition 按固定顺序执行。Settings writer 由 EDT 串行；pooled auto-detect writer 由 revision/full-snapshot observer 检出并触发 quiescent merge-retry；任何更晚到达的 external event 都使 digest baseline dirty，并强制下一次 automatic reconcile；
 8. 通过公开 API刷新 Git repository manager；
 9. 验证 Git Tool Window 最终 root 集合。
 
 VCS mapping failure 不得回滚或删除用户 mapping。项目内容已经成功时，状态显示 `DEGRADED`，同一 digest 可通过自动或手动同步重试 VCS apply。
 
-插件自己添加的 mapping 记录为 `CREATED`，只有当前 mapping 仍是唯一、精确、为 Git 且 `rootSettings` 仍为空时才可在 repository 退出活动集合后删除；用户添加或修改 `rootSettings` 即撤销插件的破坏性删除资格。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
+插件自己添加的 mapping 记录为 `CREATED`，只有 verified v2 stable claim 与当前唯一、精确、为 Git 且 `rootSettings` 为空的 mapping 同时成立时，才可在 repository 退出活动集合后删除；用户添加或修改 `rootSettings` 即撤销插件的破坏性删除资格。`PENDING_REMOVE` 是已经撤权的 tombstone，cold load 不得据此继续删除；cold-load 的 `PENDING_ADD` 也不能提升为删除权，最多在重新核对后按非破坏性状态收敛。legacy PSC v1 仅在 atomic 文件不存在时迁移；已存在但不可验证的 v2 文件禁止 fallback。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
 
-261 的公开项目级 mapping API 没有 compare-and-set，也没有与后台 auto-detect 共享的公开锁。EDT 串行 closure 能关闭用户 Settings writer 的 final read/set 窗口；平台后台 root scanner 使用内部 IO setter，仍可能在 closure 外与整表赋值竞争，这是 public API 下的残余风险。实现通过完整 equality、有界 replan、失败时不写和后续手动强制 reconcile 降低影响，但 exact-head GUI 仍必须覆盖 Settings 并发修改和 IDE 自动探测，不能宣称具备平台级 CAS。
+261 的公开项目级 mapping API 没有 compare-and-set，也没有与后台 auto-detect 共享的公开锁，因此本方案不宣称平台级线性化。mapping change revision/full-snapshot capture、有界 quiescent merge-retry，以及“更晚 external event 令 clean digest baseline 失效并触发 automatic reconcile”在公开 topic 能及时捕获完整列表的范围内避免把竞争静默当作成功；合并时保留 observer 捕获的完整 mapping 对象和 `rootSettings`，在 stable promotion 前连续变化超过上限则 fail closed。仍需保留三个边界：payload-less 回调若延迟到外部列表已被覆盖后才执行就无法重建原列表；final `CREATED` 后发现 drift 时若 durable demotion 本身发生 I/O 故障，刚写入的 stable claim 可能残留；VCS generation 校验不是跨 GoLand 进程 CAS。真实 GUI 仍验证平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果，但后台 auto-detect 不能再只作为 GUI 抽样残余，必须先有独立 pooled writer 的确定性自动化覆盖。
 
 ## 11. VFS 监听与收敛
 
@@ -778,10 +773,11 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - selected Content Root/Workspace Model strategy；
 - add/remove/re-add；
 - target/companion marker 成对增删、state reload 和独立 JPS exclude 序列化契约；真实 IDE close/reopen 仍由 GUI 覆盖；
-- state v3 pending add/remove 覆盖 post-commit trust/dispose、冷 state reload、retry、active re-add 和 journal cleanup；v2 stable state 在下次成功 apply 迁移；
+- `.idea/reqws-managed-project-model.json` 的 verified atomic write/readback、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
 - VCS mapping merge/borrow/remove-created；
-- final EDT equality-check/set 与用户 Settings writer 串行；窗口内用户 mapping/rootSettings 必须被保留，连续 stale 时不得写 mapping 或 ownership；后台 auto-detect 残余竞争由真实 GUI 记录；
+- `.idea/reqws-vcs-ownership.json` v2 pending add/remove、remove-before tombstone、写入失败无平台 mutation，以及 cold pending 永不授权删除；
+- final EDT equality-check/set 与用户 Settings writer 串行；mapping revision/full-snapshot 测试以独立 pooled writer 的两种反序时序覆盖 final-read 前后变化，窗口内用户 mapping/rootSettings 必须被 merge 保留，持续 revision churn 时不得写 stable ownership，更晚 external event 必须使 digest baseline dirty 并强制 automatic reconcile；
 - user module/root/mapping preservation；
 - Safe Mode gate；
 - trust/dispose 在 model transaction 和每个 VCS/ownership commit boundary 翻转时 fail closed；

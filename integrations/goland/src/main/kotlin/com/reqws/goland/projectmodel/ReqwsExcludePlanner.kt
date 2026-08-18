@@ -10,11 +10,14 @@ internal data class ManagedExcludeClaim(
   val markerUrl: String,
 )
 
+internal data class RecoveryExcludeClaim(
+  val relativePath: String,
+  val claim: ManagedExcludeClaim,
+)
+
 internal data class ReqwsExcludePlan(
   val nextOwnership: Map<String, String>,
-  val preparedOwnership: Map<String, String>,
-  val preparedPendingAdds: Map<String, String>,
-  val preparedPendingRemovals: Map<String, String>,
+  val nextRecoveryClaims: List<ManagedExcludeOwnership>,
   val addedClaims: Map<String, ManagedExcludeClaim>,
   val added: Set<String>,
   val removed: Set<String>,
@@ -28,11 +31,12 @@ internal object ReqwsExcludePlanner {
   fun plan(
     desiredUrls: Map<String, String>,
     activeUrls: Set<String>,
-    previousClaims: Map<String, ManagedExcludeClaim>,
-    pendingAddClaims: Map<String, ManagedExcludeClaim> = emptyMap(),
-    pendingRemoveClaims: Map<String, ManagedExcludeClaim> = emptyMap(),
+    managedClaims: Map<String, ManagedExcludeClaim>,
+    recoveryClaims: List<RecoveryExcludeClaim>,
     candidateClaims: Map<String, ManagedExcludeClaim>,
     currentExcludes: List<CurrentExclude>,
+    markerNamespaceUrlPrefix: String,
+    canCompactRecoveryClaims: Boolean,
     urlsEquivalent: (String, String) -> Boolean = { first, second -> first == second },
   ): ReqwsExcludePlan {
     if (
@@ -42,31 +46,33 @@ internal object ReqwsExcludePlanner {
     ) {
       throw conflict("An active repository cannot be a ReqWS exclude target.")
     }
-    val persistedClaims = listOf(previousClaims, pendingAddClaims, pendingRemoveClaims)
-    val persistedRelativePaths = persistedClaims.flatMap { it.keys }
     if (
-      persistedRelativePaths.toSet().size != persistedRelativePaths.size ||
-      candidateClaims.keys.any { relative ->
-        relative in previousClaims || relative in pendingAddClaims
-      } ||
-      persistedClaims.any { claims ->
-        claims.any { (relative, claim) ->
-          relative in desiredUrls && claim.targetUrl != desiredUrls[relative]
-        }
-      } ||
+      candidateClaims.keys.any { relative -> relative !in desiredUrls || relative in managedClaims } ||
       candidateClaims.any { (relative, claim) -> claim.targetUrl != desiredUrls[relative] }
     ) {
-      throw conflict("ReqWS ownership targets do not match the desired project model.")
+      throw conflict("ReqWS candidate ownership does not match the desired project model.")
     }
-    val allClaims = previousClaims.values +
-      pendingAddClaims.values +
-      pendingRemoveClaims.values +
-      candidateClaims.values
+
+    val allPersistedClaims = buildList {
+      managedClaims.forEach { (relative, claim) -> add(RecoveryExcludeClaim(relative, claim)) }
+      addAll(recoveryClaims)
+    }
+    val persistedKeys = hashSetOf<Pair<String, String>>()
+    val allClaims = allPersistedClaims.map(RecoveryExcludeClaim::claim) + candidateClaims.values
     if (
+      allPersistedClaims.any { persisted ->
+        !persistedKeys.add(persisted.relativePath to persisted.claim.markerToken)
+      } ||
       allClaims.map(ManagedExcludeClaim::markerToken).toSet().size != allClaims.size ||
       allClaims.map(ManagedExcludeClaim::markerUrl).toSet().size != allClaims.size
     ) {
-      throw conflict("ReqWS ownership markers must be unique.")
+      throw conflict("ReqWS ownership claims and markers must be unique.")
+    }
+    allPersistedClaims.groupBy(RecoveryExcludeClaim::relativePath).values.forEach { claims ->
+      val firstTarget = claims.first().claim.targetUrl
+      if (claims.any { persisted -> persisted.claim.targetUrl != firstTarget }) {
+        throw conflict("ReqWS ownership claims disagree about their target path.")
+      }
     }
 
     val relevantUrls = buildSet {
@@ -84,26 +90,39 @@ internal object ReqwsExcludePlanner {
     ) {
       throw conflict("Duplicate exclude URLs make ReqWS ownership ambiguous.")
     }
+    val knownMarkerUrls = allClaims.map(ManagedExcludeClaim::markerUrl)
+    if (
+      candidateClaims.values.any { candidate ->
+        currentExcludes.any { current -> urlsEquivalent(current.url, candidate.markerUrl) }
+      }
+    ) {
+      throw conflict("A fresh ReqWS ownership marker already exists in the project model.")
+    }
+    if (
+      currentExcludes.any { current ->
+        current.url.startsWith(markerNamespaceUrlPrefix) &&
+          knownMarkerUrls.none { known -> urlsEquivalent(current.url, known) }
+      }
+    ) {
+      throw conflict("The project model contains an unclaimed ReqWS ownership marker.")
+    }
 
-    val previousProofs = previousClaims.mapValues { (_, claim) ->
-      proofFor(claim, currentExcludes, urlsEquivalent)
+    val persistedByRelative = allPersistedClaims.groupBy(RecoveryExcludeClaim::relativePath)
+    val proofs = persistedByRelative.mapValues { (_, claims) ->
+      proofFor(claims, currentExcludes, urlsEquivalent)
     }
-    val pendingAddProofs = pendingAddClaims.mapValues { (_, claim) ->
-      proofFor(claim, currentExcludes, urlsEquivalent)
-    }
-    val pendingRemoveProofs = pendingRemoveClaims.mapValues { (_, claim) ->
-      proofFor(claim, currentExcludes, urlsEquivalent)
-    }
-    previousProofs.forEach { (_, proof) ->
-      if (proof !is ClaimProof.Complete) {
-        throw conflict("A previously managed exclude no longer has both ownership proofs.")
+    val retainedRecovery = linkedMapOf<Pair<String, String>, ManagedExcludeOwnership>()
+    recoveryClaims.forEach { persisted ->
+      val proof = proofs.getValue(persisted.relativePath)
+      val isPresentClaim = proof is RelativeProof.Owned &&
+        proof.persisted.claim.markerToken == persisted.claim.markerToken
+      if (!canCompactRecoveryClaims || isPresentClaim) {
+        retainedRecovery[persisted.relativePath to persisted.claim.markerToken] =
+          ManagedExcludeOwnership(persisted.relativePath, persisted.claim.markerToken)
       }
     }
 
     val nextOwnership = linkedMapOf<String, String>()
-    val preparedOwnership = linkedMapOf<String, String>()
-    val preparedPendingAdds = linkedMapOf<String, String>()
-    val preparedPendingRemovals = linkedMapOf<String, String>()
     val addedClaims = linkedMapOf<String, ManagedExcludeClaim>()
     val added = linkedSetOf<String>()
     val removed = linkedSetOf<String>()
@@ -111,65 +130,73 @@ internal object ReqwsExcludePlanner {
     val borrowed = linkedSetOf<String>()
     val removableUrls = linkedSetOf<String>()
 
+    fun retainRecovery(relative: String, claim: ManagedExcludeClaim) {
+      retainedRecovery[relative to claim.markerToken] =
+        ManagedExcludeOwnership(relative, claim.markerToken)
+    }
+
+    fun scheduleRemove(relative: String, proof: RelativeProof.Owned) {
+      retainRecovery(relative, proof.persisted.claim)
+      removed.add(relative)
+      removableUrls.add(proof.targetUrl)
+      removableUrls.add(proof.markerUrl)
+    }
+
     fun scheduleAdd(relative: String, claim: ManagedExcludeClaim) {
-      preparedPendingAdds[relative] = claim.markerToken
       nextOwnership[relative] = claim.markerToken
       addedClaims[relative] = claim
       added.add(relative)
     }
 
-    fun scheduleRemove(
-      relative: String,
-      markerToken: String,
-      targetUrl: String,
-      markerUrl: String,
-    ) {
-      preparedPendingRemovals[relative] = markerToken
-      removed.add(relative)
-      removableUrls.add(targetUrl)
-      removableUrls.add(markerUrl)
+    val allRelativePaths = buildSet {
+      addAll(desiredUrls.keys)
+      addAll(managedClaims.keys)
+      addAll(recoveryClaims.map(RecoveryExcludeClaim::relativePath))
     }
-
-    previousClaims.forEach { (relative, claim) ->
-      val proof = previousProofs.getValue(relative) as ClaimProof.Complete
-      if (relative in desiredUrls) {
-        preparedOwnership[relative] = claim.markerToken
-        nextOwnership[relative] = claim.markerToken
-        kept.add(relative)
+    allRelativePaths.sorted().forEach { relative ->
+      val desired = relative in desiredUrls
+      val managed = managedClaims[relative]
+      val proof = proofs[relative] ?: proofWithoutPersistedClaims(
+        targetUrl = desiredUrls[relative],
+        currentExcludes = currentExcludes,
+        urlsEquivalent = urlsEquivalent,
+      )
+      if (desired) {
+        when (proof) {
+          RelativeProof.Absent -> {
+            val claim = managed ?: candidateClaims[relative]
+              ?: throw conflict("A desired ReqWS exclude has no ownership marker candidate.")
+            scheduleAdd(relative, claim)
+          }
+          is RelativeProof.Borrowed -> {
+            if (managed != null || recoveryClaims.any { it.relativePath == relative }) {
+              throw conflict("A claimed ReqWS target lost its ownership marker.")
+            }
+            borrowed.add(relative)
+          }
+          is RelativeProof.Owned -> {
+            if (managed?.markerToken == proof.persisted.claim.markerToken) {
+              nextOwnership[relative] = managed.markerToken
+              kept.add(relative)
+            } else {
+              val replacement = managed ?: candidateClaims[relative]
+                ?: throw conflict("A re-added ReqWS exclude has no fresh ownership marker candidate.")
+              scheduleRemove(relative, proof)
+              scheduleAdd(relative, replacement)
+            }
+          }
+        }
       } else {
-        scheduleRemove(relative, claim.markerToken, proof.targetUrl, proof.markerUrl)
-      }
-    }
-    pendingAddClaims.forEach { (relative, claim) ->
-      when (val proof = pendingAddProofs.getValue(relative)) {
-        is ClaimProof.Complete -> if (relative in desiredUrls) {
-          preparedPendingAdds[relative] = claim.markerToken
-          nextOwnership[relative] = claim.markerToken
-          kept.add(relative)
-        } else {
-          scheduleRemove(relative, claim.markerToken, proof.targetUrl, proof.markerUrl)
+        if (managed != null) {
+          val managedIsPresent = proof is RelativeProof.Owned &&
+            proof.persisted.claim.markerToken == managed.markerToken
+          if (!canCompactRecoveryClaims || managedIsPresent) retainRecovery(relative, managed)
         }
-        ClaimProof.Absent -> if (relative in desiredUrls) scheduleAdd(relative, claim)
-      }
-    }
-    pendingRemoveClaims.forEach { (relative, claim) ->
-      when (val proof = pendingRemoveProofs.getValue(relative)) {
-        is ClaimProof.Complete -> if (relative in desiredUrls) {
-          preparedPendingRemovals[relative] = claim.markerToken
-          nextOwnership[relative] = claim.markerToken
-          kept.add(relative)
-        } else {
-          scheduleRemove(relative, claim.markerToken, proof.targetUrl, proof.markerUrl)
-        }
-        ClaimProof.Absent -> if (relative in desiredUrls) {
-          val replacement = candidateClaims[relative]
-            ?: throw conflict("A restarted ReqWS exclude has no fresh ownership marker candidate.")
-          scheduleAdd(relative, replacement)
-        }
+        if (proof is RelativeProof.Owned) scheduleRemove(relative, proof)
       }
     }
 
-    val remainingExcludes = currentExcludes.filter { it.url !in removableUrls }
+    val remainingExcludes = currentExcludes.filter { current -> current.url !in removableUrls }
     if (
       activeUrls.any { active ->
         remainingExcludes.any { current -> urlsEquivalent(current.url, active) }
@@ -178,29 +205,11 @@ internal object ReqwsExcludePlanner {
       throw conflict("An active repository remains excluded by an entry ReqWS cannot remove.")
     }
 
-    desiredUrls.forEach { (relative, targetUrl) ->
-      if (persistedClaims.any { relative in it }) {
-        return@forEach
-      }
-
-      if (remainingExcludes.any { current -> urlsEquivalent(current.url, targetUrl) }) {
-        borrowed.add(relative)
-        return@forEach
-      }
-
-      val candidate = candidateClaims[relative]
-        ?: throw conflict("A new ReqWS exclude has no ownership marker candidate.")
-      if (remainingExcludes.any { current -> urlsEquivalent(current.url, candidate.markerUrl) }) {
-        throw conflict("A new ReqWS ownership marker collides with an existing exclude.")
-      }
-      scheduleAdd(relative, candidate)
-    }
-
     return ReqwsExcludePlan(
       nextOwnership = nextOwnership,
-      preparedOwnership = preparedOwnership,
-      preparedPendingAdds = preparedPendingAdds,
-      preparedPendingRemovals = preparedPendingRemovals,
+      nextRecoveryClaims = retainedRecovery.values.sortedWith(
+        compareBy(ManagedExcludeOwnership::relativePath, ManagedExcludeOwnership::markerToken),
+      ),
       addedClaims = addedClaims,
       added = added,
       removed = removed,
@@ -212,37 +221,60 @@ internal object ReqwsExcludePlanner {
   }
 
   private fun proofFor(
-    claim: ManagedExcludeClaim,
+    persistedClaims: List<RecoveryExcludeClaim>,
     currentExcludes: List<CurrentExclude>,
     urlsEquivalent: (String, String) -> Boolean,
-  ): ClaimProof {
+  ): RelativeProof {
+    val targetUrl = persistedClaims.first().claim.targetUrl
     val targetMatches = currentExcludes.filter { current ->
-      urlsEquivalent(current.url, claim.targetUrl)
+      urlsEquivalent(current.url, targetUrl)
     }
-    val markerMatches = currentExcludes.filter { current ->
-      urlsEquivalent(current.url, claim.markerUrl)
+    val presentMarkers = persistedClaims.mapNotNull { persisted ->
+      val matches = currentExcludes.filter { current ->
+        urlsEquivalent(current.url, persisted.claim.markerUrl)
+      }
+      if (matches.size > 1) throw conflict("A ReqWS ownership marker is duplicated.")
+      matches.singleOrNull()?.let { current -> persisted to current.url }
     }
     return when {
-      targetMatches.isEmpty() && markerMatches.isEmpty() -> ClaimProof.Absent
-      targetMatches.size == 1 && markerMatches.size == 1 -> ClaimProof.Complete(
+      targetMatches.size > 1 || presentMarkers.size > 1 ->
+        throw conflict("A ReqWS exclude has ambiguous ownership proof.")
+      targetMatches.isEmpty() && presentMarkers.isEmpty() -> RelativeProof.Absent
+      targetMatches.size == 1 && presentMarkers.size == 1 -> RelativeProof.Owned(
+        persisted = presentMarkers.single().first,
         targetUrl = targetMatches.single().url,
-        markerUrl = markerMatches.single().url,
+        markerUrl = presentMarkers.single().second,
       )
-      else -> throw conflict(
-        "A ReqWS exclude does not have an atomic target and ownership marker pair.",
-      )
+      else -> throw conflict("A ReqWS exclude does not have an atomic target and marker pair.")
+    }
+  }
+
+  private fun proofWithoutPersistedClaims(
+    targetUrl: String?,
+    currentExcludes: List<CurrentExclude>,
+    urlsEquivalent: (String, String) -> Boolean,
+  ): RelativeProof {
+    if (targetUrl == null) return RelativeProof.Absent
+    val targets = currentExcludes.filter { current -> urlsEquivalent(current.url, targetUrl) }
+    return when (targets.size) {
+      0 -> RelativeProof.Absent
+      1 -> RelativeProof.Borrowed(targets.single().url)
+      else -> throw conflict("A desired exclude target is duplicated.")
     }
   }
 
   private fun conflict(message: String) =
     ProjectModelApplyException(ProjectModelErrorCode.OWNERSHIP_CONFLICT, message)
 
-  private sealed interface ClaimProof {
-    data object Absent : ClaimProof
+  private sealed interface RelativeProof {
+    data object Absent : RelativeProof
 
-    data class Complete(
+    data class Borrowed(val targetUrl: String) : RelativeProof
+
+    data class Owned(
+      val persisted: RecoveryExcludeClaim,
       val targetUrl: String,
       val markerUrl: String,
-    ) : ClaimProof
+    ) : RelativeProof
   }
 }

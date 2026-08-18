@@ -19,6 +19,8 @@ import java.nio.file.Path
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -60,10 +62,15 @@ class IntellijVcsMappingAdapterTest {
       IntellijVcsMappingAdapter(platform).apply(
         snapshot(root, listOf("repo-a")),
         emptyList(),
-        VcsMappingOwnershipRecorder { preparedOwnership ->
+        VcsMappingOwnershipRecorder { preparedState ->
           platform.events.add("prepare")
           VcsMappingOwnershipCommit {
-            assertEquals(VcsMappingOwnershipKind.CREATED, preparedOwnership.single().kind)
+            if (preparedState.pendingAdds.isEmpty()) {
+              assertEquals(VcsMappingOwnershipKind.CREATED, preparedState.stableMappings.single().kind)
+            } else {
+              assertTrue(preparedState.stableMappings.isEmpty())
+              assertEquals("repo-a", preparedState.pendingAdds.single().relativeDirectory)
+            }
             platform.events.add("ownership")
           }
         },
@@ -71,7 +78,17 @@ class IntellijVcsMappingAdapterTest {
     }
 
     assertEquals(
-      listOf("prepare", "write-context", "set", "ownership", "refresh"),
+      listOf(
+        "prepare",
+        "write-context",
+        "ownership",
+        "write-context",
+        "set",
+        "write-context",
+        "prepare",
+        "ownership",
+        "refresh",
+      ),
       platform.events,
     )
     assertEquals(VcsMappingApplyStage.REFRESH, failure.stage)
@@ -80,7 +97,7 @@ class IntellijVcsMappingAdapterTest {
   }
 
   @Test
-  fun `does not record ownership when the mapping commit fails`() {
+  fun `mapping commit failure leaves only durable pending ownership`() {
     val root = workspaceRoot()
     gitRepository(root, "repo-a")
     val platform = FakePlatform(failSet = true)
@@ -96,7 +113,8 @@ class IntellijVcsMappingAdapterTest {
 
     assertEquals(VcsMappingApplyStage.MAPPINGS, failure.stage)
     assertFalse(failure.mappingsCommitted)
-    assertFalse(recorderCalled)
+    assertTrue(failure.ownershipCommitted)
+    assertTrue(recorderCalled)
     assertEquals(0, platform.refreshCalls)
   }
 
@@ -197,7 +215,7 @@ class IntellijVcsMappingAdapterTest {
       ownershipRecorder { recorded = it },
     )
 
-    assertEquals(2, platform.writeContextCalls)
+    assertEquals(3, platform.writeContextCalls)
     assertTrue(platform.getCalls >= 3)
     assertEquals(0, platform.setCalls)
     assertEquals(listOf(userMapping), platform.mappings)
@@ -225,7 +243,7 @@ class IntellijVcsMappingAdapterTest {
     lateinit var platform: FakePlatform
     platform = FakePlatform(
       onAfterGet = { call, _ ->
-        if (call == 2) {
+        if (call == 3) {
           val userWriter = Thread({
             userWriteAttempted.countDown()
             platform.replaceMappingsAsUiWriter { current -> current + userMapping }
@@ -235,8 +253,9 @@ class IntellijVcsMappingAdapterTest {
           }
           userWriter.start()
           assertTrue(userWriteAttempted.await(5, TimeUnit.SECONDS))
-          // The user writer uses the same serialized context and therefore cannot land in the
-          // final get/set window. Removing that serialization makes this assertion fail.
+          // The first serialized read is a preflight before the durable transition. This third
+          // overall read is the second equality check immediately before set; the user writer
+          // uses the same context and therefore cannot land in that final get/set window.
           val queueDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
           while (
             !platform.isMappingWriterQueued(userWriter) &&
@@ -274,6 +293,213 @@ class IntellijVcsMappingAdapterTest {
   }
 
   @Test
+  fun `late pooled writer is detected and merged without losing its unknown customized mapping`() {
+    val root = workspaceRoot()
+    gitRepository(root, "repo-a")
+    val userMapping = VcsDirectoryMapping(
+      root.resolveSibling("late-user-root").toString(),
+      "Mercurial",
+      TestRootSettings("late-user-settings"),
+    )
+    val writerCaptured = CountDownLatch(1)
+    val writerMayCommit = CountDownLatch(1)
+    val writerFinished = CountDownLatch(1)
+    lateinit var platform: FakePlatform
+    platform = FakePlatform(
+      onAfterGet = { call, snapshot ->
+        if (call == 2) {
+          val stale = snapshot.toList()
+          Thread({
+            writerCaptured.countDown()
+            assertTrue(writerMayCommit.await(5, TimeUnit.SECONDS))
+            platform.replaceMappingsAsPooledWriter(stale + userMapping)
+            writerFinished.countDown()
+          }, "late-vcs-pooled-writer").apply { isDaemon = true }.start()
+        }
+      },
+      onSet = { writerMayCommit.countDown() },
+      onAwaitQuiescence = { call ->
+        if (call == 1) assertTrue(writerFinished.await(5, TimeUnit.SECONDS))
+      },
+    )
+    val recorded = Collections.synchronizedList(mutableListOf<VcsMappingOwnershipState>())
+
+    val result = IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, listOf("repo-a")),
+      emptyList(),
+      VcsMappingOwnershipRecorder { state ->
+        VcsMappingOwnershipCommit { recorded.add(state) }
+      },
+    )
+
+    assertTrue(writerCaptured.await(5, TimeUnit.SECONDS))
+    assertTrue(result.mappingsCommitted)
+    assertTrue(platform.mappings.contains(userMapping))
+    assertTrue(platform.mappings.any {
+      it.directory == root.resolve("repo-a").toString() && it.vcs == GIT_VCS_NAME
+    })
+    assertEquals(
+      TestRootSettings("late-user-settings"),
+      platform.mappings.single { it.directory == userMapping.directory }.rootSettings,
+    )
+    assertEquals(
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+      recorded.last().stableMappings,
+    )
+    assertTrue(platform.setCalls >= 2)
+  }
+
+  @Test
+  fun `pooled writer landing after pending persistence invalidates the plan before set and is merged`() {
+    val root = workspaceRoot()
+    gitRepository(root, "repo-a")
+    val userMapping = VcsDirectoryMapping(
+      root.resolveSibling("early-user-root").toString(),
+      "Perforce",
+      TestRootSettings("early-user-settings"),
+    )
+    val writerMayCommit = CountDownLatch(1)
+    val writerFinished = CountDownLatch(1)
+    lateinit var platform: FakePlatform
+    platform = FakePlatform(
+      onAfterGet = { call, snapshot ->
+        if (call == 2) {
+          val stale = snapshot.toList()
+          Thread({
+            assertTrue(writerMayCommit.await(5, TimeUnit.SECONDS))
+            platform.replaceMappingsAsPooledWriter(stale + userMapping)
+            writerFinished.countDown()
+          }, "early-vcs-pooled-writer").apply { isDaemon = true }.start()
+        }
+      },
+    )
+    var releasedWriter = false
+    val recorded = Collections.synchronizedList(mutableListOf<VcsMappingOwnershipState>())
+
+    IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, listOf("repo-a")),
+      emptyList(),
+      VcsMappingOwnershipRecorder { state ->
+        VcsMappingOwnershipCommit {
+          recorded.add(state)
+          if (!releasedWriter && state.pendingAdds.isNotEmpty()) {
+            releasedWriter = true
+            writerMayCommit.countDown()
+            assertTrue(writerFinished.await(5, TimeUnit.SECONDS))
+          }
+        }
+      },
+    )
+
+    assertTrue(platform.mappings.contains(userMapping))
+    assertTrue(platform.mappings.any {
+      it.directory == root.resolve("repo-a").toString() && it.vcs == GIT_VCS_NAME
+    })
+    assertEquals(
+      TestRootSettings("early-user-settings"),
+      platform.mappings.single { it.directory == userMapping.directory }.rootSettings,
+    )
+    assertEquals(
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+      recorded.last().stableMappings,
+    )
+    assertTrue(platform.setCalls >= 1)
+  }
+
+  @Test
+  fun `external snapshot between final read and whole-list set is retained after plugin overwrites it`() {
+    val root = workspaceRoot()
+    gitRepository(root, "repo-a")
+    val baseMapping = VcsDirectoryMapping(root.resolveSibling("base-root").toString(), "Mercurial")
+    val userMapping = VcsDirectoryMapping(
+      root.resolveSibling("captured-user-root").toString(),
+      "Perforce",
+      TestRootSettings("captured-before-overwrite"),
+    )
+    val writerStarted = CountDownLatch(1)
+    val writerFinished = CountDownLatch(1)
+    var triggered = false
+    lateinit var platform: FakePlatform
+    platform = FakePlatform(
+      mappings = mutableListOf(baseMapping),
+      onBeforeSet = {
+        if (!triggered) {
+          triggered = true
+          Thread({
+            writerStarted.countDown()
+            platform.replaceMappingsAsPooledWriter(listOf(baseMapping, userMapping))
+            writerFinished.countDown()
+          }, "between-read-and-set-vcs-writer").apply { isDaemon = true }.start()
+          assertTrue(writerStarted.await(5, TimeUnit.SECONDS))
+          assertTrue(writerFinished.await(5, TimeUnit.SECONDS))
+        }
+      },
+    )
+    val recorded = Collections.synchronizedList(mutableListOf<VcsMappingOwnershipState>())
+
+    IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, listOf("repo-a")),
+      emptyList(),
+      VcsMappingOwnershipRecorder { state ->
+        VcsMappingOwnershipCommit { recorded.add(state) }
+      },
+    )
+
+    assertTrue(platform.mappings.contains(baseMapping))
+    assertTrue(platform.mappings.contains(userMapping))
+    assertEquals(
+      TestRootSettings("captured-before-overwrite"),
+      platform.mappings.single { it.directory == userMapping.directory }.rootSettings,
+    )
+    assertTrue(platform.mappings.any {
+      it.directory == root.resolve("repo-a").toString() && it.vcs == GIT_VCS_NAME
+    })
+    assertEquals(
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+      recorded.last().stableMappings,
+    )
+    assertTrue(platform.setCalls >= 2)
+  }
+
+  @Test
+  fun `external baseline is restored even when replanning needs no ReqWS addition or removal`() {
+    val root = workspaceRoot()
+    val repository = Files.createDirectory(root.resolve("repo-a"))
+    val baseMapping = VcsDirectoryMapping(root.resolveSibling("base-root").toString(), "Mercurial")
+    val userMapping = VcsDirectoryMapping(
+      root.resolveSibling("external-user-root").toString(),
+      "Perforce",
+      TestRootSettings("external-authoritative-settings"),
+    )
+    val staleReqwsMapping = VcsDirectoryMapping(repository.toString(), GIT_VCS_NAME)
+    val platform = FakePlatform(mappings = mutableListOf(baseMapping, staleReqwsMapping))
+    platform.replaceMappingsAsPooledWriter(listOf(baseMapping, userMapping))
+    // Model a stale ReqWS whole-list assignment that overwrote the external list after its event
+    // snapshot was captured. Replanning from that retained baseline produces no planner delta, but
+    // the actual list still has to be restored before the external revision can be acknowledged.
+    platform.mappings.clear()
+    platform.mappings.addAll(listOf(baseMapping, staleReqwsMapping))
+    val recorded = mutableListOf<VcsMappingOwnershipState>()
+
+    IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, emptyList()),
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+      VcsMappingOwnershipRecorder { state ->
+        VcsMappingOwnershipCommit { recorded.add(state) }
+      },
+    )
+
+    assertEquals(listOf(baseMapping, userMapping), platform.mappings)
+    assertEquals(
+      TestRootSettings("external-authoritative-settings"),
+      platform.mappings.single { it.directory == userMapping.directory }.rootSettings,
+    )
+    assertEquals(listOf("repo-a"), recorded.first().pendingRemovals.map { it.relativeDirectory })
+    assertTrue(recorded.last().stableMappings.isEmpty())
+    assertTrue(platform.setCalls >= 1)
+  }
+
+  @Test
   fun `fails without mapping or ownership writes when every serialized attempt is stale`() {
     val root = workspaceRoot()
     gitRepository(root, "repo-a")
@@ -301,11 +527,11 @@ class IntellijVcsMappingAdapterTest {
     }
 
     assertEquals(VcsMappingApplyStage.MAPPINGS, failure.stage)
-    assertEquals(3, platform.writeContextCalls)
+    assertEquals(5, platform.writeContextCalls)
     assertEquals(0, platform.setCalls)
     assertEquals(0, platform.refreshCalls)
     assertFalse(recorderCalled)
-    assertEquals(3, platform.mappings.size)
+    assertEquals(5, platform.mappings.size)
     assertTrue(platform.mappings.all { it.rootSettings != null })
   }
 
@@ -325,17 +551,20 @@ class IntellijVcsMappingAdapterTest {
       IntellijVcsMappingAdapter(platform).apply(
         snapshot(root, emptyList()),
         ownership,
-        VcsMappingOwnershipRecorder { preparedOwnership ->
+        VcsMappingOwnershipRecorder { preparedState ->
           platform.events.add("prepare")
           VcsMappingOwnershipCommit {
-            ownership = preparedOwnership
+            ownership = preparedState.stableMappings
             platform.events.add("ownership")
           }
         },
       )
     }
 
-    assertEquals(listOf("prepare", "write-context", "ownership", "set"), platform.events)
+    assertEquals(
+      listOf("prepare", "write-context", "ownership", "write-context", "set"),
+      platform.events,
+    )
     assertEquals(VcsMappingApplyStage.MAPPINGS, failure.stage)
     assertFalse(failure.mappingsCommitted)
     assertTrue(failure.ownershipCommitted)
@@ -354,6 +583,90 @@ class IntellijVcsMappingAdapterTest {
     assertTrue(retry.plan.diagnostics.any {
       it.code == VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT
     })
+  }
+
+  @Test
+  fun `cold pending removal never deletes a same-path user mapping`() {
+    val root = workspaceRoot()
+    Files.createDirectory(root.resolve(".idea"))
+    val repository = root.resolve("repo-a")
+    Files.createDirectory(repository)
+    val ownershipState = ReqwsVcsOwnershipStateService()
+    ownershipState.persistPreparedReplacement(
+      ownershipState.prepareReplacementForProject(
+        root,
+        VcsMappingOwnershipState(
+          stableMappings = emptyList(),
+          pendingRemovals = listOf(
+            VcsMappingPendingOwnership(
+              relativeDirectory = "repo-a",
+              operationToken = "0123456789abcdef0123456789abcdef",
+            ),
+          ),
+        ),
+      ),
+    )
+    val cold = ReqwsVcsOwnershipStateService()
+    val loaded = cold.readForProject(root)
+    val userMapping = VcsDirectoryMapping(repository.toString(), GIT_VCS_NAME)
+    val platform = FakePlatform(mappings = mutableListOf(userMapping))
+
+    val result = IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, emptyList()),
+      loaded.ownership,
+      persistentRecorder(cold, root),
+    )
+
+    assertEquals(listOf(userMapping), platform.mappings)
+    assertEquals(0, platform.setCalls)
+    assertTrue(result.plan.diagnostics.any {
+      it.code == VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT
+    })
+    assertTrue(cold.readForProject(root).ownership.isEmpty())
+    assertTrue(cold.readForProject(root).pendingRemovals.isEmpty())
+  }
+
+  @Test
+  fun `cold pending removal re-add is borrowed and preserves user root settings`() {
+    val root = workspaceRoot()
+    Files.createDirectory(root.resolve(".idea"))
+    gitRepository(root, "repo-a")
+    val ownershipState = ReqwsVcsOwnershipStateService()
+    ownershipState.persistPreparedReplacement(
+      ownershipState.prepareReplacementForProject(
+        root,
+        VcsMappingOwnershipState(
+          stableMappings = emptyList(),
+          pendingRemovals = listOf(
+            VcsMappingPendingOwnership(
+              relativeDirectory = "repo-a",
+              operationToken = "0123456789abcdef0123456789abcdef",
+            ),
+          ),
+        ),
+      ),
+    )
+    val cold = ReqwsVcsOwnershipStateService()
+    val loaded = cold.readForProject(root)
+    val customized = VcsDirectoryMapping(
+      root.resolve("repo-a").toString(),
+      GIT_VCS_NAME,
+      TestRootSettings("user-readded"),
+    )
+    val platform = FakePlatform(mappings = mutableListOf(customized))
+
+    IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, listOf("repo-a")),
+      loaded.ownership,
+      persistentRecorder(cold, root),
+    )
+
+    assertEquals(listOf(customized), platform.mappings)
+    assertEquals(0, platform.setCalls)
+    assertEquals(
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
+      cold.readForProject(root).ownership,
+    )
   }
 
   @Test
@@ -420,7 +733,7 @@ class IntellijVcsMappingAdapterTest {
     assertFalse(failure.mappingsCommitted)
     assertTrue(failure.ownershipCommitted)
     assertTrue(ownership.isEmpty())
-    assertEquals(listOf("write-context", "ownership"), platform.events)
+    assertEquals(listOf("write-context", "ownership", "write-context"), platform.events)
     assertEquals(0, platform.setCalls)
     assertEquals(0, platform.refreshCalls)
     assertEquals(listOf(VcsDirectoryMapping(repository.toString(), GIT_VCS_NAME)), platform.mappings)
@@ -448,8 +761,8 @@ class IntellijVcsMappingAdapterTest {
     assertEquals(VcsMappingApplyErrorCode.SAFE_MODE_BLOCKED, failure.code)
     assertEquals(VcsMappingApplyStage.OWNERSHIP, failure.stage)
     assertTrue(failure.mappingsCommitted)
-    assertFalse(failure.ownershipCommitted)
-    assertFalse(recorderCalled)
+    assertTrue(failure.ownershipCommitted)
+    assertTrue(recorderCalled)
     assertEquals(1, platform.setCalls)
     assertEquals(0, platform.refreshCalls)
     assertTrue(platform.mappings.any { it.directory == root.resolve("repo-a").toString() })
@@ -583,8 +896,18 @@ class IntellijVcsMappingAdapterTest {
 
 private fun ownershipRecorder(
   onCommit: (List<VcsMappingOwnership>) -> Unit,
-): VcsMappingOwnershipRecorder = VcsMappingOwnershipRecorder { ownership ->
-  VcsMappingOwnershipCommit { onCommit(ownership) }
+): VcsMappingOwnershipRecorder = VcsMappingOwnershipRecorder { state ->
+  VcsMappingOwnershipCommit { onCommit(state.stableMappings) }
+}
+
+private fun persistentRecorder(
+  service: ReqwsVcsOwnershipStateService,
+  root: Path,
+): VcsMappingOwnershipRecorder = VcsMappingOwnershipRecorder { state ->
+  VcsMappingOwnershipCommit {
+    val replacement = service.prepareReplacementForProject(root, state)
+    service.persistPreparedReplacement(replacement)
+  }
 }
 
 private class FakePlatform(
@@ -594,31 +917,62 @@ private class FakePlatform(
   var failRefresh: Boolean = false,
   private val onGet: ((Int, MutableList<VcsDirectoryMapping>) -> Unit)? = null,
   private val onAfterGet: ((Int, List<VcsDirectoryMapping>) -> Unit)? = null,
+  private val onBeforeSet: (() -> Unit)? = null,
   private val onSet: (() -> Unit)? = null,
+  private val onAwaitQuiescence: ((Int) -> Unit)? = null,
 ) : VcsMappingPlatform {
   var getCalls = 0
   var setCalls = 0
   var refreshCalls = 0
   var writeContextCalls = 0
+  var awaitQuiescenceCalls = 0
   val events: MutableList<String> = Collections.synchronizedList(mutableListOf())
   private val mappingsWriteContextLock = ReentrantLock()
+  private val revision = AtomicLong(0)
+  private val pendingExternal = AtomicReference<ExternalVcsMappings?>(null)
 
   override fun isGitAvailable(): Boolean = gitAvailable
 
   override fun getDirectoryMappings(): List<VcsDirectoryMapping> {
     getCalls += 1
-    onGet?.invoke(getCalls, mappings)
-    val result = mappings.toList()
+    val result = synchronized(mappings) {
+      onGet?.invoke(getCalls, mappings)
+      mappings.toList()
+    }
     onAfterGet?.invoke(getCalls, result)
     return result
+  }
+
+  override fun getVersionedDirectoryMappings(): VersionedVcsMappings = VersionedVcsMappings(
+    revision = revision.get(),
+    mappings = getDirectoryMappings(),
+    pendingExternal = pendingExternal.get(),
+  )
+
+  override fun awaitQuiescentDirectoryMappings(): VersionedVcsMappings {
+    awaitQuiescenceCalls += 1
+    onAwaitQuiescence?.invoke(awaitQuiescenceCalls)
+    return getVersionedDirectoryMappings()
+  }
+
+  override fun acknowledgeExternalMappings(revision: Long) {
+    while (true) {
+      val pending = pendingExternal.get() ?: return
+      if (pending.revision != revision) return
+      if (pendingExternal.compareAndSet(pending, null)) return
+    }
   }
 
   override fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>) {
     setCalls += 1
     events.add("set")
     if (failSet) throw IllegalStateException("set failed")
-    this.mappings.clear()
-    this.mappings.addAll(mappings)
+    onBeforeSet?.invoke()
+    synchronized(this.mappings) {
+      this.mappings.clear()
+      this.mappings.addAll(mappings)
+    }
+    revision.incrementAndGet()
     onSet?.invoke()
   }
 
@@ -636,9 +990,23 @@ private class FakePlatform(
   fun replaceMappingsAsUiWriter(transform: (List<VcsDirectoryMapping>) -> List<VcsDirectoryMapping>) {
     runInDirectoryMappingsWriteContext {
       val next = transform(mappings.toList())
-      mappings.clear()
-      mappings.addAll(next)
+      synchronized(mappings) {
+        mappings.clear()
+        mappings.addAll(next)
+      }
+      val externalRevision = revision.incrementAndGet()
+      pendingExternal.set(ExternalVcsMappings(externalRevision, next))
       events.add("user-set")
+    }
+  }
+
+  fun replaceMappingsAsPooledWriter(mappings: List<VcsDirectoryMapping>) {
+    synchronized(this.mappings) {
+      this.mappings.clear()
+      this.mappings.addAll(mappings)
+      val externalRevision = revision.incrementAndGet()
+      pendingExternal.set(ExternalVcsMappings(externalRevision, mappings.toList()))
+      events.add("pooled-set")
     }
   }
 

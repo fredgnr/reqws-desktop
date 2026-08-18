@@ -205,11 +205,11 @@ workspace/
 - remove retained；
 - re-add；
 - target/companion marker 同事务成对增删；
-- state v3 stable/pending add/pending remove journal；v2 stable state 自动迁移；
-- 模型变更必须按 pending + old model save、model commit、pending + new model save、stable save 的顺序形成持久化屏障；从第二个 save 捕获的 fresh state load 必须能在同一 live model 上收敛；
-- post-commit trust/dispose 后保留 recoverable journal，fresh state load + same snapshot retry 能完成收敛；pending add 后 repository active/re-add 可安全移除，pending remove 已提交后可清理 journal，后续再排除使用新 token；
-- state reload + 独立最小 `.idea`/`.iml` fixture 的公开 JPS exclude loader contract；平台测试的 in-memory project 不冒充 save/reopen，真实 close/reopen 仍由 GUI 验收；
-- marker/target partial 或重复、claim/token 跨 phase 重复、旧 v1 state、物理 marker namespace/symlink 均保守冲突且不越权删除；
+- `.idea/reqws-managed-project-model.json` 使用同目录临时文件、原子替换和回读等值校验；temp/write/move/readback 任一失败时不得进入 Workspace Model mutation；
+- 每次模型变更前 verified 落盘下一份 managed + recovery claims；model commit 失败或 post-commit trust/dispose gate 失败后，同 JVM state 与磁盘都保留 recovery，不得提前清理；
+- 进程重启后的 cold service 从 verified atomic state + 独立最小 `.idea`/`.iml` fixture 的 target/marker proof 收敛：pair 仍完整时保留 recovery 并完成精确删除，target 与 marker 都不存在时才压缩，partial proof 必须冲突；平台测试的 in-memory project 不冒充真实 close/reopen，真实 reopen 仍由 GUI 验收；
+- legacy PSC v2/v3 只在 atomic 文件不存在时迁移；atomic 文件存在、损坏、版本不支持或回读不一致时不得回退 PSC 重新取得删除权；
+- marker/target partial 或重复、claim/token 跨 managed/recovery 重复、旧 v1 state、物理 marker namespace/symlink 均保守冲突且不越权删除；
 - 现存等价 exclude 只借用；remove/re-add 生成新 marker，不泄漏旧 marker；
 - 大小写、NFC/NFD 或 symlink alias 指向 active/current exclude 时不得误加语义重复 exclude，活动仓库不得仍被借用 exclude 覆盖；
 - 合法 retained 名称与 synthetic ownership label（例如 `candidate:.reqws`）不得因 map-key 碰撞而绕过 nested Content Root 冲突；
@@ -233,13 +233,17 @@ workspace/
 - apply 前实时重查 filesystem/.git，missing→appears 或 present→missing 按本轮真实状态规划；
 - 后台规划后在 EDT write context 内执行 final full-equality check 与 set；用户 Settings writer 在 final read 后尝试写入时必须被串行，不能丢 mapping 或 `rootSettings`；
 - final equality 发现同路径用户 `Git + rootSettings` 已落地时退出 EDT 重规划，保留原对象并记为 `BORROWED` 而不是错误的 `CREATED`；连续三次 stale 时 mapping/ownership/refresh 均不得写；
-- destructive remove 前先撤销持久删除权；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；
+- `.idea/reqws-vcs-ownership.json` v2 verified atomic round-trip；pending add/remove 必须在平台 mutation 前落盘，write/move/readback 失败不得调用 mapping setter；
+- legacy VCS PSC v1 只在 atomic 文件不存在时迁移；atomic 文件已存在但损坏、版本不支持、workspace identity 不匹配或回读不一致时必须 fail closed，不得 fallback PSC；
+- destructive remove 前先把 `CREATED` 转为 pending-remove tombstone 并落盘；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；cold pending add/remove 均不得授权删除；
+- mapping change tracker 保存单调 revision 与对应完整 snapshot；用不获取 EDT lock 的独立 pooled thread 和 latch 确定性覆盖外部 writer 在 final read 前后落地，adapter 必须 merge 保留其 mapping 对象与 `rootSettings` 后重试；
+- pooled writer 持 stale base 在 ReqWS set 后落地时，下一 revision 必须恢复 ReqWS desired mapping，且最终 stable ownership 与实际 mapping 一致；任何更晚 external event 必须使 clean digest baseline dirty 并强制 automatic reconcile；持续 revision churn 达上限时 fail closed，不留下虚假 `CREATED`；
 - active、missing 和 inactive 三种路径下，只要用户给 `CREATED` mapping 增加 `rootSettings`，就必须丢弃删除资格、degraded 且绝不删除；
 - extra/root mapping 与 NFC/NFD root coverage 保留并 degraded；
 - VCS apply failure degraded state；
 - Git plugin disabled（明确诊断，不 crash）。
 
-上述自动化证明 Settings writer 串行与 fail-closed 行为；261 后台 auto-detect 使用无公开锁的内部 IO setter，仍必须在真实 GoLand 中并发操作验证，测试报告不得把 adapter fake platform 结果表述为平台级 CAS。
+上述自动化分别证明 Settings writer 串行、pooled writer revision/full-snapshot quiescent merge-retry 和 ownership fail-closed 行为。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果；fake platform 结果不能表述为 JetBrains 内部 CAS 或平台级线性化，但后台 auto-detect 竞态必须先有 deterministic 自动化覆盖，不能只留给 GUI。
 
 ### 6.3 Safe Mode
 

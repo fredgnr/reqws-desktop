@@ -33,13 +33,15 @@ internal class ReqwsVcsMappingService(private val project: Project) {
     ).apply(
       snapshot = snapshot,
       currentOwnership = loadedOwnership.ownership,
-      ownershipRecorder = VcsMappingOwnershipRecorder { nextOwnership ->
-        val replacement = ownershipState.prepareReplacementForProject(
-          snapshot.canonicalProjectRoot,
-          nextOwnership,
-        )
+      ownershipRecorder = VcsMappingOwnershipRecorder { nextState ->
         VcsMappingOwnershipCommit {
-          ownershipState.commitPreparedReplacement(replacement)
+          // Prepare immediately before persistence so the generation check chains transition and
+          // final checkpoints instead of letting two precomputed writes share one base version.
+          val replacement = ownershipState.prepareReplacementForProject(
+            snapshot.canonicalProjectRoot,
+            nextState,
+          )
+          ownershipState.persistPreparedReplacement(replacement)
         }
       },
     )

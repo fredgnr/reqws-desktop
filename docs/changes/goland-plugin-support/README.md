@@ -37,16 +37,16 @@
 
 这些内容只作为范围外事项记录，不预留本次 API，不建立工作包，也不纳入验收。
 
-## 文档分类结论
+## 本轮 review 修复的文档分类结论
 
-- 需求说明：更新。跨 IDE manifest、Desktop 启动和插件行为已成为当前有效范围，但完成定义仍要求 exact-head 验证。
-- 技术方案：更新。工具链已锁定，项目模型策略 A 因所有权安全门禁失败，生产设计选择策略 B，并固化 VCS、VFS 和 Safe Mode 方案。
-- 测试方案：更新。自动化、Plugin Verifier 和 GUI 验收命令已按实际 Gradle 任务与目标版本校正。
-- 使用指南：更新。[GoLand 插件使用指南](../../guides/goland-plugin-guide.md)提供图文磁盘安装、打开、信任、Tool Window 区块与按钮、同步和排障步骤。
-- 开发指南：更新。JDK 21、独立 Gradle 构建、根级命令、CI 隔离和证据要求已经确定。
-- 交付记录：不创建。本次仍没有签名、Marketplace、独立插件发布渠道或迁移里程碑。
+- 需求说明：不更新。本轮只修复实现没有满足既有 ownership、用户配置保护和最终收敛要求的问题，不改变用户行为或验收语义。
+- 技术方案：更新。Project Model 与 VCS ownership 改用 `.idea` 下插件自有的 verified atomic 文件，并补全冷启动恢复、VCS pending/tombstone 与 pooled writer merge-retry 设计。
+- 测试方案：更新。增加原子状态失败窗口、legacy PSC 迁移、同 JVM/cold recovery 和后台 auto-detect 确定性并发回归。
+- 使用指南：不更新。[GoLand 插件使用指南](../../guides/goland-plugin-guide.md)的安装、界面和用户操作没有变化。
+- 开发指南：更新。补充两个 ownership 文件、迁移边界和 VCS revision/snapshot 并发约束。
+- 交付记录：不创建。本轮没有发布、安装迁移、回滚或对外交付里程碑。
 - 按次验证报告：已创建。[2026-08-17 GUI 验收报告](testing/verification-2026-08-17.md)记录真实日常 GoLand 结果，并因 project-dispose 异常、Project View 刷新缺口、矩阵未完成和缺少 exact commit 判定为 `NO-GO`。
 
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 工作树候选已修复 Project Model 跨事务 ownership 恢复、手动 same-digest reconcile 和 VCS Settings writer 并发覆盖问题；Node.js 24 下 Desktop 全量检查为 31 个文件/335 项测试，插件为 217 项测试，并通过项目配置、结构检查与 ZIP 构建。当前 ZIP SHA-256 为 `7e9a8ad0b03bc64b7fc94d38196caed17b017b5f86ca3602c4ef31dbda16edb5`；该候选尚未重新执行 261/262 Plugin Verifier 或真实 GUI 矩阵，不能继承前一 ZIP 的 Compatible/GUI 结论。按原型收口的[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)也绑定更早候选，只作为界面参考；[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)继续保持 `NO-GO`，直到新的 exact-candidate 验证重新覆盖 ownership recovery、manual reconcile、并发 VCS 修改、project close/IDE quit、Project View 刷新和全部视觉/安全场景。
+功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 工作树候选已用更强持久化与并发协议修复 Project Model 跨事务 ownership、手动 same-digest reconcile 和 VCS 并发覆盖问题：Project Model 与 VCS 分别使用 `.idea/reqws-managed-project-model.json`、`.idea/reqws-vcs-ownership.json` 的 verified atomic 状态；VCS 以 v2 pending add/remove、删除前 tombstone 及 mapping revision/full-snapshot quiescent merge-retry 防止 UI/pooled auto-detect 竞争被静默当作成功，但公开 API 仍没有 CAS，不能宣称平台级线性化。Node.js 24 下 Desktop 全量检查为 31 个文件/335 项测试；JDK 21 下插件 250 项测试、项目配置/结构检查与 ZIP 构建均通过，GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier 均为 Compatible。当前 ZIP SHA-256 为 `fcd7b8b7213c091dadaf33ba601188c6fc73543481b4e14f77a70c020d8bb5b9`。这些自动化与哈希绑定当前代码候选，但尚未把该 ZIP 安装到真实 GoLand 重新执行完整 GUI 矩阵，因此不能继承前一候选的 GUI/冷启动结论。按原型收口的[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)同样绑定更早候选，只作为界面参考；[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)继续保持 `NO-GO`，直到新的 exact-candidate 验证重新覆盖 atomic ownership recovery、manual reconcile、UI/pooled VCS 并发修改、project close/IDE quit、Project View 刷新和全部视觉/安全场景。

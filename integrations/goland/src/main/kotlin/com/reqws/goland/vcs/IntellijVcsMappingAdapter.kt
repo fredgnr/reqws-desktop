@@ -1,6 +1,7 @@
 package com.reqws.goland.vcs
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.openapi.vcs.VcsDirectoryMapping
@@ -9,11 +10,20 @@ import git4idea.repo.GitRepositoryManager
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.util.UUID
 
 internal interface VcsMappingPlatform {
   fun isGitAvailable(): Boolean
 
   fun getDirectoryMappings(): List<VcsDirectoryMapping>
+
+  fun getVersionedDirectoryMappings(): VersionedVcsMappings =
+    VersionedVcsMappings(revision = 0, mappings = getDirectoryMappings())
+
+  fun awaitQuiescentDirectoryMappings(): VersionedVcsMappings =
+    getVersionedDirectoryMappings()
+
+  fun acknowledgeExternalMappings(revision: Long) = Unit
 
   fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>)
 
@@ -31,9 +41,24 @@ internal class IntellijVcsMappingPlatform(private val project: Project) : VcsMap
   override fun getDirectoryMappings(): List<VcsDirectoryMapping> =
     vcsManager.getDirectoryMappings().toList()
 
+  private val configurationMonitor: ReqwsVcsConfigurationMonitor
+    get() = project.service()
+
+  override fun getVersionedDirectoryMappings(): VersionedVcsMappings =
+    configurationMonitor.snapshot()
+
+  override fun awaitQuiescentDirectoryMappings(): VersionedVcsMappings =
+    configurationMonitor.awaitQuiescentSnapshot()
+
+  override fun acknowledgeExternalMappings(revision: Long) {
+    configurationMonitor.acknowledgeExternalSnapshot(revision)
+  }
+
   override fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>) {
     // This public API performs the platform's mapped-root update; updateActiveVcss is deprecated.
-    vcsManager.setDirectoryMappings(mappings)
+    configurationMonitor.runPluginWrite(mappings) {
+      vcsManager.setDirectoryMappings(mappings)
+    }
   }
 
   override fun runInDirectoryMappingsWriteContext(action: () -> Unit) {
@@ -66,6 +91,9 @@ internal class IntellijVcsMappingAdapter(
   private val planner: VcsMappingPlanner = VcsMappingPlanner(),
   private val isProjectDisposed: () -> Boolean = { false },
   private val isProjectTrusted: () -> Boolean = { true },
+  private val operationTokenFactory: () -> String = {
+    UUID.randomUUID().toString().replace("-", "")
+  },
 ) {
   fun apply(
     snapshot: ManifestSnapshot,
@@ -82,47 +110,192 @@ internal class IntellijVcsMappingAdapter(
     }
 
     val desired = desiredRoots(snapshot)
-    var current = platform.getDirectoryMappings()
+    var current = platform.getVersionedDirectoryMappings()
+    var planningOwnership = currentOwnership
+    var mappingsCommitted = false
+    var ownershipCommitted = false
+    var converged: MappingCommit? = null
     var attempts = 0
-    var committed: MappingCommit? = null
-    while (attempts < MAX_COMMIT_ATTEMPTS && committed == null) {
-      // Filesystem identity work remains on the caller's background context. The resulting plan
-      // is valid only for this exact, full mapping list (VcsDirectoryMapping equality includes
-      // rootSettings); the serialized final check below rejects it if the list has changed.
+    while (attempts < MAX_COMMIT_ATTEMPTS && converged == null) {
+      attempts += 1
       val plannedFrom = current
-      val proposedPlan = plan(snapshot, plannedFrom, currentOwnership, desired)
-      // Ownership path validation can call Files.exists/toRealPath. Prepare immutable commits
-      // before entering the EDT write context; stale plans simply discard these prepared values.
-      val ownershipCommits = prepareOwnershipCommits(proposedPlan, ownershipRecorder)
-      var attempt: MappingCommitAttempt? = null
-      platform.runInDirectoryMappingsWriteContext {
-        val latest = platform.getDirectoryMappings()
-        attempt = if (!sameMappings(plannedFrom, latest)) {
-          MappingCommitAttempt.Stale(latest)
+      // An external writer can publish A+U after ReqWS's final read and then be overwritten by
+      // ReqWS's whole-list A+R set. Plan from the retained external A+U baseline, while all commit
+      // checks below still compare against the actual live mapping snapshot.
+      val planningMappings = plannedFrom.pendingExternal?.mappings ?: plannedFrom.mappings
+      val proposedPlan = plan(snapshot, planningMappings, planningOwnership, desired)
+      val expectedMappings = mergedMappings(proposedPlan, planningMappings)
+      val requiresMappingWrite = proposedPlan.mappingsChanged ||
+        !sameMappings(expectedMappings, plannedFrom.mappings)
+      val ownershipCommits = prepareOwnershipCommits(
+        snapshot = snapshot,
+        plan = proposedPlan,
+        currentMappings = planningMappings,
+        actualMappings = plannedFrom.mappings,
+        expectedMappings = expectedMappings,
+        currentOwnership = planningOwnership,
+        recorder = ownershipRecorder,
+        transitionRequired = requiresMappingWrite,
+      )
+
+      // First serialize only the equality/gate check. The verified atomic file write must remain
+      // outside EDT, and a second equality check follows it before any VCS mapping mutation.
+      val preflight = checkCurrentInWriteContext(
+        expected = plannedFrom,
+        stage = if (requiresMappingWrite) {
+          VcsMappingApplyStage.OWNERSHIP
         } else {
-          MappingCommitAttempt.Committed(
-            commitPlan(
-              plan = proposedPlan,
-              current = latest,
-              ownershipCommits = ownershipCommits,
-            ),
+          VcsMappingApplyStage.MAPPINGS
+        },
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+      )
+      if (preflight != null) {
+        current = preflight
+        continue
+      }
+
+      if (requiresMappingWrite) {
+        ensureMutationAllowed(
+          stage = VcsMappingApplyStage.OWNERSHIP,
+          mappingsCommitted = mappingsCommitted,
+          ownershipCommitted = ownershipCommitted,
+        )
+        persistOwnership(
+          ownershipCommits.transition,
+          mappingsCommitted = mappingsCommitted,
+          ownershipCommitted = ownershipCommitted,
+        )
+        ownershipCommitted = true
+        // Once the journal is durable, its pending phases are tombstones. If a writer invalidates
+        // this plan, retries must not reconstruct deletion authority from the old stable input.
+        planningOwnership = ownershipCommits.transitionState.stableMappings
+
+        var writeResult: VersionedVcsMappings? = null
+        platform.runInDirectoryMappingsWriteContext {
+          val latest = platform.getVersionedDirectoryMappings()
+          if (!sameSnapshot(plannedFrom, latest)) {
+            writeResult = latest
+            return@runInDirectoryMappingsWriteContext
+          }
+          ensureMutationAllowed(
+            stage = VcsMappingApplyStage.MAPPINGS,
+            mappingsCommitted = mappingsCommitted,
+            ownershipCommitted = ownershipCommitted,
           )
+          try {
+            platform.setDirectoryMappings(expectedMappings)
+            mappingsCommitted = true
+          } catch (exception: Exception) {
+            throw VcsMappingApplyException(
+              code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+              stage = VcsMappingApplyStage.MAPPINGS,
+              mappingsCommitted = mappingsCommitted,
+              ownershipCommitted = ownershipCommitted,
+              cause = exception,
+            )
+          }
+        }
+        if (writeResult != null) {
+          current = requireNotNull(writeResult)
+          continue
         }
       }
-      when (val completed = checkNotNull(attempt)) {
-        is MappingCommitAttempt.Stale -> current = completed.current
-        is MappingCommitAttempt.Committed -> committed = completed.commit
+
+      val quiescent = platform.awaitQuiescentDirectoryMappings()
+      if (
+        !quiescent.quiescent ||
+        !sameMappings(expectedMappings, quiescent.mappings) ||
+        quiescent.pendingExternal?.revision != plannedFrom.pendingExternal?.revision
+      ) {
+        current = quiescent
+        continue
       }
-      attempts += 1
-    }
-    val commit = committed ?: run {
-      throw VcsMappingApplyException(
-        code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
-        stage = VcsMappingApplyStage.MAPPINGS,
-        mappingsCommitted = false,
-        ownershipCommitted = false,
+      val finalCheck = checkCurrentInWriteContext(
+        expected = quiescent,
+        stage = VcsMappingApplyStage.OWNERSHIP,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+      )
+      if (finalCheck != null || !sameMappings(expectedMappings, quiescent.mappings)) {
+        current = finalCheck ?: quiescent
+        continue
+      }
+
+      val plannedExternal = plannedFrom.pendingExternal
+      if (plannedExternal != null) {
+        platform.acknowledgeExternalMappings(plannedExternal.revision)
+        val acknowledged = platform.getVersionedDirectoryMappings()
+        if (
+          acknowledged.pendingExternal != null ||
+          !sameMappings(expectedMappings, acknowledged.mappings)
+        ) {
+          current = acknowledged
+          continue
+        }
+      }
+
+      ensureMutationAllowed(
+        stage = VcsMappingApplyStage.OWNERSHIP,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+      )
+      val finalOwnershipCommit = prepareOwnershipCommit(
+        state = ownershipCommits.finalState,
+        recorder = ownershipRecorder,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+      )
+      persistOwnership(
+        finalOwnershipCommit,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+      )
+      ownershipCommitted = true
+      planningOwnership = proposedPlan.nextOwnership
+
+      // Detect a reverse-order writer that completes while the final ownership file is flushed.
+      // A still-later event is handled by the production monitor's external-change listener.
+      val verified = platform.awaitQuiescentDirectoryMappings()
+      if (
+        !verified.quiescent ||
+        verified.pendingExternal != null ||
+        !sameMappings(expectedMappings, verified.mappings)
+      ) {
+        // Final state can mint CREATED authority for additions. If a reverse-order writer is
+        // observed, durably demote it back to the non-authorizing transition before replanning.
+        val recoveryCommit = if (ownershipCommits.transition != null) {
+          prepareOwnershipCommit(
+            state = ownershipCommits.transitionState,
+            recorder = ownershipRecorder,
+            mappingsCommitted = mappingsCommitted,
+            ownershipCommitted = ownershipCommitted,
+          )
+        } else {
+          null
+        }
+        persistOwnership(
+          recoveryCommit,
+          mappingsCommitted = mappingsCommitted,
+          ownershipCommitted = ownershipCommitted,
+        )
+        if (ownershipCommits.transition != null) ownershipCommitted = true
+        planningOwnership = ownershipCommits.transitionState.stableMappings
+        current = verified
+        continue
+      }
+      converged = MappingCommit(
+        plan = proposedPlan,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
       )
     }
+    val commit = converged ?: throw VcsMappingApplyException(
+      code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+      stage = VcsMappingApplyStage.MAPPINGS,
+      mappingsCommitted = mappingsCommitted,
+      ownershipCommitted = ownershipCommitted,
+    )
 
     ensureMutationAllowed(
       stage = VcsMappingApplyStage.REFRESH,
@@ -156,107 +329,58 @@ internal class IntellijVcsMappingAdapter(
     )
   }
 
-  private fun commitPlan(
-    plan: VcsMappingPlan,
-    current: List<VcsDirectoryMapping>,
-    ownershipCommits: PreparedOwnershipCommits,
-  ): MappingCommit {
-    var mappingsCommitted = false
-    var ownershipCommitted = false
-    ownershipCommits.preRemoval?.let { preRemoval ->
-      // Revoke deletion authority before committing a destructive mapping removal. If the
-      // process stops after this point, the old mapping may remain, but a future same-path user
-      // mapping can never inherit a stale CREATED claim.
-      ensureMutationAllowed(
-        stage = VcsMappingApplyStage.OWNERSHIP,
-        mappingsCommitted = false,
-        ownershipCommitted = false,
-      )
-      try {
-        preRemoval.commit()
-        ownershipCommitted = true
-      } catch (exception: Exception) {
-        throw VcsMappingApplyException(
-          code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
-          stage = VcsMappingApplyStage.OWNERSHIP,
-          mappingsCommitted = false,
-          ownershipCommitted = false,
-          cause = exception,
-        )
-      }
-    }
-    if (plan.mappingsChanged) {
-      ensureMutationAllowed(
-        stage = VcsMappingApplyStage.MAPPINGS,
-        mappingsCommitted = false,
-        ownershipCommitted = ownershipCommitted,
-      )
-      val merged = current.filterIndexed { index, _ -> index !in plan.removalIndices } +
-        plan.additions.map { addition ->
-          VcsDirectoryMapping(addition.directory, GIT_VCS_NAME)
-        }
-      try {
-        platform.setDirectoryMappings(merged)
-        mappingsCommitted = true
-      } catch (exception: Exception) {
-        throw VcsMappingApplyException(
-          code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
-          stage = VcsMappingApplyStage.MAPPINGS,
-          mappingsCommitted = false,
-          ownershipCommitted = ownershipCommitted,
-          cause = exception,
-        )
-      }
-    }
-
-    // Record newly-created mapping evidence only after setDirectoryMappings succeeds. A refresh
-    // failure must not orphan that mapping, while a failed set must never create deletion rights.
-    ownershipCommits.postMapping?.let { finalOwnership ->
-      ensureMutationAllowed(
-        stage = VcsMappingApplyStage.OWNERSHIP,
-        mappingsCommitted = mappingsCommitted,
-        ownershipCommitted = ownershipCommitted,
-      )
-      try {
-        finalOwnership.commit()
-        ownershipCommitted = true
-      } catch (exception: Exception) {
-        throw VcsMappingApplyException(
-          code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
-          stage = VcsMappingApplyStage.OWNERSHIP,
-          mappingsCommitted = mappingsCommitted,
-          ownershipCommitted = ownershipCommitted,
-          cause = exception,
-        )
-      }
-    }
-    return MappingCommit(
-      plan = plan,
-      mappingsCommitted = mappingsCommitted,
-      ownershipCommitted = ownershipCommitted,
-    )
-  }
-
   private fun prepareOwnershipCommits(
+    snapshot: ManifestSnapshot,
     plan: VcsMappingPlan,
-    ownershipRecorder: VcsMappingOwnershipRecorder,
+    currentMappings: List<VcsDirectoryMapping>,
+    actualMappings: List<VcsDirectoryMapping>,
+    expectedMappings: List<VcsDirectoryMapping>,
+    currentOwnership: List<VcsMappingOwnership>,
+    recorder: VcsMappingOwnershipRecorder,
+    transitionRequired: Boolean,
   ): PreparedOwnershipCommits {
     val additionRelativePaths = plan.additions.mapTo(hashSetOf()) { it.relativeDirectory }
-    val preRemovalOwnership = plan.nextOwnership.filterNot { ownership ->
+    val transitionOwnership = plan.nextOwnership.filterNot { ownership ->
       ownership.relativeDirectory in additionRelativePaths
     }
+    val removedDirectories = plan.removalIndices.mapNotNull { index ->
+      currentMappings.getOrNull(index)?.directory
+    }
+    val removalRelativePaths = currentOwnership.filter { ownership ->
+      if (ownership.kind != VcsMappingOwnershipKind.CREATED) return@filter false
+      val owned = VcsPathIdentity.resolveOwned(
+        snapshot.canonicalProjectRoot,
+        ownership.relativeDirectory,
+      ) ?: return@filter false
+      val explicitlyRemovedByPlan = removedDirectories.any { directory ->
+        VcsPathIdentity.sameStoredDirectory(directory, owned.directory)
+      }
+      val removedWhileRestoringExternalBaseline =
+        actualMappings.any { mapping -> mapping.isExactUncustomizedGit(owned.directory) } &&
+          expectedMappings.none { mapping -> mapping.isExactUncustomizedGit(owned.directory) }
+      explicitlyRemovedByPlan || removedWhileRestoringExternalBaseline
+    }.map { it.relativeDirectory }
+    val transitionState = VcsMappingOwnershipState(
+      stableMappings = transitionOwnership,
+      pendingAdds = additionRelativePaths.sorted().map { relative ->
+        VcsMappingPendingOwnership(relative, operationTokenFactory())
+      },
+      pendingRemovals = removalRelativePaths.sorted().map { relative ->
+        VcsMappingPendingOwnership(relative, operationTokenFactory())
+      },
+    )
+    val finalState = VcsMappingOwnershipState(stableMappings = plan.nextOwnership)
     return try {
-      val preRemoval = if (plan.removalIndices.isNotEmpty()) {
-        ownershipRecorder.prepare(preRemovalOwnership)
+      val transition = if (transitionRequired) {
+        recorder.prepare(transitionState)
       } else {
         null
       }
-      val postMapping = if (preRemoval == null || preRemovalOwnership != plan.nextOwnership) {
-        ownershipRecorder.prepare(plan.nextOwnership)
-      } else {
-        null
-      }
-      PreparedOwnershipCommits(preRemoval = preRemoval, postMapping = postMapping)
+      PreparedOwnershipCommits(
+        transitionState = transitionState,
+        transition = transition,
+        finalState = finalState,
+      )
     } catch (exception: Exception) {
       throw VcsMappingApplyException(
         code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
@@ -267,6 +391,78 @@ internal class IntellijVcsMappingAdapter(
       )
     }
   }
+
+  private fun VcsDirectoryMapping.isExactUncustomizedGit(ownedDirectory: String): Boolean =
+    vcs == GIT_VCS_NAME &&
+      rootSettings == null &&
+      VcsPathIdentity.sameStoredDirectory(directory, ownedDirectory)
+
+  private fun prepareOwnershipCommit(
+    state: VcsMappingOwnershipState,
+    recorder: VcsMappingOwnershipRecorder,
+    mappingsCommitted: Boolean,
+    ownershipCommitted: Boolean,
+  ): VcsMappingOwnershipCommit = try {
+    recorder.prepare(state)
+  } catch (exception: Exception) {
+    throw VcsMappingApplyException(
+      code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+      stage = VcsMappingApplyStage.OWNERSHIP,
+      mappingsCommitted = mappingsCommitted,
+      ownershipCommitted = ownershipCommitted,
+      cause = exception,
+    )
+  }
+
+  private fun persistOwnership(
+    commit: VcsMappingOwnershipCommit?,
+    mappingsCommitted: Boolean,
+    ownershipCommitted: Boolean,
+  ) {
+    if (commit == null) return
+    try {
+      commit.persistAndVerify()
+    } catch (exception: Exception) {
+      throw VcsMappingApplyException(
+        code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+        stage = VcsMappingApplyStage.OWNERSHIP,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+        cause = exception,
+      )
+    }
+  }
+
+  private fun checkCurrentInWriteContext(
+    expected: VersionedVcsMappings,
+    stage: VcsMappingApplyStage,
+    mappingsCommitted: Boolean,
+    ownershipCommitted: Boolean,
+  ): VersionedVcsMappings? {
+    var stale: VersionedVcsMappings? = null
+    platform.runInDirectoryMappingsWriteContext {
+      val latest = platform.getVersionedDirectoryMappings()
+      if (!sameSnapshot(expected, latest)) {
+        stale = latest
+      } else {
+        ensureMutationAllowed(
+          stage = stage,
+          mappingsCommitted = mappingsCommitted,
+          ownershipCommitted = ownershipCommitted,
+        )
+      }
+    }
+    return stale
+  }
+
+  private fun mergedMappings(
+    plan: VcsMappingPlan,
+    current: List<VcsDirectoryMapping>,
+  ): List<VcsDirectoryMapping> =
+    current.filterIndexed { index, _ -> index !in plan.removalIndices } +
+      plan.additions.map { addition ->
+        VcsDirectoryMapping(addition.directory, GIT_VCS_NAME)
+      }
 
   private fun plan(
     snapshot: ManifestSnapshot,
@@ -299,6 +495,13 @@ internal class IntellijVcsMappingAdapter(
     first: List<VcsDirectoryMapping>,
     second: List<VcsDirectoryMapping>,
   ): Boolean = first == second
+
+  private fun sameSnapshot(
+    first: VersionedVcsMappings,
+    second: VersionedVcsMappings,
+  ): Boolean = first.revision == second.revision &&
+    sameMappings(first.mappings, second.mappings) &&
+    first.pendingExternal == second.pendingExternal
 
   private fun ensureMutationAllowed(
     stage: VcsMappingApplyStage,
@@ -362,14 +565,8 @@ internal class IntellijVcsMappingAdapter(
     }
 
   companion object {
-    private const val MAX_COMMIT_ATTEMPTS = 3
+    private const val MAX_COMMIT_ATTEMPTS = 5
   }
-}
-
-private sealed interface MappingCommitAttempt {
-  data class Stale(val current: List<VcsDirectoryMapping>) : MappingCommitAttempt
-
-  data class Committed(val commit: MappingCommit) : MappingCommitAttempt
 }
 
 private data class MappingCommit(
@@ -379,6 +576,7 @@ private data class MappingCommit(
 )
 
 private data class PreparedOwnershipCommits(
-  val preRemoval: VcsMappingOwnershipCommit?,
-  val postMapping: VcsMappingOwnershipCommit?,
+  val transitionState: VcsMappingOwnershipState,
+  val transition: VcsMappingOwnershipCommit?,
+  val finalState: VcsMappingOwnershipState,
 )

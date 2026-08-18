@@ -88,6 +88,8 @@ internal class LatestWinsSyncCoordinator<T>(
   private val closed = AtomicBoolean(false)
   private val nextRequestId = AtomicLong(0)
   private val appliedDigest = AtomicReference<String?>(initialAppliedDigest)
+  private val invalidationEpoch = AtomicLong(0)
+  private val appliedInvalidationEpoch = AtomicLong(0)
   private val submissionLock = Any()
   private var pendingSubmission: Submission<T>? = null
   private var manualReconcilePending = false
@@ -128,8 +130,18 @@ internal class LatestWinsSyncCoordinator<T>(
       requestId = nextRequestId.incrementAndGet(),
       trigger = trigger,
       candidate = candidate,
+      invalidationEpoch = invalidationEpoch.get(),
     ),
   )
+
+  /**
+   * Marks the live projection dirty without pretending an external platform event was a manual
+   * user action. The epoch is captured by later candidates, so an invalidation that races with an
+   * in-flight apply cannot be overwritten when that older apply publishes its digest.
+   */
+  fun invalidateAppliedDigest() {
+    invalidationEpoch.incrementAndGet()
+  }
 
   fun offerReadFailure(
     cause: Throwable,
@@ -194,7 +206,8 @@ internal class LatestWinsSyncCoordinator<T>(
     // mappings, or filesystem may have drifted even when the manifest bytes are unchanged.
     if (
       submission.trigger != SyncTrigger.MANUAL &&
-      candidate.digestSha256 == appliedDigest.get()
+      candidate.digestSha256 == appliedDigest.get() &&
+      submission.invalidationEpoch <= appliedInvalidationEpoch.get()
     ) {
       notifyObserver(
         SyncCoordinatorEvent.NoOp(
@@ -222,6 +235,7 @@ internal class LatestWinsSyncCoordinator<T>(
       applier.apply(candidate)
       currentCoroutineContext().ensureActive()
       appliedDigest.set(candidate.digestSha256)
+      appliedInvalidationEpoch.set(submission.invalidationEpoch)
       notifyObserver(
         SyncCoordinatorEvent.Applied(
           requestId = submission.requestId,
@@ -276,6 +290,7 @@ private data class CandidateSubmission<T>(
   override val requestId: Long,
   override val trigger: SyncTrigger,
   val candidate: SyncCandidate<T>,
+  val invalidationEpoch: Long,
 ) : Submission<T>
 
 private data class ReadFailureSubmission<T>(

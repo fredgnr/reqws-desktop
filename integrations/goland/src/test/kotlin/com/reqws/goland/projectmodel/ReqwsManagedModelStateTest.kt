@@ -2,6 +2,7 @@ package com.reqws.goland.projectmodel
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReqwsManagedModelStateTest {
@@ -9,13 +10,14 @@ class ReqwsManagedModelStateTest {
   fun `stores sorted relative ownership with opaque marker tokens`() {
     val state = ReqwsManagedModelState()
 
-    state.replaceOwnership(
-      "workspace",
-      mapOf(
-        "repo-z" to TOKEN_C,
-        ".reqws" to TOKEN_A,
-        "repo-a" to TOKEN_B,
+    state.replaceExternalMirror(
+      moduleName = "workspace",
+      managedClaims = listOf(
+        DurableManagedClaim("repo-z", TOKEN_C),
+        DurableManagedClaim(".reqws", TOKEN_A),
+        DurableManagedClaim("repo-a", TOKEN_B),
       ),
+      recoveryClaims = listOf(DurableManagedClaim("repo-old", TOKEN_D)),
     )
 
     assertEquals(REQWS_MODEL_STATE_VERSION, state.state.stateVersion)
@@ -29,6 +31,10 @@ class ReqwsManagedModelStateTest {
       listOf(TOKEN_A, TOKEN_B, TOKEN_C),
       state.state.managedExcludes.map { it.markerToken },
     )
+    assertEquals(listOf("repo-old"), state.state.recoveryClaims.map { it.relativePath })
+    assertEquals(listOf(TOKEN_D), state.state.recoveryClaims.map { it.markerToken })
+    assertTrue(state.state.pendingAdds.isEmpty())
+    assertTrue(state.state.pendingRemovals.isEmpty())
   }
 
   @Test
@@ -39,6 +45,7 @@ class ReqwsManagedModelStateTest {
         persistedClaim("repo-b", TOKEN_B),
         persistedClaim(".reqws", TOKEN_A),
       )
+      data.recoveryClaims = mutableListOf(persistedClaim("repo-old", TOKEN_C))
     }
     val state = ReqwsManagedModelState()
 
@@ -56,6 +63,7 @@ class ReqwsManagedModelStateTest {
         ),
         pendingAdds = emptyList(),
         pendingRemovals = emptyList(),
+        recoveryClaims = listOf(ManagedExcludeOwnership("repo-old", TOKEN_C)),
       ),
       state.ownership(),
     )
@@ -67,7 +75,11 @@ class ReqwsManagedModelStateTest {
   @Test
   fun `returned persistence state cannot mutate stored claims`() {
     val state = ReqwsManagedModelState()
-    state.replaceOwnership("workspace", mapOf(".reqws" to TOKEN_A))
+    state.replaceExternalMirror(
+      moduleName = "workspace",
+      managedClaims = listOf(DurableManagedClaim(".reqws", TOKEN_A)),
+      recoveryClaims = emptyList(),
+    )
 
     state.state.managedExcludes.single().markerToken = TOKEN_B
 
@@ -75,7 +87,7 @@ class ReqwsManagedModelStateTest {
   }
 
   @Test
-  fun `persists pending add and remove phases through a cold state reload`() {
+  fun `retains the version three journal only for legacy migration`() {
     val original = ReqwsManagedModelState()
     original.replaceOwnership(
       moduleName = "workspace",
@@ -86,7 +98,7 @@ class ReqwsManagedModelStateTest {
 
     val reloaded = ReqwsManagedModelState().also { it.loadState(original.state) }
 
-    assertEquals(REQWS_MODEL_STATE_VERSION, reloaded.ownership().stateVersion)
+    assertEquals(REQWS_LEGACY_JOURNAL_STATE_VERSION, reloaded.ownership().stateVersion)
     assertEquals(
       listOf(ManagedExcludeOwnership(".reqws", TOKEN_A)),
       reloaded.ownership().managedExcludes,
@@ -99,6 +111,7 @@ class ReqwsManagedModelStateTest {
       listOf(ManagedExcludeOwnership("repo-z", TOKEN_C)),
       reloaded.ownership().pendingRemovals,
     )
+    assertTrue(reloaded.ownership().recoveryClaims.isEmpty())
   }
 
   private fun persistedClaim(
@@ -114,5 +127,6 @@ class ReqwsManagedModelStateTest {
     private const val TOKEN_A = "11111111111111111111111111111111"
     private const val TOKEN_B = "22222222222222222222222222222222"
     private const val TOKEN_C = "33333333333333333333333333333333"
+    private const val TOKEN_D = "44444444444444444444444444444444"
   }
 }

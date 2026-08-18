@@ -15,6 +15,7 @@ import com.reqws.goland.sync.SyncCoordinatorEvent
 import com.reqws.goland.sync.SyncCoordinatorObserver
 import com.reqws.goland.sync.SyncFailureStage
 import com.reqws.goland.sync.SyncTrigger
+import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.watch.ManifestSyncRequest
 import com.reqws.goland.watch.ManifestVfsWatcher
 import java.nio.file.Path
@@ -62,6 +63,8 @@ class ReqwsProjectService(
     },
     observer = SyncCoordinatorObserver(::onCoordinatorEvent),
   )
+  private val vcsChangeRegistration = project.service<ReqwsVcsConfigurationMonitor>()
+    .addExternalChangeListener(::handleExternalVcsConfigurationChange)
   private val trustMonitor = TrustTransitionMonitor(
     scope = coroutineScope,
     probe = TrustStateProbe(trustGate::isTrusted),
@@ -78,6 +81,15 @@ class ReqwsProjectService(
 
   /** Startup, VFS, trust, and Tool Window lifecycle refreshes retain automatic no-op semantics. */
   internal fun refreshAutomatically(): Job? = requestRefresh(SyncTrigger.AUTOMATIC)
+
+  private fun handleExternalVcsConfigurationChange() {
+    if (disposed.get() || project.isDisposed) return
+    // A platform writer may publish after a previously successful same-digest apply. Carry a
+    // monotonic dirty epoch into the automatic candidate so an in-flight older apply cannot make
+    // this recovery request look clean again.
+    coordinator.invalidateAppliedDigest()
+    refreshAutomatically()
+  }
 
   private fun requestRefresh(trigger: SyncTrigger): Job? {
     if (disposed.get() || project.isDisposed) return null
@@ -298,6 +310,11 @@ class ReqwsProjectService(
     try {
       statePublisher.publish(ReqwsProjectState.DISPOSED)
     } finally {
+      try {
+        vcsChangeRegistration.close()
+      } catch (_: Exception) {
+        // Project disposal must still tear down the remaining lifecycle-owned resources.
+      }
       readRequests.invalidate()
       trustMonitor.close()
       watcherRef.getAndSet(null)?.dispose()
