@@ -22,8 +22,8 @@ internal class ReqwsVcsConfigurationMonitor(
   private val project: Project,
 ) : Disposable {
   private val revision = AtomicLong(0)
-  private val expectedPluginWrite = AtomicReference<List<VcsDirectoryMapping>?>(null)
-  private val recentPluginWrite = AtomicReference<List<VcsDirectoryMapping>?>(null)
+  private val activePluginWrite = AtomicReference<PluginWriteMarker?>(null)
+  private val synchronousPluginWrite = ThreadLocal<PluginWriteMarker?>()
   private val pendingExternal = AtomicReference<ExternalVcsMappings?>(null)
   private val externalListeners = CopyOnWriteArrayList<() -> Unit>()
 
@@ -40,8 +40,8 @@ internal class ReqwsVcsConfigurationMonitor(
   fun snapshot(): VersionedVcsMappings {
     repeat(MAX_SNAPSHOT_ATTEMPTS - 1) {
       val before = revision.get()
-      val mappings = vcsManager.getDirectoryMappings().toList()
-      val external = pendingExternal.get()
+      val mappings = canonicalizeVcsMappings(vcsManager.getDirectoryMappings().toList())
+      val external = pendingExternal.get()?.platformCanonicalized()
       val after = revision.get()
       if (before == after) {
         return VersionedVcsMappings(after, mappings, pendingExternal = external)
@@ -49,8 +49,8 @@ internal class ReqwsVcsConfigurationMonitor(
     }
     return VersionedVcsMappings(
       revision = revision.get(),
-      mappings = vcsManager.getDirectoryMappings().toList(),
-      pendingExternal = pendingExternal.get(),
+      mappings = canonicalizeVcsMappings(vcsManager.getDirectoryMappings().toList()),
+      pendingExternal = pendingExternal.get()?.platformCanonicalized(),
     )
   }
 
@@ -60,19 +60,22 @@ internal class ReqwsVcsConfigurationMonitor(
   )
 
   fun runPluginWrite(expectedMappings: List<VcsDirectoryMapping>, action: () -> Unit) {
-    val expected = expectedMappings.toList()
-    check(expectedPluginWrite.compareAndSet(null, expected)) {
+    val expected = canonicalizeVcsMappings(expectedMappings)
+    val marker = PluginWriteMarker(expected)
+    check(activePluginWrite.compareAndSet(null, marker)) {
       "Nested ReqWS VCS mapping writes are not supported"
     }
+    check(synchronousPluginWrite.get() == null) { "Nested ReqWS VCS mapping thread marker" }
+    synchronousPluginWrite.set(marker)
     try {
       action()
     } finally {
-      // Some platform implementations publish synchronously and some coalesce notification work.
-      // Explicitly advancing the revision makes the write visible in either case; retain one exact
-      // expected snapshot so a delayed self-event cannot replace an earlier external baseline.
+      synchronousPluginWrite.remove()
+      // Explicitly advance the revision even when the platform publishes no synchronous event.
+      // A delayed callback is intentionally external: list equality cannot distinguish a delayed
+      // self-event from an equal-list user/pooled ABA replacement and must not mint deletion rights.
       revision.incrementAndGet()
-      recentPluginWrite.set(expected)
-      expectedPluginWrite.compareAndSet(expected, null)
+      activePluginWrite.compareAndSet(marker, null)
     }
   }
 
@@ -91,17 +94,14 @@ internal class ReqwsVcsConfigurationMonitor(
 
   private fun configurationChanged() {
     val eventRevision = revision.incrementAndGet()
-    val mappings = vcsManager.getDirectoryMappings().toList()
-    val expected = expectedPluginWrite.get()
-    if (expected != null && mappings == expected) return
-    val recent = recentPluginWrite.get()
-    if (recent != null && mappings == recent && recentPluginWrite.compareAndSet(recent, null)) return
-    recentPluginWrite.set(null)
+    val mappings = canonicalizeVcsMappings(vcsManager.getDirectoryMappings().toList())
+    val marker = synchronousPluginWrite.get()
+    if (marker != null && mappings == marker.expectedMappings) return
     // Retain the complete external list (including rootSettings) until the adapter proves that a
     // later ReqWS list was planned from this exact baseline and explicitly acknowledges it.
     val recorded = recordNewerExternalSnapshot(
       pendingExternal,
-      ExternalVcsMappings(eventRevision, mappings),
+      ExternalVcsMappings(eventRevision, mappings).platformCanonicalized(),
     )
     if (!recorded) return
     externalListeners.forEach { listener ->
@@ -114,8 +114,8 @@ internal class ReqwsVcsConfigurationMonitor(
   }
 
   override fun dispose() {
-    expectedPluginWrite.set(null)
-    recentPluginWrite.set(null)
+    activePluginWrite.set(null)
+    synchronousPluginWrite.remove()
     pendingExternal.set(null)
     externalListeners.clear()
   }
@@ -140,11 +140,11 @@ internal class ReqwsVcsConfigurationMonitor(
     ): VersionedVcsMappings {
       require(maxSamples > 0)
       require(requiredStableSamples > 0)
-      var previous = snapshot()
+      var previous = snapshot().platformCanonicalized()
       var stableSamples = 0
       repeat(maxSamples) {
         pause()
-        val current = snapshot()
+        val current = snapshot().platformCanonicalized()
         if (
           current.revision == previous.revision &&
           current.mappings == previous.mappings &&
@@ -166,3 +166,7 @@ internal class ReqwsVcsConfigurationMonitor(
     private const val QUIESCENCE_SAMPLE_MILLIS = 25L
   }
 }
+
+private data class PluginWriteMarker(
+  val expectedMappings: List<VcsDirectoryMapping>,
+)

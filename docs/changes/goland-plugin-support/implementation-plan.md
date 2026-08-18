@@ -362,10 +362,10 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 实现：
 
 - 读取现存 VCS mappings；
-- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；pooled auto-detect 的外部 revision/snapshot 也会被合入下一轮有界 quiescent 重规划，持续不稳定则 fail closed；
+- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；expected/set/self-event/quiescence 全部使用平台 observable canonical form（exact directory last-wins，再按 directory 排序）。后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，且不把 pending external 误当作最新 live：只保留不同 directory 的 live-only 完整对象；pending-only 或同 directory 不等对象均等待事件，达到上限就在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复 pending-only。只有当前 plugin write 的同步回调可识别为 self-event，延迟的相同列表回调仍记作 external。EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；pooled auto-detect 的外部 revision/snapshot 进入下一轮有界 quiescent 重规划；
 - 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
 - 添加缺失 active mappings；
-- `.idea/reqws-vcs-ownership.json` v2 以 verified atomic write 保存 stable、pending add 与 pending remove；新增前先写 pending，只有同 JVM 平台提交成功后才记录为 `CREATED`；移除前先持久化已撤权 tombstone，cold pending 永不授权删除；legacy PSC v1 只在 atomic 文件不存在时迁移，atomic 文件存在但不可验证时禁止 fallback；
+- `.idea/reqws-vcs-ownership.json` v2 以 verified atomic write 保存 stable、pending add 与 pending remove；真正的 plugin add 按 actual live → expected whole-list 的真实变化在 mutation 前写 pending add，pending-only external 恢复不尝试写入。只有同 JVM 平台提交、同步 ack 和静止检查成功后才记录为 `CREATED`；本轮 observer 已观察到的 external event、snapshot mismatch 或 retry 都在继续前将 `CREATED` 持久降为 `BORROWED`，最终 verify 后才到达的事件则使 baseline dirty 并由下一轮 automatic reconcile 先降权。移除前先持久化已撤权 tombstone，cold pending 永不授权删除；legacy PSC v1 只在 atomic 文件不存在时迁移，atomic 文件存在但不可验证时禁止 fallback；
 - 保留用户 mapping；
 - workspace 内额外/root mapping 保留并进入 degraded，stale `CREATED` 删除权在 mapping 消失时丢弃；
 - path identity normalization；
@@ -412,7 +412,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - retained repository 不在 Git roots；
 - 用户 mapping 不丢失；
 - verified atomic VCS state 在失败窗口不授予陈旧删除权，cold pending 不删除 mapping；
-- Settings 与独立 pooled writer 的两种反序时序都由 revision/full-snapshot merge-retry 保留未知 mapping 和 `rootSettings`，更晚 external event 会强制 automatic reconcile；
+- Settings 与独立 pooled writer 的两种反序时序都由 canonical revision/full-snapshot merge-retry 保留不同 directory 的 live-only mapping 和 `rootSettings`；mutation 与 event publication 分离时，pending-only 或同 directory ambiguity 都零写入，actual plugin add 才先持久 pending add；本轮观察到的 external event 会在重规划前撤销 `CREATED`，最终 verify 后到达的事件使 baseline dirty并强制下一次 automatic reconcile；
 - Tool Window 能区分 model 与 VCS degraded；
 - Desktop 相关全量测试通过。
 

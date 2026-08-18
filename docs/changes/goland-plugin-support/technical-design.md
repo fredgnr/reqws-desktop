@@ -418,7 +418,7 @@ DISPOSED
 - VFS listener callback 不做阻塞 IO；
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
-- VCS mapping 的文件系统身份、候选 plan 与 verified atomic ownership checkpoint 都在后台执行；EDT closure 只做最终完整 mapping equality/revision gate 和整表 `setDirectoryMappings`，避免 Settings writer 在 final read/set 之间插入且不把文件 IO 带上 EDT。项目级 mapping change tracker 同时维护单调 revision 与待确认的完整 external snapshot，用来恢复不走 EDT 的 pooled auto-detect writer 并进入有界 quiescent merge-retry；
+- VCS mapping 的文件系统身份、候选 plan 与 verified atomic ownership checkpoint 都在后台执行；EDT closure 只做最终完整 mapping equality/revision gate 和整表 `setDirectoryMappings`，避免 Settings writer 在 final read/set 之间插入且不把文件 IO 带上 EDT。expected、set、自事件标记、external snapshot 和 quiescence 都先复刻平台可观察的 canonical 形式：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。只有当前插件 write 的同步回调才是 self-event；同列表的延迟回调也按 external 处理。项目级 mapping change tracker 同时维护单调 revision 与待确认的完整 external snapshot，用来检测不走 EDT 的 pooled auto-detect writer 并进入有界 quiescent merge-retry；
 - trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿两层投影；Workspace Model transaction 的写入/提交边界、VCS ownership pre-revoke、mapping set、最终 ownership record、refresh 后以及 overall digest 前都重新 gate；事务内翻转通过异常回滚；
 - Workspace Model 与 ownership 文件不是同一事务，因此模型 authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界；legacy `PersistentStateComponent` 只作为一次迁移来源，不再承担 mutation journal 的 durability；
 - 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
@@ -532,20 +532,20 @@ ReqwsSynchronization PersistentStateComponent
 算法：
 
 1. 从 validated manifest 得到目标 active repo paths，并在 apply 前按实时文件系统重新判定 present/missing/普通 `.git`；
-2. mapping change tracker 对每次配置变化记录单调 revision 和对应完整 immutable snapshot；后台规划同时绑定 base revision/snapshot，进入 EDT 串行 write context 后重新读取完整列表，以包含 `rootSettings` 的 equality 与 revision 双重校验；任一变化都退出 EDT，把 observer 保存的非 ReqWS mapping/rootSettings 合入下一轮并等待有界 quiescence 后重规划；
+2. mapping change tracker 对每次已发布配置事件记录单调 revision 和对应完整 immutable snapshot；pending external 只代表最新已发布事件，不假定它比当前 live list 更新。后台规划只合入不同 directory 的 live-only 完整对象（包括 `rootSettings`）。pending-only 项或同 directory 的不等对象均无法由公开 API 判定为覆盖还是删除，必须等待对应 payload-less 事件；达到重试上限仍不明确时，在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复或保留 pending-only 项。随后进入 EDT 串行 write context 重新读取平台 canonical 列表，以完整 equality 与 revision 双重校验；任一变化都退出 EDT 并等待有界 quiescence 后重规划；
 3. 保留所有非 ReqWS-owned mappings；
 4. 对已有等价 Git mapping 标记为 `BORROWED`，不制造重复，也不取得删除权；
 5. 对缺失 active path 添加 `Git` mapping；
 6. 对已不活动且明确 owned 的 mapping，先把 stable claim 转成 `PENDING_REMOVE` tombstone 并 verified atomic 落盘，再尝试移除 mapping；失败宁可遗留无删除权的 mapping，不能遗留可误删的陈旧权利；
-7. 新增前先写 `PENDING_ADD`；final equality/revision check、mapping 提交和同 JVM 的最终 ownership transition 按固定顺序执行。Settings writer 由 EDT 串行；pooled auto-detect writer 由 revision/full-snapshot observer 检出并触发 quiescent merge-retry；任何更晚到达的 external event 都使 digest baseline dirty，并强制下一次 automatic reconcile；
+7. 真正由本次 plugin apply 添加的 mapping 在平台 mutation 前先写 `PENDING_ADD`；这里的“新增”按 actual live → expected whole-list 的真实平台变化判断，不只看 planner `additions`。pending-only 的 expected-present/actual-absent 恢复属于不明外部状态，不尝试 restoration，也不写 `PENDING_ADD`。只有 mapping set、quiescence 和同步 write ack 都完成后，同 JVM 才能提升为 `CREATED`；本轮已观察到的 external event、snapshot mismatch 或 retry 都先把已有 `CREATED` 持久降为 `BORROWED`，不保留删除权。Settings writer 由 EDT 串行；pooled auto-detect writer 由 revision/full-snapshot observer 检出并触发 quiescent merge-retry；最终 verify 之后才到达的 external event 使 digest baseline dirty，并强制下一次 automatic reconcile 先降权再重规划；
 8. 通过公开 API刷新 Git repository manager；
 9. 验证 Git Tool Window 最终 root 集合。
 
 VCS mapping failure 不得回滚或删除用户 mapping。项目内容已经成功时，状态显示 `DEGRADED`，同一 digest 可通过自动或手动同步重试 VCS apply。
 
-插件自己添加的 mapping 记录为 `CREATED`，只有 verified v2 stable claim 与当前唯一、精确、为 Git 且 `rootSettings` 为空的 mapping 同时成立时，才可在 repository 退出活动集合后删除；用户添加或修改 `rootSettings` 即撤销插件的破坏性删除资格。`PENDING_REMOVE` 是已经撤权的 tombstone，cold load 不得据此继续删除；cold-load 的 `PENDING_ADD` 也不能提升为删除权，最多在重新核对后按非破坏性状态收敛。legacy PSC v1 仅在 atomic 文件不存在时迁移；已存在但不可验证的 v2 文件禁止 fallback。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
+插件自己添加的 mapping 记录为 `CREATED`，只有 verified v2 stable claim 与当前唯一、精确、为 Git 且 `rootSettings` 为空的 mapping 同时成立时，才可在 repository 退出活动集合后删除；observer 已观察到的 external event、snapshot mismatch、retry、用户改动或 mapping 消失都会撤销该资格并降为 `BORROWED`。`PENDING_REMOVE` 是已经撤权的 tombstone，cold load 不得据此继续删除；cold-load 的 `PENDING_ADD` 也不能提升为删除权，最多在重新核对后按非破坏性状态收敛。legacy PSC v1 仅在 atomic 文件不存在时迁移；已存在但不可验证的 v2 文件禁止 fallback。活动 repository 暂时 missing 或暂时不再呈现普通 `.git/` 时，也只在上述完整证据仍成立时保留既有 ownership；mapping 已消失或被定制则放弃陈旧删除权。`BORROWED` mapping 永不由插件删除。重复路径、VCS 类型变化、状态损坏、workspace 内额外 Git coverage 或空目录形式的 project-root mapping 都保留用户配置并转为 ownership/degraded 诊断。项目模型和 VCS 两层都成功且没有 degraded 诊断后才推进 `lastAppliedDigest`。
 
-261 的公开项目级 mapping API 没有 compare-and-set，也没有与后台 auto-detect 共享的公开锁，因此本方案不宣称平台级线性化。mapping change revision/full-snapshot capture、有界 quiescent merge-retry，以及“更晚 external event 令 clean digest baseline 失效并触发 automatic reconcile”在公开 topic 能及时捕获完整列表的范围内避免把竞争静默当作成功；合并时保留 observer 捕获的完整 mapping 对象和 `rootSettings`，在 stable promotion 前连续变化超过上限则 fail closed。仍需保留三个边界：payload-less 回调若延迟到外部列表已被覆盖后才执行就无法重建原列表；final `CREATED` 后发现 drift 时若 durable demotion 本身发生 I/O 故障，刚写入的 stable claim 可能残留；VCS generation 校验不是跨 GoLand 进程 CAS。真实 GUI 仍验证平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果，但后台 auto-detect 不能再只作为 GUI 抽样残余，必须先有独立 pooled writer 的确定性自动化覆盖。
+261 的公开项目级 mapping API 没有 compare-and-set，也没有与后台 auto-detect 共享的公开锁，因此本方案不声称平台级线性化。mapping change revision/full-snapshot capture、平台 canonical form、有界 quiescent merge-retry 及“更晚 external event 令 clean digest baseline 失效并触发 automatic reconcile”形成保守协议：不同 directory 的 live-only 完整对象保留；pending-only 或同 directory 不等对象不猜测 winner，等待上限后零写入 fail closed；本轮观察到的 external/mismatch/retry 在继续前持久撤销 `CREATED`。仍存在两个公开 API 边界：最终 verify 之后才到达的 payload-less event 只能由 listener 触发下一轮 eventual reconcile；若进程在该轮降权 verified write 前终止，事件本身不具备跨重启持久性；已观察 drift 后若 durable recovery 写入本身失败，也只能停止并报告错误，不能宣称已完成降权。真实 GUI 仍验证平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果，但后台 auto-detect 不能再只作为 GUI 抽样残余，必须先有独立 pooled writer 的确定性自动化覆盖。
 
 ## 11. VFS 监听与收敛
 
@@ -776,8 +776,9 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - `.idea/reqws-managed-project-model.json` 的 verified atomic write/readback、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
 - VCS mapping merge/borrow/remove-created；
-- `.idea/reqws-vcs-ownership.json` v2 pending add/remove、remove-before tombstone、写入失败无平台 mutation，以及 cold pending 永不授权删除；
-- final EDT equality-check/set 与用户 Settings writer 串行；mapping revision/full-snapshot 测试以独立 pooled writer 的两种反序时序覆盖 final-read 前后变化，窗口内用户 mapping/rootSettings 必须被 merge 保留，持续 revision churn 时不得写 stable ownership，更晚 external event 必须使 digest baseline dirty 并强制 automatic reconcile；
+- `.idea/reqws-vcs-ownership.json` v2 pending add/remove、remove-before tombstone、写入失败无平台 mutation，以及 cold pending 永不授权删除；只有实际 plugin add 才会在 mutation 前写 pending add，pending-only external 恢复不尝试写入；
+- expected/set/self-event/quiescence 使用平台 last-wins + directory sort canonical form；反序 active repositories 与已有高排序 user mapping 不能制造假 external event 或把新建 mapping 降为 `BORROWED`；只有当前 plugin write 的同步回调可判为 self-event，延迟的相同列表回调仍是 external；
+- final EDT equality-check/set 与用户 Settings writer 串行；mapping revision/full-snapshot 测试以独立 pooled writer 的两种反序时序覆盖 final-read 前后变化，并把 live mutation 与 payload-less event 发布拆成可控阶段；不同 directory 的未发布 live-only mapping/rootSettings 必须被完整保留，pending-only 或同 directory 对象冲突在事件到达前零写入，持续 revision churn 时不得写 stable ownership；任何 external/mismatch/retry 都撤销 `CREATED`，更晚 external event 必须使 digest baseline dirty并强制 automatic reconcile；
 - user module/root/mapping preservation；
 - Safe Mode gate；
 - trust/dispose 在 model transaction 和每个 VCS/ownership commit boundary 翻转时 fail closed；

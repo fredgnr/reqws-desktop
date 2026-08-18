@@ -26,7 +26,7 @@ class ReqwsVcsConfigurationMonitorTest : BasePlatformTestCase() {
     assertEquals(1, changes)
   }
 
-  fun testSuppressesTheMatchingSynchronousPluginWriteEvent() {
+  fun testSuppressesOnlyTheMatchingSynchronousPluginWriteEvent() {
     val monitor = project.service<ReqwsVcsConfigurationMonitor>()
     var externalChanges = 0
     val registration = monitor.addExternalChangeListener { externalChanges += 1 }
@@ -37,13 +37,64 @@ class ReqwsVcsConfigurationMonitorTest : BasePlatformTestCase() {
     }
     assertEquals(0, externalChanges)
 
-    // The first matching event after the synchronous callback is the one delayed self-event the
-    // marker intentionally absorbs. The allowance is one-shot; a later same-list event is external.
-    publishConfigurationChanged()
-    assertEquals(0, externalChanges)
+    // A delayed equal-list callback could also be an external ABA replacement. Only a callback
+    // delivered synchronously while runPluginWrite is active is safe to suppress.
     publishConfigurationChanged()
     assertEquals(1, externalChanges)
+    publishConfigurationChanged()
+    assertEquals(2, externalChanges)
     registration.close()
+  }
+
+  fun testSuppressesTheSynchronousPublicMappingSetterCallbackInThePluginWriteScope() {
+    val manager = ProjectLevelVcsManager.getInstance(project)
+    val monitor = project.service<ReqwsVcsConfigurationMonitor>()
+    val original = manager.getDirectoryMappings().toList()
+    val pluginMapping = VcsDirectoryMapping("/tmp/reqws-public-plugin-write", "Git")
+    var externalChanges = 0
+    val registration = monitor.addExternalChangeListener { externalChanges += 1 }
+
+    try {
+      monitor.runPluginWrite(listOf(pluginMapping)) {
+        manager.setDirectoryMappings(listOf(pluginMapping))
+      }
+
+      assertEquals(0, externalChanges)
+      assertEquals(listOf(pluginMapping), manager.getDirectoryMappings().toList())
+    } finally {
+      registration.close()
+      manager.setDirectoryMappings(original)
+    }
+  }
+
+  fun testProjectLevelVcsManagerUsesLastWinsNaturalOrderingAndPreservesWinnerSettings() {
+    val manager = ProjectLevelVcsManager.getInstance(project)
+    val original = manager.getDirectoryMappings().toList()
+    val stale = VcsDirectoryMapping(
+      "/tmp/reqws-platform-repo-a",
+      "Git",
+      MonitorTestRootSettings("stale"),
+    )
+    val winnerSettings = MonitorTestRootSettings("winner")
+    val winner = VcsDirectoryMapping(
+      "/tmp/reqws-platform-repo-a",
+      "Git",
+      winnerSettings,
+    )
+    val user = VcsDirectoryMapping("/tmp/reqws-platform-z-user", "Mercurial")
+
+    try {
+      manager.setDirectoryMappings(listOf(user, stale, winner))
+
+      val actual = manager.getDirectoryMappings().toList()
+      assertEquals(
+        listOf("/tmp/reqws-platform-repo-a", "/tmp/reqws-platform-z-user"),
+        actual.map { it.directory },
+      )
+      assertSame(winnerSettings, actual.first().rootSettings)
+    } finally {
+      manager.setDirectoryMappings(original)
+    }
   }
 
   fun testWaitsForTwoStableFullSnapshotsBeforeReportingQuiescence() {
@@ -66,6 +117,42 @@ class ReqwsVcsConfigurationMonitorTest : BasePlatformTestCase() {
     assertTrue(result.quiescent)
     assertEquals(1, result.revision)
     assertTrue(samples.isEmpty())
+  }
+
+  fun testQuiescenceUsesPlatformLastWinsAndSortedCanonicalMappings() {
+    val stale = VcsDirectoryMapping(
+      "/workspace/repo-a",
+      "Git",
+      MonitorTestRootSettings("stale"),
+    )
+    val winnerSettings = MonitorTestRootSettings("winner")
+    val winner = VcsDirectoryMapping("/workspace/repo-a", "Git", winnerSettings)
+    val user = VcsDirectoryMapping("/z-user", "Mercurial")
+    val rawExternal = ExternalVcsMappings(3, listOf(user, stale, winner))
+    val canonicalExternal = rawExternal.platformCanonicalized()
+    val samples = ArrayDeque(
+      listOf(
+        VersionedVcsMappings(3, listOf(user, stale, winner), pendingExternal = rawExternal),
+        VersionedVcsMappings(
+          3,
+          listOf(winner, user),
+          pendingExternal = canonicalExternal,
+        ),
+        VersionedVcsMappings(3, listOf(user, stale, winner), pendingExternal = rawExternal),
+      ),
+    )
+
+    val result = ReqwsVcsConfigurationMonitor.awaitQuiescentSnapshot(
+      snapshot = samples::removeFirst,
+      pause = {},
+      maxSamples = 2,
+      requiredStableSamples = 2,
+    )
+
+    assertTrue(result.quiescent)
+    assertEquals(listOf("/workspace/repo-a", "/z-user"), result.mappings.map { it.directory })
+    assertSame(winnerSettings, result.mappings.first().rootSettings)
+    assertEquals(canonicalExternal, result.pendingExternal)
   }
 
   fun testReportsContinuousRevisionChurnAsNonQuiescent() {

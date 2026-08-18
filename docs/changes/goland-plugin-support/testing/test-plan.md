@@ -236,14 +236,16 @@ workspace/
 - `.idea/reqws-vcs-ownership.json` v2 verified atomic round-trip；pending add/remove 必须在平台 mutation 前落盘，write/move/readback 失败不得调用 mapping setter；
 - legacy VCS PSC v1 只在 atomic 文件不存在时迁移；atomic 文件已存在但损坏、版本不支持、workspace identity 不匹配或回读不一致时必须 fail closed，不得 fallback PSC；
 - destructive remove 前先把 `CREATED` 转为 pending-remove tombstone 并落盘；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；cold pending add/remove 均不得授权删除；
-- mapping change tracker 保存单调 revision 与对应完整 snapshot；用不获取 EDT lock 的独立 pooled thread 和 latch 确定性覆盖外部 writer 在 final read 前后落地，adapter 必须 merge 保留其 mapping 对象与 `rootSettings` 后重试；
-- pooled writer 持 stale base 在 ReqWS set 后落地时，下一 revision 必须恢复 ReqWS desired mapping，且最终 stable ownership 与实际 mapping 一致；任何更晚 external event 必须使 clean digest baseline dirty 并强制 automatic reconcile；持续 revision churn 达上限时 fail closed，不留下虚假 `CREATED`；
+- 实际 plugin add 的 expected-present/actual-absent transition 必须在 set 前写 `PENDING_ADD`；pending-only external 恢复不尝试 set 或创建 pending，达到有界等待上限后 mapping/ownership/refresh 均为零；cold plain Git / customized rootSettings mapping 都只能 borrow/保留，不能继承旧删除权；
+- expected、set、自事件识别和 quiescence 使用与 261/262 平台相同的 exact-directory last-wins + directory sort canonical form；反序两个 active repository 与 `/z-user` 后追加 workspace repo 都只提交一次并保留 `CREATED`/用户 rootSettings；
+- mapping change tracker 保存单调 revision 与对应完整 snapshot；用不获取 EDT lock 的独立 pooled thread 和 latch 确定性覆盖外部 writer 在 final read 前后落地，并把 live list mutation 与 payload-less event publication 拆成两个可控阶段。pending 较旧时只合入不同 directory 的 live-only 完整 mapping/rootSettings；pending-only 或同 directory 对象不同时等待事件，事件发布前和有界等待到期后 mapping/ownership/refresh 均为零；只有当前 plugin write 的同步等列表回调被抑制，延迟等列表回调必须记作 external；
+- pooled writer 持 stale base 在 ReqWS set 后落地时，下一 revision 必须以保守重规划收敛；本轮观察到的 external event、snapshot mismatch 或 retry 都要在继续前把 stable `CREATED` 持久降为 `BORROWED`，并覆盖 final ownership 已落盘后才发现 drift、下一轮开始前 dispose 的 cold-read 回归；最终 verify 后到达的事件必须使 clean digest baseline dirty 并强制下一次 automatic reconcile。持续 revision churn 达上限时 fail closed；公开事件不持久化与 recovery I/O 失败边界不得被表述为平台级线性化；
 - active、missing 和 inactive 三种路径下，只要用户给 `CREATED` mapping 增加 `rootSettings`，就必须丢弃删除资格、degraded 且绝不删除；
 - extra/root mapping 与 NFC/NFD root coverage 保留并 degraded；
 - VCS apply failure degraded state；
 - Git plugin disabled（明确诊断，不 crash）。
 
-上述自动化分别证明 Settings writer 串行、pooled writer revision/full-snapshot quiescent merge-retry 和 ownership fail-closed 行为。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果；fake platform 结果不能表述为 JetBrains 内部 CAS 或平台级线性化，但后台 auto-detect 竞态必须先有 deterministic 自动化覆盖，不能只留给 GUI。
+上述自动化分别证明 Settings writer 串行、pooled writer revision/full-snapshot quiescent merge-retry 和 ownership fail-closed 行为：没有公开 CAS 时，未能判明的 pending-only 或同目录冲突走零写入，而不是作为残余风险转交 GUI。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果；fake platform 结果不能表述为 JetBrains 内部 CAS 或平台级线性化，但后台 auto-detect 竞态必须先有 deterministic 自动化覆盖，不能只留给 GUI。
 
 ### 6.3 Safe Mode
 

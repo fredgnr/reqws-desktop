@@ -1,5 +1,7 @@
 package com.reqws.goland.vcs
 
+import com.intellij.openapi.vcs.VcsDirectoryMapping
+
 internal const val GIT_VCS_NAME = "Git"
 
 /**
@@ -122,14 +124,37 @@ internal data class VcsMappingApplyResult(
 
 internal data class VersionedVcsMappings(
   val revision: Long,
-  val mappings: List<com.intellij.openapi.vcs.VcsDirectoryMapping>,
+  val mappings: List<VcsDirectoryMapping>,
   val quiescent: Boolean = true,
   val pendingExternal: ExternalVcsMappings? = null,
 )
 
 internal data class ExternalVcsMappings(
   val revision: Long,
-  val mappings: List<com.intellij.openapi.vcs.VcsDirectoryMapping>,
+  val mappings: List<VcsDirectoryMapping>,
+)
+
+/**
+ * Mirrors the observable storage semantics of GoLand 261/262 without depending on its internal
+ * NewMappings implementation: the last complete mapping for an exact directory wins, then the
+ * retained mappings are sorted by the directory string. The winning object is preserved so VCS
+ * specific root settings are never reconstructed or dropped.
+ */
+internal fun canonicalizeVcsMappings(
+  mappings: List<VcsDirectoryMapping>,
+): List<VcsDirectoryMapping> {
+  val lastByDirectory = linkedMapOf<String, VcsDirectoryMapping>()
+  mappings.forEach { mapping -> lastByDirectory[mapping.directory] = mapping }
+  return lastByDirectory.values.sortedBy(VcsDirectoryMapping::getDirectory)
+}
+
+internal fun ExternalVcsMappings.platformCanonicalized(): ExternalVcsMappings = copy(
+  mappings = canonicalizeVcsMappings(mappings),
+)
+
+internal fun VersionedVcsMappings.platformCanonicalized(): VersionedVcsMappings = copy(
+  mappings = canonicalizeVcsMappings(mappings),
+  pendingExternal = pendingExternal?.platformCanonicalized(),
 )
 
 internal fun interface VcsMappingOwnershipRecorder {

@@ -39,7 +39,7 @@ internal class IntellijVcsMappingPlatform(private val project: Project) : VcsMap
   override fun isGitAvailable(): Boolean = vcsManager.findVcsByName(GIT_VCS_NAME) != null
 
   override fun getDirectoryMappings(): List<VcsDirectoryMapping> =
-    vcsManager.getDirectoryMappings().toList()
+    canonicalizeVcsMappings(vcsManager.getDirectoryMappings().toList())
 
   private val configurationMonitor: ReqwsVcsConfigurationMonitor
     get() = project.service()
@@ -56,8 +56,9 @@ internal class IntellijVcsMappingPlatform(private val project: Project) : VcsMap
 
   override fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>) {
     // This public API performs the platform's mapped-root update; updateActiveVcss is deprecated.
-    configurationMonitor.runPluginWrite(mappings) {
-      vcsManager.setDirectoryMappings(mappings)
+    val canonicalMappings = canonicalizeVcsMappings(mappings)
+    configurationMonitor.runPluginWrite(canonicalMappings) {
+      vcsManager.setDirectoryMappings(canonicalMappings)
     }
   }
 
@@ -110,7 +111,7 @@ internal class IntellijVcsMappingAdapter(
     }
 
     val desired = desiredRoots(snapshot)
-    var current = platform.getVersionedDirectoryMappings()
+    var current = platform.getVersionedDirectoryMappings().platformCanonicalized()
     var planningOwnership = currentOwnership
     var mappingsCommitted = false
     var ownershipCommitted = false
@@ -118,31 +119,55 @@ internal class IntellijVcsMappingAdapter(
     var attempts = 0
     while (attempts < MAX_COMMIT_ATTEMPTS && converged == null) {
       attempts += 1
-      val plannedFrom = current
-      // An external writer can publish A+U after ReqWS's final read and then be overwritten by
-      // ReqWS's whole-list A+R set. Plan from the retained external A+U baseline, while all commit
-      // checks below still compare against the actual live mapping snapshot.
-      val planningMappings = plannedFrom.pendingExternal?.mappings ?: plannedFrom.mappings
-      val proposedPlan = plan(snapshot, planningMappings, planningOwnership, desired)
+      val plannedFrom = current.platformCanonicalized()
+      // A published external snapshot can lag the live list because platform writers mutate first
+      // and publish a payload-less event later. Merge only histories that are provably compatible;
+      // an ambiguous pending-only deletion or same-directory replacement must never be guessed.
+      val planningMappings = mergePendingExternalWithLive(plannedFrom)
+      if (planningMappings == null) {
+        // The payload-less event for a deletion or same-directory replacement may not have been
+        // published yet. Neither list can safely win because the platform would silently discard
+        // the other one.
+        current = platform.awaitQuiescentDirectoryMappings().platformCanonicalized()
+        continue
+      }
+      val effectivePlanningOwnership = linkedMapOf<String, VcsMappingOwnership>().apply {
+        planningOwnership.forEach { ownership ->
+          // A payload-less external event cannot prove that a structurally equal mapping is still
+          // the object ReqWS created. Conservatively revoke deletion authority before replanning.
+          val safeOwnership = if (
+            plannedFrom.pendingExternal != null &&
+            ownership.kind == VcsMappingOwnershipKind.CREATED
+          ) {
+            ownership.copy(kind = VcsMappingOwnershipKind.BORROWED)
+          } else {
+            ownership
+          }
+          put(safeOwnership.relativeDirectory, safeOwnership)
+        }
+      }.values.toList()
+      val proposedPlan = plan(snapshot, planningMappings, effectivePlanningOwnership, desired)
       val expectedMappings = mergedMappings(proposedPlan, planningMappings)
       val requiresMappingWrite = proposedPlan.mappingsChanged ||
         !sameMappings(expectedMappings, plannedFrom.mappings)
+      val requiresOwnershipDemotion = effectivePlanningOwnership != planningOwnership
+      val requiresOwnershipTransition = requiresMappingWrite || requiresOwnershipDemotion
       val ownershipCommits = prepareOwnershipCommits(
         snapshot = snapshot,
         plan = proposedPlan,
         currentMappings = planningMappings,
         actualMappings = plannedFrom.mappings,
         expectedMappings = expectedMappings,
-        currentOwnership = planningOwnership,
+        currentOwnership = effectivePlanningOwnership,
         recorder = ownershipRecorder,
-        transitionRequired = requiresMappingWrite,
+        transitionRequired = requiresOwnershipTransition,
       )
 
       // First serialize only the equality/gate check. The verified atomic file write must remain
       // outside EDT, and a second equality check follows it before any VCS mapping mutation.
       val preflight = checkCurrentInWriteContext(
         expected = plannedFrom,
-        stage = if (requiresMappingWrite) {
+        stage = if (requiresOwnershipTransition) {
           VcsMappingApplyStage.OWNERSHIP
         } else {
           VcsMappingApplyStage.MAPPINGS
@@ -155,7 +180,7 @@ internal class IntellijVcsMappingAdapter(
         continue
       }
 
-      if (requiresMappingWrite) {
+      if (requiresOwnershipTransition) {
         ensureMutationAllowed(
           stage = VcsMappingApplyStage.OWNERSHIP,
           mappingsCommitted = mappingsCommitted,
@@ -170,10 +195,12 @@ internal class IntellijVcsMappingAdapter(
         // Once the journal is durable, its pending phases are tombstones. If a writer invalidates
         // this plan, retries must not reconstruct deletion authority from the old stable input.
         planningOwnership = ownershipCommits.transitionState.stableMappings
+      }
 
+      if (requiresMappingWrite) {
         var writeResult: VersionedVcsMappings? = null
         platform.runInDirectoryMappingsWriteContext {
-          val latest = platform.getVersionedDirectoryMappings()
+          val latest = platform.getVersionedDirectoryMappings().platformCanonicalized()
           if (!sameSnapshot(plannedFrom, latest)) {
             writeResult = latest
             return@runInDirectoryMappingsWriteContext
@@ -202,7 +229,7 @@ internal class IntellijVcsMappingAdapter(
         }
       }
 
-      val quiescent = platform.awaitQuiescentDirectoryMappings()
+      val quiescent = platform.awaitQuiescentDirectoryMappings().platformCanonicalized()
       if (
         !quiescent.quiescent ||
         !sameMappings(expectedMappings, quiescent.mappings) ||
@@ -225,7 +252,7 @@ internal class IntellijVcsMappingAdapter(
       val plannedExternal = plannedFrom.pendingExternal
       if (plannedExternal != null) {
         platform.acknowledgeExternalMappings(plannedExternal.revision)
-        val acknowledged = platform.getVersionedDirectoryMappings()
+        val acknowledged = platform.getVersionedDirectoryMappings().platformCanonicalized()
         if (
           acknowledged.pendingExternal != null ||
           !sameMappings(expectedMappings, acknowledged.mappings)
@@ -256,31 +283,37 @@ internal class IntellijVcsMappingAdapter(
 
       // Detect a reverse-order writer that completes while the final ownership file is flushed.
       // A still-later event is handled by the production monitor's external-change listener.
-      val verified = platform.awaitQuiescentDirectoryMappings()
+      val verified = platform.awaitQuiescentDirectoryMappings().platformCanonicalized()
       if (
         !verified.quiescent ||
         verified.pendingExternal != null ||
         !sameMappings(expectedMappings, verified.mappings)
       ) {
-        // Final state can mint CREATED authority for additions. If a reverse-order writer is
-        // observed, durably demote it back to the non-authorizing transition before replanning.
-        val recoveryCommit = if (ownershipCommits.transition != null) {
-          prepareOwnershipCommit(
-            state = ownershipCommits.transitionState,
-            recorder = ownershipRecorder,
-            mappingsCommitted = mappingsCommitted,
-            ownershipCommitted = ownershipCommitted,
-          )
-        } else {
-          null
-        }
+        // Final state can mint or retain CREATED authority. If a reverse-order writer is observed,
+        // durably revoke every stable deletion claim before replanning, even when this attempt had
+        // no mapping transition. Preserve pending tombstones so a crash cannot resurrect authority.
+        val recoveryState = ownershipCommits.transitionState.copy(
+          stableMappings = ownershipCommits.transitionState.stableMappings.map { ownership ->
+            if (ownership.kind == VcsMappingOwnershipKind.CREATED) {
+              ownership.copy(kind = VcsMappingOwnershipKind.BORROWED)
+            } else {
+              ownership
+            }
+          },
+        )
+        val recoveryCommit = prepareOwnershipCommit(
+          state = recoveryState,
+          recorder = ownershipRecorder,
+          mappingsCommitted = mappingsCommitted,
+          ownershipCommitted = ownershipCommitted,
+        )
         persistOwnership(
           recoveryCommit,
           mappingsCommitted = mappingsCommitted,
           ownershipCommitted = ownershipCommitted,
         )
-        if (ownershipCommits.transition != null) ownershipCommitted = true
-        planningOwnership = ownershipCommits.transitionState.stableMappings
+        ownershipCommitted = true
+        planningOwnership = recoveryState.stableMappings
         current = verified
         continue
       }
@@ -339,7 +372,33 @@ internal class IntellijVcsMappingAdapter(
     recorder: VcsMappingOwnershipRecorder,
     transitionRequired: Boolean,
   ): PreparedOwnershipCommits {
-    val additionRelativePaths = plan.additions.mapTo(hashSetOf()) { it.relativeDirectory }
+    val additionRelativePaths = plan.additions.mapTo(linkedSetOf()) { it.relativeDirectory }
+    currentOwnership.forEach { ownership ->
+      if (ownership.kind != VcsMappingOwnershipKind.CREATED) return@forEach
+      if (plan.nextOwnership.none { next ->
+          next.kind == VcsMappingOwnershipKind.CREATED &&
+            next.relativeDirectory == ownership.relativeDirectory
+        }
+      ) {
+        return@forEach
+      }
+      val owned = VcsPathIdentity.resolveOwned(
+        snapshot.canonicalProjectRoot,
+        ownership.relativeDirectory,
+      ) ?: return@forEach
+      val actualProofCount = actualMappings.count { mapping ->
+        mapping.isExactUncustomizedGit(owned.directory)
+      }
+      val expectedProofCount = expectedMappings.count { mapping ->
+        mapping.isExactUncustomizedGit(owned.directory)
+      }
+      if (actualProofCount == 0 && expectedProofCount == 1) {
+        // Any actual-absent -> expected-present mutation is a real platform addition. Revoke
+        // stable deletion authority before the whole-list set, even when the planner delta was
+        // derived from a merged live view instead of a direct missing-root addition.
+        additionRelativePaths.add(ownership.relativeDirectory)
+      }
+    }
     val transitionOwnership = plan.nextOwnership.filterNot { ownership ->
       ownership.relativeDirectory in additionRelativePaths
     }
@@ -458,11 +517,36 @@ internal class IntellijVcsMappingAdapter(
   private fun mergedMappings(
     plan: VcsMappingPlan,
     current: List<VcsDirectoryMapping>,
-  ): List<VcsDirectoryMapping> =
+  ): List<VcsDirectoryMapping> = canonicalizeVcsMappings(
     current.filterIndexed { index, _ -> index !in plan.removalIndices } +
       plan.additions.map { addition ->
         VcsDirectoryMapping(addition.directory, GIT_VCS_NAME)
-      }
+      },
+  )
+
+  /**
+   * A pending external snapshot is the newest published event, not necessarily the newest live
+   * list. Preserve complete live-only additions. A pending-only entry could be either a mapping a
+   * prior ReqWS write overwrote or an unpublished user deletion; the public API cannot distinguish
+   * those histories. Pending-only and conflicting same-directory objects therefore wait or fail
+   * closed rather than guessing a winner.
+   */
+  private fun mergePendingExternalWithLive(
+    snapshot: VersionedVcsMappings,
+  ): List<VcsDirectoryMapping>? {
+    val external = snapshot.pendingExternal ?: return canonicalizeVcsMappings(snapshot.mappings)
+    val liveByDirectory = snapshot.mappings.associateBy(VcsDirectoryMapping::getDirectory)
+    val mergedByDirectory = linkedMapOf<String, VcsDirectoryMapping>()
+    external.mappings.forEach { retained ->
+      val live = liveByDirectory[retained.directory] ?: return null
+      if (retained != live) return null
+      mergedByDirectory[retained.directory] = retained
+    }
+    snapshot.mappings.forEach { live ->
+      if (live.directory !in mergedByDirectory) mergedByDirectory[live.directory] = live
+    }
+    return canonicalizeVcsMappings(mergedByDirectory.values.toList())
+  }
 
   private fun plan(
     snapshot: ManifestSnapshot,
@@ -494,14 +578,18 @@ internal class IntellijVcsMappingAdapter(
   private fun sameMappings(
     first: List<VcsDirectoryMapping>,
     second: List<VcsDirectoryMapping>,
-  ): Boolean = first == second
+  ): Boolean = canonicalizeVcsMappings(first) == canonicalizeVcsMappings(second)
 
   private fun sameSnapshot(
     first: VersionedVcsMappings,
     second: VersionedVcsMappings,
-  ): Boolean = first.revision == second.revision &&
-    sameMappings(first.mappings, second.mappings) &&
-    first.pendingExternal == second.pendingExternal
+  ): Boolean {
+    val canonicalFirst = first.platformCanonicalized()
+    val canonicalSecond = second.platformCanonicalized()
+    return canonicalFirst.revision == canonicalSecond.revision &&
+      canonicalFirst.mappings == canonicalSecond.mappings &&
+      canonicalFirst.pendingExternal == canonicalSecond.pendingExternal
+  }
 
   private fun ensureMutationAllowed(
     stage: VcsMappingApplyStage,
