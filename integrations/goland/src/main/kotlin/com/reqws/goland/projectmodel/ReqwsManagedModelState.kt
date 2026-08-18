@@ -6,7 +6,8 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.StoragePathMacros
 
-internal const val REQWS_MODEL_STATE_VERSION = 2
+internal const val REQWS_MODEL_STATE_VERSION = 3
+internal const val REQWS_LEGACY_MODEL_STATE_VERSION = 2
 internal const val REQWS_MODEL_STRATEGY = "workspace-root-excludes"
 
 internal data class ManagedExcludeOwnership(
@@ -19,6 +20,8 @@ internal data class ManagedModelOwnership(
   val strategy: String,
   val targetModuleName: String,
   val managedExcludes: List<ManagedExcludeOwnership>,
+  val pendingAdds: List<ManagedExcludeOwnership>,
+  val pendingRemovals: List<ManagedExcludeOwnership>,
 )
 
 @Service(Service.Level.PROJECT)
@@ -42,12 +45,16 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
     var strategy: String = REQWS_MODEL_STRATEGY
     var targetModuleName: String = ""
     var managedExcludes: MutableList<PersistedManagedExclude> = mutableListOf()
+    var pendingAdds: MutableList<PersistedManagedExclude> = mutableListOf()
+    var pendingRemovals: MutableList<PersistedManagedExclude> = mutableListOf()
 
     internal fun deepCopy(): Data = Data().also { copy ->
       copy.stateVersion = stateVersion
       copy.strategy = strategy
       copy.targetModuleName = targetModuleName
       copy.managedExcludes = managedExcludes.map { it.deepCopy() }.toMutableList()
+      copy.pendingAdds = pendingAdds.map { it.deepCopy() }.toMutableList()
+      copy.pendingRemovals = pendingRemovals.map { it.deepCopy() }.toMutableList()
     }
   }
 
@@ -72,21 +79,43 @@ class ReqwsManagedModelState : PersistentStateComponent<ReqwsManagedModelState.D
         markerToken = persisted.markerToken,
       )
     },
+    pendingAdds = data.pendingAdds.map { persisted ->
+      ManagedExcludeOwnership(
+        relativePath = persisted.relativePath,
+        markerToken = persisted.markerToken,
+      )
+    },
+    pendingRemovals = data.pendingRemovals.map { persisted ->
+      ManagedExcludeOwnership(
+        relativePath = persisted.relativePath,
+        markerToken = persisted.markerToken,
+      )
+    },
   )
 
   @Synchronized
-  internal fun replaceOwnership(moduleName: String, managedExcludes: Map<String, String>) {
+  internal fun replaceOwnership(
+    moduleName: String,
+    managedExcludes: Map<String, String>,
+    pendingAdds: Map<String, String> = emptyMap(),
+    pendingRemovals: Map<String, String> = emptyMap(),
+  ) {
     data = Data().also { next ->
       next.targetModuleName = moduleName
-      next.managedExcludes = managedExcludes.entries
-        .sortedBy(Map.Entry<String, String>::key)
-        .map { (relativePath, markerToken) ->
-          PersistedManagedExclude().also { persisted ->
-            persisted.relativePath = relativePath
-            persisted.markerToken = markerToken
-          }
-        }
-        .toMutableList()
+      next.managedExcludes = persistedClaims(managedExcludes)
+      next.pendingAdds = persistedClaims(pendingAdds)
+      next.pendingRemovals = persistedClaims(pendingRemovals)
     }
   }
+
+  private fun persistedClaims(claims: Map<String, String>): MutableList<PersistedManagedExclude> =
+    claims.entries
+      .sortedBy(Map.Entry<String, String>::key)
+      .map { (relativePath, markerToken) ->
+        PersistedManagedExclude().also { persisted ->
+          persisted.relativePath = relativePath
+          persisted.markerToken = markerToken
+        }
+      }
+      .toMutableList()
 }

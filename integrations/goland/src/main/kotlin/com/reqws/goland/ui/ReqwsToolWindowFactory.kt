@@ -19,7 +19,7 @@ internal class ReqwsToolWindowFactory : ToolWindowFactory {
     val service = project.service<ReqwsProjectService>()
     // postStartupActivity is not guaranteed to run again when a plugin is dynamically enabled
     // in an already-open project. This idempotent entry point keeps the Tool Window recoverable.
-    service.refresh()
+    service.refreshAutomatically()
     if (!project.isDisposed && !toolWindow.isDisposed) {
       toolWindow.setAvailable(ReqwsToolWindowViewModel.from(service.state).visible)
     }

@@ -43,7 +43,172 @@ class ReqwsExcludePlannerTest {
       mapOf(".reqws" to TOKEN_A, "retained" to TOKEN_C),
       plan.nextOwnership,
     )
+    assertEquals(mapOf(".reqws" to TOKEN_A), plan.preparedOwnership)
+    assertEquals(mapOf("retained" to TOKEN_C), plan.preparedPendingAdds)
+    assertEquals(mapOf("active" to TOKEN_B), plan.preparedPendingRemovals)
     assertEquals(setOf(active.targetUrl, active.markerUrl), plan.removableUrls)
+  }
+
+  @Test
+  fun `recovers a committed pending add without borrowing its target`() {
+    val pending = claim("file:///workspace/retained", TOKEN_A)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = mapOf("retained" to pending.targetUrl),
+      activeUrls = emptySet(),
+      previousClaims = emptyMap(),
+      pendingAddClaims = mapOf("retained" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = listOf(
+        CurrentExclude(pending.targetUrl),
+        CurrentExclude(pending.markerUrl),
+      ),
+    )
+
+    assertEquals(setOf("retained"), plan.kept)
+    assertEquals(emptySet<String>(), plan.borrowed)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.nextOwnership)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.preparedPendingAdds)
+  }
+
+  @Test
+  fun `removes a committed pending add when the repository becomes active`() {
+    val pending = claim("file:///workspace/readded", TOKEN_A)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = emptyMap(),
+      activeUrls = setOf(pending.targetUrl),
+      previousClaims = emptyMap(),
+      pendingAddClaims = mapOf("readded" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = listOf(
+        CurrentExclude(pending.targetUrl),
+        CurrentExclude(pending.markerUrl),
+      ),
+    )
+
+    assertEquals(setOf("readded"), plan.removed)
+    assertEquals(mapOf("readded" to TOKEN_A), plan.preparedPendingRemovals)
+    assertEquals(emptyMap<String, String>(), plan.nextOwnership)
+    assertEquals(setOf(pending.targetUrl, pending.markerUrl), plan.removableUrls)
+  }
+
+  @Test
+  fun `replays an uncommitted pending add with the persisted token`() {
+    val pending = claim("file:///workspace/retained", TOKEN_A)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = mapOf("retained" to pending.targetUrl),
+      activeUrls = emptySet(),
+      previousClaims = emptyMap(),
+      pendingAddClaims = mapOf("retained" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = emptyList(),
+    )
+
+    assertEquals(setOf("retained"), plan.added)
+    assertEquals(mapOf("retained" to pending), plan.addedClaims)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.preparedPendingAdds)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.nextOwnership)
+  }
+
+  @Test
+  fun `completes a committed pending removal without retaining deletion rights`() {
+    val pending = claim("file:///workspace/active", TOKEN_A)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = emptyMap(),
+      activeUrls = setOf(pending.targetUrl),
+      previousClaims = emptyMap(),
+      pendingRemoveClaims = mapOf("active" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = emptyList(),
+    )
+
+    assertEquals(emptyMap<String, String>(), plan.nextOwnership)
+    assertEquals(emptyMap<String, String>(), plan.preparedPendingRemovals)
+    assertEquals(emptySet<String>(), plan.removed)
+  }
+
+  @Test
+  fun `restarts an absent pending removal with a fresh marker token`() {
+    val removed = claim("file:///workspace/retained", TOKEN_A)
+    val replacement = claim("file:///workspace/retained", TOKEN_B)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = mapOf("retained" to removed.targetUrl),
+      activeUrls = emptySet(),
+      previousClaims = emptyMap(),
+      pendingRemoveClaims = mapOf("retained" to removed),
+      candidateClaims = mapOf("retained" to replacement),
+      currentExcludes = emptyList(),
+    )
+
+    assertEquals(setOf("retained"), plan.added)
+    assertEquals(mapOf("retained" to replacement), plan.addedClaims)
+    assertEquals(mapOf("retained" to TOKEN_B), plan.preparedPendingAdds)
+    assertEquals(mapOf("retained" to TOKEN_B), plan.nextOwnership)
+  }
+
+  @Test
+  fun `restores a rolled back pending removal when the exclude is desired again`() {
+    val pending = claim("file:///workspace/retained", TOKEN_A)
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = mapOf("retained" to pending.targetUrl),
+      activeUrls = emptySet(),
+      previousClaims = emptyMap(),
+      pendingRemoveClaims = mapOf("retained" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = listOf(
+        CurrentExclude(pending.targetUrl),
+        CurrentExclude(pending.markerUrl),
+      ),
+    )
+
+    assertEquals(setOf("retained"), plan.kept)
+    assertEquals(emptySet<String>(), plan.removed)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.preparedPendingRemovals)
+    assertEquals(mapOf("retained" to TOKEN_A), plan.nextOwnership)
+  }
+
+  @Test
+  fun `rejects a partial pending proof without deleting either entry`() {
+    val pending = claim("file:///workspace/retained", TOKEN_A)
+    val failure = expectConflict {
+      ReqwsExcludePlanner.plan(
+        desiredUrls = mapOf("retained" to pending.targetUrl),
+        activeUrls = emptySet(),
+        previousClaims = emptyMap(),
+        pendingAddClaims = mapOf("retained" to pending),
+        candidateClaims = emptyMap(),
+        currentExcludes = listOf(CurrentExclude(pending.targetUrl)),
+      )
+    }
+
+    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
+  }
+
+  @Test
+  fun `matches pending proofs by filesystem-equivalent URLs and removes the actual entries`() {
+    val pending = claim("file:///workspace/Retained", TOKEN_A)
+    val actualTarget = "file:///workspace/retained"
+
+    val plan = ReqwsExcludePlanner.plan(
+      desiredUrls = emptyMap(),
+      activeUrls = setOf(actualTarget),
+      previousClaims = emptyMap(),
+      pendingAddClaims = mapOf("Retained" to pending),
+      candidateClaims = emptyMap(),
+      currentExcludes = listOf(
+        CurrentExclude(actualTarget),
+        CurrentExclude(pending.markerUrl),
+      ),
+      urlsEquivalent = { first, second -> first.equals(second, ignoreCase = true) },
+    )
+
+    assertEquals(setOf("Retained"), plan.removed)
+    assertEquals(setOf(actualTarget, pending.markerUrl), plan.removableUrls)
   }
 
   @Test

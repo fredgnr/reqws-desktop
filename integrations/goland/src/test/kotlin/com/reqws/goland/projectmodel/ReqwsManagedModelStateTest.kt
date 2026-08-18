@@ -54,6 +54,8 @@ class ReqwsManagedModelStateTest {
           ManagedExcludeOwnership("repo-b", TOKEN_B),
           ManagedExcludeOwnership(".reqws", TOKEN_A),
         ),
+        pendingAdds = emptyList(),
+        pendingRemovals = emptyList(),
       ),
       state.ownership(),
     )
@@ -70,6 +72,33 @@ class ReqwsManagedModelStateTest {
     state.state.managedExcludes.single().markerToken = TOKEN_B
 
     assertEquals(TOKEN_A, state.ownership().managedExcludes.single().markerToken)
+  }
+
+  @Test
+  fun `persists pending add and remove phases through a cold state reload`() {
+    val original = ReqwsManagedModelState()
+    original.replaceOwnership(
+      moduleName = "workspace",
+      managedExcludes = mapOf(".reqws" to TOKEN_A),
+      pendingAdds = mapOf("repo-a" to TOKEN_B),
+      pendingRemovals = mapOf("repo-z" to TOKEN_C),
+    )
+
+    val reloaded = ReqwsManagedModelState().also { it.loadState(original.state) }
+
+    assertEquals(REQWS_MODEL_STATE_VERSION, reloaded.ownership().stateVersion)
+    assertEquals(
+      listOf(ManagedExcludeOwnership(".reqws", TOKEN_A)),
+      reloaded.ownership().managedExcludes,
+    )
+    assertEquals(
+      listOf(ManagedExcludeOwnership("repo-a", TOKEN_B)),
+      reloaded.ownership().pendingAdds,
+    )
+    assertEquals(
+      listOf(ManagedExcludeOwnership("repo-z", TOKEN_C)),
+      reloaded.ownership().pendingRemovals,
+    )
   }
 
   private fun persistedClaim(

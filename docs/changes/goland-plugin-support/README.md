@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：实现与验证中
-- 更新日期：2026-08-17
+- 更新日期：2026-08-18
 - 实施分支：`feat/goland-plugin-support`
 
 ## 文档
@@ -49,4 +49,4 @@
 
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。当前工作树的 Desktop 全量检查、182 项插件测试/结构检查、arm64 Desktop 打包与插件 ZIP 构建已通过，插件产物对 `GO-261.25134.147` 和 `GO-262.8665.270` 均由 Plugin Verifier 判定为 Compatible；当前 ZIP SHA-256 为 `8c79cafbbc507366654c679a05f24dd15a9aabb6e64b39c64b5a910447ff59c8`。新版候选已安装到日常 GoLand 2026.1.3，冷启动后达到 `Synced`；Tool Window 已按原型收口为紧凑状态徽标、摘要卡、无多余滚动条的三行仓库卡和分层操作区，并归档了[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)。该图仅是后续验收输入；[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)仍绑定旧候选并保持 `NO-GO`，直到新的 exact-candidate GUI 矩阵重新覆盖 project close/IDE quit、Project View 刷新和全部视觉/安全场景。
+功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 工作树候选已修复 Project Model 跨事务 ownership 恢复、手动 same-digest reconcile 和 VCS Settings writer 并发覆盖问题；Node.js 24 下 Desktop 全量检查为 31 个文件/335 项测试，插件为 217 项测试，并通过项目配置、结构检查与 ZIP 构建。当前 ZIP SHA-256 为 `7e9a8ad0b03bc64b7fc94d38196caed17b017b5f86ca3602c4ef31dbda16edb5`；该候选尚未重新执行 261/262 Plugin Verifier 或真实 GUI 矩阵，不能继承前一 ZIP 的 Compatible/GUI 结论。按原型收口的[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)也绑定更早候选，只作为界面参考；[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)继续保持 `NO-GO`，直到新的 exact-candidate 验证重新覆盖 ownership recovery、manual reconcile、并发 VCS 修改、project close/IDE quit、Project View 刷新和全部视觉/安全场景。

@@ -1,5 +1,6 @@
 package com.reqws.goland.vcs
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.openapi.vcs.VcsDirectoryMapping
@@ -16,6 +17,8 @@ internal interface VcsMappingPlatform {
 
   fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>)
 
+  fun runInDirectoryMappingsWriteContext(action: () -> Unit)
+
   fun refreshGitRepositories()
 }
 
@@ -31,6 +34,26 @@ internal class IntellijVcsMappingPlatform(private val project: Project) : VcsMap
   override fun setDirectoryMappings(mappings: List<VcsDirectoryMapping>) {
     // This public API performs the platform's mapped-root update; updateActiveVcss is deprecated.
     vcsManager.setDirectoryMappings(mappings)
+  }
+
+  override fun runInDirectoryMappingsWriteContext(action: () -> Unit) {
+    val application = ApplicationManager.getApplication()
+    if (application.isDispatchThread) {
+      action()
+    } else {
+      // The platform VCS Settings configurable applies its final mapping read/write on EDT.
+      // Use the same stable, public 261 execution context so a user Apply cannot commit between
+      // ReqWS's final equality check and the whole-list setDirectoryMappings call.
+      var failure: Throwable? = null
+      application.invokeAndWait {
+        try {
+          action()
+        } catch (error: Throwable) {
+          failure = error
+        }
+      }
+      failure?.let { throw it }
+    }
   }
 
   override fun refreshGitRepositories() {
@@ -60,20 +83,39 @@ internal class IntellijVcsMappingAdapter(
 
     val desired = desiredRoots(snapshot)
     var current = platform.getDirectoryMappings()
-    var plan = plan(snapshot, current, currentOwnership, desired)
-    var stable = false
     var attempts = 0
-    while (attempts < MAX_STABILITY_READS) {
-      val latest = platform.getDirectoryMappings()
-      if (sameMappings(current, latest)) {
-        stable = true
-        break
+    var committed: MappingCommit? = null
+    while (attempts < MAX_COMMIT_ATTEMPTS && committed == null) {
+      // Filesystem identity work remains on the caller's background context. The resulting plan
+      // is valid only for this exact, full mapping list (VcsDirectoryMapping equality includes
+      // rootSettings); the serialized final check below rejects it if the list has changed.
+      val plannedFrom = current
+      val proposedPlan = plan(snapshot, plannedFrom, currentOwnership, desired)
+      // Ownership path validation can call Files.exists/toRealPath. Prepare immutable commits
+      // before entering the EDT write context; stale plans simply discard these prepared values.
+      val ownershipCommits = prepareOwnershipCommits(proposedPlan, ownershipRecorder)
+      var attempt: MappingCommitAttempt? = null
+      platform.runInDirectoryMappingsWriteContext {
+        val latest = platform.getDirectoryMappings()
+        attempt = if (!sameMappings(plannedFrom, latest)) {
+          MappingCommitAttempt.Stale(latest)
+        } else {
+          MappingCommitAttempt.Committed(
+            commitPlan(
+              plan = proposedPlan,
+              current = latest,
+              ownershipCommits = ownershipCommits,
+            ),
+          )
+        }
       }
-      current = latest
-      plan = plan(snapshot, current, currentOwnership, desired)
+      when (val completed = checkNotNull(attempt)) {
+        is MappingCommitAttempt.Stale -> current = completed.current
+        is MappingCommitAttempt.Committed -> committed = completed.commit
+      }
       attempts += 1
     }
-    if (!stable) {
+    val commit = committed ?: run {
       throw VcsMappingApplyException(
         code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
         stage = VcsMappingApplyStage.MAPPINGS,
@@ -82,13 +124,46 @@ internal class IntellijVcsMappingAdapter(
       )
     }
 
+    ensureMutationAllowed(
+      stage = VcsMappingApplyStage.REFRESH,
+      mappingsCommitted = commit.mappingsCommitted,
+      ownershipCommitted = commit.ownershipCommitted,
+    )
+    try {
+      // Always refresh on an actual apply attempt. If a previous refresh failed after mappings
+      // committed, the retry plan is unchanged but still has to finish this stage.
+      platform.refreshGitRepositories()
+    } catch (exception: Exception) {
+      throw VcsMappingApplyException(
+        code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+        stage = VcsMappingApplyStage.REFRESH,
+        mappingsCommitted = commit.mappingsCommitted,
+        ownershipCommitted = commit.ownershipCommitted,
+        cause = exception,
+      )
+    }
+    ensureMutationAllowed(
+      stage = VcsMappingApplyStage.REFRESH,
+      mappingsCommitted = commit.mappingsCommitted,
+      ownershipCommitted = commit.ownershipCommitted,
+    )
+
+    return VcsMappingApplyResult(
+      plan = commit.plan,
+      mappingsCommitted = commit.mappingsCommitted,
+      ownershipCommitted = commit.ownershipCommitted,
+      refreshed = true,
+    )
+  }
+
+  private fun commitPlan(
+    plan: VcsMappingPlan,
+    current: List<VcsDirectoryMapping>,
+    ownershipCommits: PreparedOwnershipCommits,
+  ): MappingCommit {
     var mappingsCommitted = false
     var ownershipCommitted = false
-    val additionRelativePaths = plan.additions.mapTo(hashSetOf()) { it.relativeDirectory }
-    val preRemovalOwnership = plan.nextOwnership.filterNot { ownership ->
-      ownership.relativeDirectory in additionRelativePaths
-    }
-    if (plan.removalIndices.isNotEmpty()) {
+    ownershipCommits.preRemoval?.let { preRemoval ->
       // Revoke deletion authority before committing a destructive mapping removal. If the
       // process stops after this point, the old mapping may remain, but a future same-path user
       // mapping can never inherit a stale CREATED claim.
@@ -98,7 +173,7 @@ internal class IntellijVcsMappingAdapter(
         ownershipCommitted = false,
       )
       try {
-        ownershipRecorder.replace(preRemovalOwnership)
+        preRemoval.commit()
         ownershipCommitted = true
       } catch (exception: Exception) {
         throw VcsMappingApplyException(
@@ -136,14 +211,14 @@ internal class IntellijVcsMappingAdapter(
 
     // Record newly-created mapping evidence only after setDirectoryMappings succeeds. A refresh
     // failure must not orphan that mapping, while a failed set must never create deletion rights.
-    if (!ownershipCommitted || preRemovalOwnership != plan.nextOwnership) {
+    ownershipCommits.postMapping?.let { finalOwnership ->
       ensureMutationAllowed(
         stage = VcsMappingApplyStage.OWNERSHIP,
         mappingsCommitted = mappingsCommitted,
         ownershipCommitted = ownershipCommitted,
       )
       try {
-        ownershipRecorder.replace(plan.nextOwnership)
+        finalOwnership.commit()
         ownershipCommitted = true
       } catch (exception: Exception) {
         throw VcsMappingApplyException(
@@ -155,32 +230,42 @@ internal class IntellijVcsMappingAdapter(
         )
       }
     }
-
-    ensureMutationAllowed(
-      stage = VcsMappingApplyStage.REFRESH,
-      mappingsCommitted = mappingsCommitted,
-      ownershipCommitted = ownershipCommitted,
-    )
-    try {
-      // Always refresh on an actual apply attempt. If a previous refresh failed after mappings
-      // committed, the retry plan is unchanged but still has to finish this stage.
-      platform.refreshGitRepositories()
-    } catch (exception: Exception) {
-      throw VcsMappingApplyException(
-        code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
-        stage = VcsMappingApplyStage.REFRESH,
-        mappingsCommitted = mappingsCommitted,
-        ownershipCommitted = ownershipCommitted,
-        cause = exception,
-      )
-    }
-
-    return VcsMappingApplyResult(
+    return MappingCommit(
       plan = plan,
       mappingsCommitted = mappingsCommitted,
       ownershipCommitted = ownershipCommitted,
-      refreshed = true,
     )
+  }
+
+  private fun prepareOwnershipCommits(
+    plan: VcsMappingPlan,
+    ownershipRecorder: VcsMappingOwnershipRecorder,
+  ): PreparedOwnershipCommits {
+    val additionRelativePaths = plan.additions.mapTo(hashSetOf()) { it.relativeDirectory }
+    val preRemovalOwnership = plan.nextOwnership.filterNot { ownership ->
+      ownership.relativeDirectory in additionRelativePaths
+    }
+    return try {
+      val preRemoval = if (plan.removalIndices.isNotEmpty()) {
+        ownershipRecorder.prepare(preRemovalOwnership)
+      } else {
+        null
+      }
+      val postMapping = if (preRemoval == null || preRemovalOwnership != plan.nextOwnership) {
+        ownershipRecorder.prepare(plan.nextOwnership)
+      } else {
+        null
+      }
+      PreparedOwnershipCommits(preRemoval = preRemoval, postMapping = postMapping)
+    } catch (exception: Exception) {
+      throw VcsMappingApplyException(
+        code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,
+        stage = VcsMappingApplyStage.OWNERSHIP,
+        mappingsCommitted = false,
+        ownershipCommitted = false,
+        cause = exception,
+      )
+    }
   }
 
   private fun plan(
@@ -277,6 +362,23 @@ internal class IntellijVcsMappingAdapter(
     }
 
   companion object {
-    private const val MAX_STABILITY_READS = 3
+    private const val MAX_COMMIT_ATTEMPTS = 3
   }
 }
+
+private sealed interface MappingCommitAttempt {
+  data class Stale(val current: List<VcsDirectoryMapping>) : MappingCommitAttempt
+
+  data class Committed(val commit: MappingCommit) : MappingCommitAttempt
+}
+
+private data class MappingCommit(
+  val plan: VcsMappingPlan,
+  val mappingsCommitted: Boolean,
+  val ownershipCommitted: Boolean,
+)
+
+private data class PreparedOwnershipCommits(
+  val preRemoval: VcsMappingOwnershipCommit?,
+  val postMapping: VcsMappingOwnershipCommit?,
+)

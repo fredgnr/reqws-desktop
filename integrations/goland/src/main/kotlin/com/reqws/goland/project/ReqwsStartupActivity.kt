@@ -15,7 +15,7 @@ internal class ReqwsStartupActivity : ProjectActivity {
       val availabilityController = ReqwsToolWindowAvailabilityController.forProject(project)
       Disposer.register(project, availabilityController)
       availabilityController.bind(service)
-      service.refresh()
+      service.refreshAutomatically()
     }
   }
 }

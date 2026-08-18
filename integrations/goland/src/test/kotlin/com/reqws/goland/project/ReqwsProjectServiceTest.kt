@@ -13,6 +13,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
     assertSame(ReqwsProjectState.DISPOSED, service.state)
     assertNull(service.refresh())
+    assertNull(service.refreshAutomatically())
     assertEquals(ReqwsLifecycleState.INACTIVE, observed.first())
     assertEquals(ReqwsLifecycleState.DISPOSED, observed.last())
     handle.close()

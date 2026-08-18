@@ -88,7 +88,10 @@ internal class LatestWinsSyncCoordinator<T>(
   private val closed = AtomicBoolean(false)
   private val nextRequestId = AtomicLong(0)
   private val appliedDigest = AtomicReference<String?>(initialAppliedDigest)
-  private val submissions = Channel<Submission<T>>(Channel.CONFLATED)
+  private val submissionLock = Any()
+  private var pendingSubmission: Submission<T>? = null
+  private var manualReconcilePending = false
+  private val submissionSignal = Channel<Unit>(Channel.CONFLATED)
   private val worker: Job
 
   init {
@@ -103,7 +106,11 @@ internal class LatestWinsSyncCoordinator<T>(
     }
     worker.invokeOnCompletion {
       closed.set(true)
-      submissions.close()
+      synchronized(submissionLock) {
+        pendingSubmission = null
+        manualReconcilePending = false
+      }
+      submissionSignal.close()
     }
   }
 
@@ -139,12 +146,33 @@ internal class LatestWinsSyncCoordinator<T>(
 
   private fun submit(submission: Submission<T>): Boolean {
     if (closed.get() || !worker.isActive) return false
-    return submissions.trySend(submission).isSuccess
+    synchronized(submissionLock) {
+      if (closed.get() || !worker.isActive) return false
+      if (submission.trigger == SyncTrigger.MANUAL) manualReconcilePending = true
+      pendingSubmission = if (
+        manualReconcilePending && submission.trigger == SyncTrigger.AUTOMATIC
+      ) {
+        submission.withTrigger(SyncTrigger.MANUAL)
+      } else {
+        submission
+      }
+    }
+    return submissionSignal.trySend(Unit).isSuccess
   }
 
   private suspend fun consumeSubmissions() {
-    for (submission in submissions) {
+    for (ignored in submissionSignal) {
       currentCoroutineContext().ensureActive()
+      val submission = synchronized(submissionLock) {
+        val next = pendingSubmission ?: return@synchronized null
+        pendingSubmission = null
+        if (next is CandidateSubmission && next.trigger == SyncTrigger.MANUAL) {
+          // The explicit intent is consumed only when a valid candidate actually starts apply.
+          // A read failure keeps it sticky so the next valid automatic read still reconciles.
+          manualReconcilePending = false
+        }
+        next
+      } ?: continue
       when (submission) {
         is CandidateSubmission -> apply(submission)
         is ReadFailureSubmission -> notifyObserver(
@@ -162,7 +190,12 @@ internal class LatestWinsSyncCoordinator<T>(
 
   private suspend fun apply(submission: CandidateSubmission<T>) {
     val candidate = submission.candidate
-    if (candidate.digestSha256 == appliedDigest.get()) {
+    // A manual refresh is an explicit reconciliation request: the live project model, VCS
+    // mappings, or filesystem may have drifted even when the manifest bytes are unchanged.
+    if (
+      submission.trigger != SyncTrigger.MANUAL &&
+      candidate.digestSha256 == appliedDigest.get()
+    ) {
       notifyObserver(
         SyncCoordinatorEvent.NoOp(
           requestId = submission.requestId,
@@ -173,9 +206,9 @@ internal class LatestWinsSyncCoordinator<T>(
       return
     }
 
-    // A different candidate may commit one projection layer before a later layer fails. Clear
-    // the in-memory no-op baseline before applying so reverting to the previously converged
-    // digest always replays it instead of accepting a potentially partial intermediate state.
+    // An apply may commit one projection layer before a later layer fails. Clear the in-memory
+    // no-op baseline before every replay so a later submission cannot accept a potentially
+    // partial intermediate state, including after a manual same-digest reconciliation.
     appliedDigest.set(null)
     notifyObserver(
       SyncCoordinatorEvent.Applying(
@@ -221,7 +254,11 @@ internal class LatestWinsSyncCoordinator<T>(
 
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
-    submissions.close()
+    synchronized(submissionLock) {
+      pendingSubmission = null
+      manualReconcilePending = false
+    }
+    submissionSignal.close()
     worker.cancel(CancellationException("ReqWS sync coordinator disposed"))
   }
 
@@ -247,3 +284,8 @@ private data class ReadFailureSubmission<T>(
   val digestSha256: String?,
   val cause: Throwable,
 ) : Submission<T>
+
+private fun <T> Submission<T>.withTrigger(trigger: SyncTrigger): Submission<T> = when (this) {
+  is CandidateSubmission -> copy(trigger = trigger)
+  is ReadFailureSubmission -> copy(trigger = trigger)
+}

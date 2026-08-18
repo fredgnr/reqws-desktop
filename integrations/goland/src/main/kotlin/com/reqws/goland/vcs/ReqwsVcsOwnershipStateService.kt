@@ -53,8 +53,11 @@ internal class ReqwsVcsOwnershipStateService :
     return VcsOwnershipLoadResult(ownership, diagnostics)
   }
 
-  @Synchronized
-  fun replaceForProject(projectRoot: Path, ownership: List<VcsMappingOwnership>) {
+  /** Resolves and validates ownership paths on the caller's background context. */
+  fun prepareReplacementForProject(
+    projectRoot: Path,
+    ownership: List<VcsMappingOwnership>,
+  ): PreparedReplacement {
     val seen = HashSet<String>()
     val entries = ownership.map { item ->
       val resolved = requireNotNull(
@@ -68,11 +71,23 @@ internal class ReqwsVcsOwnershipStateService :
         kind = item.kind.name,
       )
     }
-    persistedState = PersistedState(
-      stateVersion = CURRENT_STATE_VERSION,
-      managedMappings = entries.toMutableList(),
+    return PreparedReplacement(
+      PersistedState(
+        stateVersion = CURRENT_STATE_VERSION,
+        managedMappings = entries.toMutableList(),
+      ),
     )
   }
+
+  /** Commits only already-validated values and performs no filesystem access. */
+  @Synchronized
+  fun commitPreparedReplacement(replacement: PreparedReplacement) {
+    persistedState = replacement.state.deepCopy()
+  }
+
+  internal class PreparedReplacement internal constructor(
+    internal val state: PersistedState,
+  )
 
   internal data class PersistedState(
     var stateVersion: Int = CURRENT_STATE_VERSION,

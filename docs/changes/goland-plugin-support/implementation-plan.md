@@ -2,7 +2,7 @@
 title: GoLand 插件支持探索与实施计划
 type: technical-design
 status: active
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # GoLand 插件支持探索与实施计划
@@ -177,12 +177,12 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 | 工作包 | 目标 | 当前状态 |
 |---|---|---|
-| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；工作树产物对 261/262 Verifier 均为 Compatible，exact-head 报告待 GUI 后形成。 |
+| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；前序候选对 261/262 Verifier 均为 Compatible，当前修复候选仍待 fresh Verifier，exact-head 报告待 GUI 后形成。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
-| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B 并实现 state v2 + companion-marker owned-exclude adapter；state/JPS serialization 自动化已覆盖，真实 IDE reopen 待 GUI。 |
-| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、同生命周期 digest no-op、部分失败回退重放与 reopen 强制收敛已实现/test。 |
-| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS、live replan、安全 GoLand launcher、Desktop/Renderer 回归已通过；真实启动待验证。 |
-| W5 | 完成功能、规模和安全验证 | 自动化、261/262 Verifier 与两类本地打包已通过；GUI、Go 功能、reopen 和规模证据仍未完成。 |
+| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B 并实现 state v3 + pending add/remove journal + companion-marker owned-exclude adapter；v2 migration、异常窗口与 JPS serialization 自动化已覆盖，真实 IDE reopen 待 GUI。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现/test。 |
+| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS、EDT final equality/set 串行提交、安全 GoLand launcher、Desktop/Renderer 回归已通过；后台 auto-detect 竞争与真实启动待 GUI。 |
+| W5 | 完成功能、规模和安全验证 | 当前 Desktop/插件自动化、结构检查与插件 ZIP 已通过；fresh 261/262 Verifier、GUI、Go 功能、reopen 和规模证据仍未完成。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -277,7 +277,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 ### 8.3 EXP-02B：workspace root + owned excludes（已选择）
 
-B 保留默认 workspace-root Content Root，只排除 `.reqws` 和 root 直接子级中已确认的非活动 Git repository，不排除普通未知目录。每个新 target exclude 在同一 Workspace Model transaction 中增加一个指向虚拟 `.reqws/.goland-ownership/<128-bit-token>` 的 companion marker exclude；persistent state v2 保存 module、workspace-relative target 和 token。删除必须同时验证 state claim、唯一 target 和唯一 marker；已有等价用户 exclude 只借用，任何缺失、重复、旧 state 或物理 marker namespace 冲突均保守失败。
+B 保留默认 workspace-root Content Root，只排除 `.reqws` 和 root 直接子级中已确认的非活动 Git repository，不排除普通未知目录。每个新 target exclude 在同一 Workspace Model transaction 中增加一个指向虚拟 `.reqws/.goland-ownership/<128-bit-token>` 的 companion marker exclude；persistent state v3 保存 module、workspace-relative target、token 与 `OWNED / PENDING_ADD / PENDING_REMOVE` phase，并兼容 v2 stable state。新增前先保存 token intent，删除前先保存降级后的 stable 删除权；model commit 后仍以 pending 再保存一次，完整复核后才保存 stable，因此异常或冷加载后只凭 target+marker 完整 proof 完成/撤销 journal。已有等价用户 exclude 只借用，任何 partial、重复、跨 phase 或物理 marker namespace 冲突均保守失败。
 
 ### 8.4 EXP-02C：每活动仓库一个 module（未执行）
 
@@ -294,6 +294,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - write transaction；
 - persistent state；
 - state reload、独立 JPS serialization contract 与 reopen recovery；
+- post-commit trust/dispose 的 pending journal recovery、v2 migration 与 remove/re-add new-token recovery；
 - user-owned entries preservation；
 - ownership conflict 的保守失败。
 
@@ -302,7 +303,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 选择符合 active 技术方案所有权/API 门禁并最终通过完整验收矩阵的策略；
 - 形成唯一 production `ProjectModelAdapter`；
 - 未选 spike 代码、依赖和配置已删除；
-- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、state reload 与 JPS serialization；真实 GoLand reopen 由 GUI 补足；
+- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、state v3 pending recovery、v2 migration、cold state reload 与 JPS serialization；真实 GoLand reopen 由 GUI 补足；
 - 用户无关 module/root 不丢失；
 - retained repo 不进入默认项目内容；
 - Plugin Verifier 无禁止 API；
@@ -322,7 +323,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 固定 350 ms debounce；
 - single-flight coordinator；
 - latest-wins pending candidate；
-- 仅同一个 clean coordinator 生命周期内的 digest no-op；新 service/reopen 强制 reconcile；
+- 仅同一个 clean coordinator 生命周期内的自动/VFS same-digest 请求 no-op；手动 `Sync Now` 与新 service/reopen 均强制 reconcile；
 - temporary missing 的有限 retry；
 - invalid candidate 保留 last good model；
 - project dispose cancellation；
@@ -343,7 +344,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 ### 9.4 Exit criteria
 
 - 最终项目模型等于最后一个 valid manifest；
-- 同一 coordinator 生命周期内 clean digest 不重复 apply，部分 apply 失败后回退旧 digest 必须重放；
+- 同一 coordinator 生命周期内自动触发的 clean digest 不重复 apply；手动 same-digest 必须重放，且手动或部分 apply 失败后 baseline 保持 dirty；
 - invalid/temporary missing 不清空 last good roots；
 - 单项目最多一个 apply；
 - coordinator exception 不死锁；
@@ -361,7 +362,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 实现：
 
 - 读取现存 VCS mappings；
-- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；规划期间 mappings 变化时有界重读并按完整 equality（含 root settings）重新规划，不稳定则写入前失败；
+- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；后台规划后在 EDT closure 内执行 final 完整 equality（含 root settings）与整表 set，Settings writer 不能插入其间；mappings 变化时退出 EDT 有界重规划，不稳定则在 mapping/ownership 写入前失败；
 - 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
 - 添加缺失 active mappings；
 - 新增 mapping 只在平台提交成功后记录为 `CREATED`；移除仍能精确验证 ownership 的 inactive mapping 前先持久撤销删除权；
@@ -372,6 +373,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - apply failure 的 degraded state；
 - Git repository manager refresh；
 - Tool Window 展示 model/VCS 分层状态。
+
+261 public API 没有 mapping CAS，也不暴露后台 auto-detect 使用的内部锁；EDT 方案关闭用户 Settings Apply 窗口，但后台 scanner 的残余竞争必须在 exact-head GUI 中单独验证和记录。
 
 ### 10.3 Desktop
 
@@ -457,7 +460,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 10 次 add/remove sequence；
 - 100 次 rapid rewrite；
 - 观察 sync stage duration、EDT freeze、event/apply ratio、index completion、CPU、threads 和 memory；
-- 同一 live coordinator 的 clean same-digest no-op，并记录 reopen 强制 reconcile 的额外 apply；
+- 同一 live coordinator 的自动 clean same-digest no-op、手动 same-digest 强制 reconcile，并记录 reopen 强制 reconcile 的额外 apply；
 - Project/Git UI 保持可交互。
 
 不设置脱离本机环境的绝对毫秒门限，但以下任一情况判失败：

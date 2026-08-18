@@ -15,7 +15,34 @@ import org.junit.Test
 
 class LatestWinsSyncCoordinatorTest {
   @Test
-  fun `same digest is a no-op after a successful apply`() = runBlocking {
+  fun `manual same digest reapplies and restores a drifted projection`() = runBlocking {
+    val attempts = mutableListOf<String>()
+    var projection = ""
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = {
+        attempts += it.value
+        projection = it.value
+      },
+    )
+
+    assertTrue(coordinator.offer(candidate("a")))
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+    projection = "drifted"
+    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.MANUAL))
+    val reapplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+
+    assertEquals(SyncTrigger.MANUAL, reapplied.trigger)
+    assertEquals(listOf("a", "a"), attempts)
+    assertEquals("a", projection)
+    assertEquals("a", coordinator.lastAppliedDigest)
+    coordinator.close()
+  }
+
+  @Test
+  fun `automatic same digest remains a no-op after a successful apply`() = runBlocking {
     val applied = mutableListOf<String>()
     val events = eventChannel()
     val coordinator = coordinator(
@@ -26,11 +53,45 @@ class LatestWinsSyncCoordinatorTest {
 
     assertTrue(coordinator.offer(candidate("a")))
     assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
-    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.MANUAL))
+    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC))
     val noOp = assertEvent<SyncCoordinatorEvent.NoOp>(events, "a")
 
-    assertEquals(SyncTrigger.MANUAL, noOp.trigger)
+    assertEquals(SyncTrigger.AUTOMATIC, noOp.trigger)
     assertEquals(listOf("a"), applied)
+    assertEquals("a", coordinator.lastAppliedDigest)
+    coordinator.close()
+  }
+
+  @Test
+  fun `a failed manual reconciliation dirties the baseline for automatic recovery`() = runBlocking {
+    val attempts = mutableListOf<String>()
+    var failManualReconciliation = false
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = { candidate ->
+        attempts += candidate.value
+        if (failManualReconciliation) {
+          failManualReconciliation = false
+          error("manual reconciliation failed")
+        }
+      },
+    )
+
+    coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC)
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+    failManualReconciliation = true
+    coordinator.offer(candidate("a"), SyncTrigger.MANUAL)
+    val failure = assertEvent<SyncCoordinatorEvent.Failed>(events, "a")
+    assertEquals(SyncTrigger.MANUAL, failure.trigger)
+    assertNull(coordinator.lastAppliedDigest)
+
+    coordinator.offer(candidate("a"), SyncTrigger.AUTOMATIC)
+    val recovered = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+
+    assertEquals(SyncTrigger.AUTOMATIC, recovered.trigger)
+    assertEquals(listOf("a", "a", "a"), attempts)
     assertEquals("a", coordinator.lastAppliedDigest)
     coordinator.close()
   }
@@ -93,7 +154,39 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
-  fun `manual and automatic submissions share one latest-wins queue`() = runBlocking {
+  fun `a later automatic same digest cannot downgrade pending manual reconciliation to no-op`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applied = mutableListOf<String>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base") {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applied += candidate.value
+        },
+      )
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      firstApplyStarted.await()
+      coordinator.offer(candidate("base"), SyncTrigger.MANUAL)
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val manualReplay = assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+
+      assertEquals(SyncTrigger.MANUAL, manualReplay.trigger)
+      assertEquals(listOf("base", "base"), applied)
+      coordinator.close()
+  }
+
+  @Test
+  fun `a newer automatic digest keeps its content while inheriting pending manual intent`() = runBlocking {
     val firstApplyStarted = CompletableDeferred<Unit>()
     val releaseFirstApply = CompletableDeferred<Unit>()
     val applied = mutableListOf<String>()
@@ -112,14 +205,97 @@ class LatestWinsSyncCoordinatorTest {
 
     coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
     firstApplyStarted.await()
-    coordinator.offer(candidate("automatic"), SyncTrigger.AUTOMATIC)
-    coordinator.offer(candidate("manual"), SyncTrigger.MANUAL)
+    coordinator.offer(candidate("manual-old"), SyncTrigger.MANUAL)
+    coordinator.offer(candidate("automatic-new"), SyncTrigger.AUTOMATIC)
     releaseFirstApply.complete(Unit)
     assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
-    val manualApplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "manual")
+    val newestApplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "automatic-new")
 
-    assertEquals(SyncTrigger.MANUAL, manualApplied.trigger)
-    assertEquals(listOf("base", "manual"), applied)
+    assertEquals(SyncTrigger.MANUAL, newestApplied.trigger)
+    assertEquals(listOf("base", "automatic-new"), applied)
+    coordinator.close()
+  }
+
+  @Test
+  fun `an automatic read failure preserves manual intent for the next valid candidate`() =
+    runBlocking {
+    val firstApplyStarted = CompletableDeferred<Unit>()
+    val releaseFirstApply = CompletableDeferred<Unit>()
+    val applied = mutableListOf<String>()
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = { candidate ->
+        if (candidate.value == "base") {
+          firstApplyStarted.complete(Unit)
+          releaseFirstApply.await()
+        }
+        applied += candidate.value
+      },
+    )
+
+    coordinator.offer(candidate("base"))
+    firstApplyStarted.await()
+    coordinator.offer(candidate("pending"), SyncTrigger.MANUAL)
+    coordinator.offerReadFailure(
+      cause = IllegalArgumentException("latest read failed"),
+      trigger = SyncTrigger.AUTOMATIC,
+      digestSha256 = "invalid",
+    )
+    releaseFirstApply.complete(Unit)
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+    val failure = assertEvent<SyncCoordinatorEvent.Failed>(events, "invalid")
+
+    assertEquals(SyncTrigger.MANUAL, failure.trigger)
+    assertEquals(SyncFailureStage.READ, failure.stage)
+    assertEquals(listOf("base"), applied)
+
+    coordinator.offer(candidate("recovered"), SyncTrigger.AUTOMATIC)
+    val recovered = assertEvent<SyncCoordinatorEvent.Applied>(events, "recovered")
+    assertEquals(SyncTrigger.MANUAL, recovered.trigger)
+    assertEquals(listOf("base", "recovered"), applied)
+    coordinator.close()
+  }
+
+  @Test
+  fun `a newer manual read failure replaces a pending manual candidate`() = runBlocking {
+    val firstApplyStarted = CompletableDeferred<Unit>()
+    val releaseFirstApply = CompletableDeferred<Unit>()
+    val applied = mutableListOf<String>()
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = { candidate ->
+        if (candidate.value == "base") {
+          firstApplyStarted.complete(Unit)
+          releaseFirstApply.await()
+        }
+        applied += candidate.value
+      },
+    )
+
+    coordinator.offer(candidate("base"))
+    firstApplyStarted.await()
+    coordinator.offer(candidate("pending"), SyncTrigger.MANUAL)
+    coordinator.offerReadFailure(
+      cause = IllegalArgumentException("newer manual read failed"),
+      trigger = SyncTrigger.MANUAL,
+      digestSha256 = "invalid",
+    )
+    releaseFirstApply.complete(Unit)
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+    val failure = assertEvent<SyncCoordinatorEvent.Failed>(events, "invalid")
+
+    assertEquals(SyncTrigger.MANUAL, failure.trigger)
+    assertEquals(SyncFailureStage.READ, failure.stage)
+    assertEquals(listOf("base"), applied)
+
+    coordinator.offer(candidate("recovered"), SyncTrigger.AUTOMATIC)
+    val recovered = assertEvent<SyncCoordinatorEvent.Applied>(events, "recovered")
+    assertEquals(SyncTrigger.MANUAL, recovered.trigger)
+    assertEquals(listOf("base", "recovered"), applied)
     coordinator.close()
   }
 

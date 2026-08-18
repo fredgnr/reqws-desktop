@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # ReqWS 开发指南
@@ -201,7 +201,7 @@ cd integrations/goland
 
 `verifyPlugin` 对 GoLand 2026.1.3 和 2026.2 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，实现边界和待验证矩阵见[GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
 
-生产代码使用公开 261 API：保留 GoLand 既有 workspace-root Content Root；每个插件创建的 target exclude 都配一个虚拟 companion marker exclude，并由 state v2 的相对路径/随机 marker claim 与模型中唯一 target+marker 共同证明删除权。现存等价 exclude 只借用。VCS mapping 区分插件创建的 `CREATED` 与仅借用的 `BORROWED`，破坏性删除前先撤销持久删除权。Safe Mode 只通过稳定 `TrustedProjects.isProjectTrusted` 查询，并仅在 blocked 期间低频检查 trust transition；禁止为方便改用 `@Internal`、`@Experimental`、反射或私有 API。
+生产代码使用公开 261 API：保留 GoLand 既有 workspace-root Content Root；每个插件创建的 target exclude 都配一个虚拟 companion marker exclude。state v3 以相对路径、随机 marker token 和 `OWNED / PENDING_ADD / PENDING_REMOVE` phase 覆盖 Workspace Model 与 persistent state 的跨事务窗口，并兼容读取 v2 stable state；pending 分别在 model commit 前后保存，stable 只在完整复核后提升，partial proof 或 phase 冲突必须 fail closed。现存等价 exclude 只借用。VCS mapping 区分插件创建的 `CREATED` 与仅借用的 `BORROWED`，破坏性删除前先撤销持久删除权；后台完成路径规划，最终完整 equality 与整表 set 在 EDT 串行，仍需把平台后台 auto-detect 的无公开 CAS 窗口作为 GUI 残余风险验证。Manual intent 跨自动 candidate/read failure 保留到下一份有效 candidate 开始 reconcile；project service 的 terminal dispose probe 贯穿模型、VCS、refresh 与 digest gate。Safe Mode 只通过稳定 `TrustedProjects.isProjectTrusted` 查询，并仅在 blocked 期间低频检查 trust transition；禁止为方便改用 `@Internal`、`@Experimental`、反射或私有 API。
 
 真实 GUI、Go completion/navigation/test/debug、add/remove/re-add、restart、50+20 规模和 ZIP SHA-256 不能由平台单测或 `runIde` 代替。只有同一 exact commit 完成 261/262 Verifier 与真实 GoLand GUI 后，才在需求包中新增 dated verification report。
 

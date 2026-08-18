@@ -77,6 +77,73 @@ class ReqwsProjectionApplierTest {
     assertEquals(0, sideEffects)
   }
 
+  @Test
+  fun `does not call either adapter after the project service is disposed`() {
+    var sideEffects = 0
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      isProjectDisposed = { true },
+      projectModel = ProjectModelProjection { sideEffects += 1 },
+      vcsMappings = VcsMappingProjection {
+        sideEffects += 1
+        vcsResult()
+      },
+      digestRecorder = AppliedDigestRecorder { sideEffects += 1 },
+    )
+
+    assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(0, sideEffects)
+  }
+
+  @Test
+  fun `stops before VCS when service disposal follows the model commit`() {
+    var disposed = false
+    var vcsApplied = false
+    var digestRecorded = false
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      isProjectDisposed = { disposed },
+      projectModel = ProjectModelProjection { disposed = true },
+      vcsMappings = VcsMappingProjection {
+        vcsApplied = true
+        vcsResult()
+      },
+      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+    )
+
+    assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(false, vcsApplied)
+    assertEquals(false, digestRecorded)
+  }
+
+  @Test
+  fun `does not record a clean digest when disposal follows the VCS commit`() {
+    var disposed = false
+    var digestRecorded = false
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      isProjectDisposed = { disposed },
+      projectModel = ProjectModelProjection {},
+      vcsMappings = VcsMappingProjection {
+        disposed = true
+        vcsResult()
+      },
+      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+    )
+
+    assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(false, digestRecorded)
+  }
+
   private fun vcsResult(vararg diagnostics: VcsMappingDiagnostic) = VcsMappingApplyResult(
     plan = VcsMappingPlan(
       additions = emptyList(),

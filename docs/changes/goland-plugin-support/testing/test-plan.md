@@ -2,7 +2,7 @@
 title: GoLand 插件支持测试方案
 type: test-plan
 status: active
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # GoLand 插件支持测试方案
@@ -171,7 +171,7 @@ workspace/
 - unknown user entries preserved；
 - borrowed existing mapping；
 - user modification conflict；
-- 同一 live coordinator 的 clean baseline 对 same digest no-op；新 coordinator 不从持久摘要 skip；
+- 同一 live coordinator 的 clean baseline 只让自动/VFS same-digest 请求 no-op；手动 same-digest 必须再次 apply 并能恢复 live projection 漂移；新 coordinator 不从持久摘要 skip；
 - active `CREATED` mapping 在 repository 暂时 missing/non-Git 时保留 mapping 与 ownership；
 - active `CREATED` mapping 已消失时丢弃 stale 删除权；同路径用户 mapping 后续出现也不得删除；
 - workspace 内额外 Git mapping 和 project-root mapping 保留但产生 degraded/ownership diagnostic；
@@ -188,6 +188,8 @@ workspace/
 - target temporary missing；
 - project disposed；
 - manual sync races automatic sync；
+- manual same digest 在 clean baseline 下仍重放 apply；重放失败后 baseline 保持 dirty，后续自动同 digest 可继续恢复；
+- pending manual candidate 后到 automatic candidate 时使用最新内容并继承 manual；后到 automatic read failure 时发布最新失败但保留 intent，下一份 valid automatic candidate 必须以 manual trigger apply，不能应用旧 snapshot 或错误 no-op；
 - exception does not deadlock queue；
 - A 成功、B 部分 apply 后失败、manifest 回退 A 时必须重放 A，不能错误 no-op；
 - 新 coordinator/service 即使读到相同持久摘要也必须重新 apply/reconcile。
@@ -203,8 +205,11 @@ workspace/
 - remove retained；
 - re-add；
 - target/companion marker 同事务成对增删；
-- state v2 reload + 独立最小 `.idea`/`.iml` fixture 的公开 JPS exclude loader contract；平台测试的 in-memory project 不冒充 save/reopen，真实 close/reopen 仍由 GUI 验收；
-- marker/target 缺失或重复、claim/token 重复、旧 v1 state、物理 marker namespace/symlink 均保守冲突且事务不变；
+- state v3 stable/pending add/pending remove journal；v2 stable state 自动迁移；
+- 模型变更必须按 pending + old model save、model commit、pending + new model save、stable save 的顺序形成持久化屏障；从第二个 save 捕获的 fresh state load 必须能在同一 live model 上收敛；
+- post-commit trust/dispose 后保留 recoverable journal，fresh state load + same snapshot retry 能完成收敛；pending add 后 repository active/re-add 可安全移除，pending remove 已提交后可清理 journal，后续再排除使用新 token；
+- state reload + 独立最小 `.idea`/`.iml` fixture 的公开 JPS exclude loader contract；平台测试的 in-memory project 不冒充 save/reopen，真实 close/reopen 仍由 GUI 验收；
+- marker/target partial 或重复、claim/token 跨 phase 重复、旧 v1 state、物理 marker namespace/symlink 均保守冲突且不越权删除；
 - 现存等价 exclude 只借用；remove/re-add 生成新 marker，不泄漏旧 marker；
 - 大小写、NFC/NFD 或 symlink alias 指向 active/current exclude 时不得误加语义重复 exclude，活动仓库不得仍被借用 exclude 覆盖；
 - 合法 retained 名称与 synthetic ownership label（例如 `candidate:.reqws`）不得因 map-key 碰撞而绕过 nested Content Root 冲突；
@@ -226,12 +231,15 @@ workspace/
 - preserve user mapping；
 - duplicate path normalization；
 - apply 前实时重查 filesystem/.git，missing→appears 或 present→missing 按本轮真实状态规划；
-- 规划期间 mapping 变化时重读/replan，连续不稳定则写入前失败；`rootSettings` 变化也必须识别；
+- 后台规划后在 EDT write context 内执行 final full-equality check 与 set；用户 Settings writer 在 final read 后尝试写入时必须被串行，不能丢 mapping 或 `rootSettings`；
+- final equality 发现同路径用户 `Git + rootSettings` 已落地时退出 EDT 重规划，保留原对象并记为 `BORROWED` 而不是错误的 `CREATED`；连续三次 stale 时 mapping/ownership/refresh 均不得写；
 - destructive remove 前先撤销持久删除权；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；
 - active、missing 和 inactive 三种路径下，只要用户给 `CREATED` mapping 增加 `rootSettings`，就必须丢弃删除资格、degraded 且绝不删除；
 - extra/root mapping 与 NFC/NFD root coverage 保留并 degraded；
 - VCS apply failure degraded state；
 - Git plugin disabled（明确诊断，不 crash）。
+
+上述自动化证明 Settings writer 串行与 fail-closed 行为；261 后台 auto-detect 使用无公开锁的内部 IO setter，仍必须在真实 GoLand 中并发操作验证，测试报告不得把 adapter fake platform 结果表述为平台级 CAS。
 
 ### 6.3 Safe Mode
 
@@ -239,7 +247,7 @@ workspace/
 - no model mutation；
 - no external process；
 - trust/dispose 在 Workspace Model transaction commit boundary 翻转时回滚 model/state；model 已在 trusted 时提交而随后 gate 翻转时不得 mint ownership 或推进 digest；
-- VCS 在 planning、ownership pre-revoke、mapping set、final ownership record 与 refresh 边界翻转时不得执行下一项写；
+- service terminal dispose 与 `Project.isDisposed` 都必须贯穿投影；VCS 在 planning、ownership pre-revoke、mapping set、final ownership record、refresh 后与 overall digest 前翻转时不得执行下一项写或推进 clean digest；
 - 只在 blocked 期间通过稳定 trust probe 低频检测，trust transition triggers one sync；
 - repeated trust event idempotent。
 
@@ -408,7 +416,7 @@ Fixture：
 - VFS event count vs apply count；
 - indexing 是否结束；
 - memory/threads 在重复同步后是否稳定；
-- 同一 live coordinator 的 clean same-digest no-op；reopen/new service 仍重新 reconcile；
+- 同一 live coordinator 的自动 clean same-digest no-op；手动 same-digest 与 reopen/new service 仍重新 reconcile；
 - Project/Git UI 是否仍可交互。
 
 不设脱离本机环境的绝对毫秒硬门限，但出现可感知 UI freeze、持续 CPU、无限 indexing 或 apply 数量与 event burst 等量时均判失败。验证报告必须给出实测数据。
@@ -441,7 +449,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-当前工作树已取得阶段性的 261/262 Plugin Verifier Compatible 结果和本地 ZIP，但代码在其后继续收口，且尚无满足下列格式的同一 exact candidate 报告。最终 261/262 Verifier、ZIP SHA-256、真实 GoLand GUI 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补该缺口。
+前序候选曾取得 261/262 Plugin Verifier Compatible 结果和本地 ZIP，但代码在其后继续收口，当前候选尚无满足下列格式的同一 exact-candidate 报告。最终 261/262 Verifier、ZIP SHA-256、真实 GoLand GUI 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补该缺口。
 
 dated verification 建议结构：
 

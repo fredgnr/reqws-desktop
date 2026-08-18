@@ -20,7 +20,6 @@ import com.reqws.goland.watch.ManifestVfsWatcher
 import java.nio.file.Path
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +33,7 @@ class ReqwsProjectService(
   private val coroutineScope: CoroutineScope,
 ) : Disposable {
   private val disposed = AtomicBoolean(false)
-  private val readGeneration = AtomicLong(0)
+  private val readRequests = SyncReadRequestTracker()
   private val statePublisher = TerminalStatePublisher(
     initialState = ReqwsProjectState.INACTIVE,
     isTerminal = { state -> state.lifecycle == ReqwsLifecycleState.DISPOSED },
@@ -51,7 +50,10 @@ class ReqwsProjectService(
     trustGate = trustGate,
   )
   private val projectionApplier by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-    ReqwsProjectionApplier.forProject(project)
+    ReqwsProjectionApplier.forProject(
+      project = project,
+      isServiceDisposed = disposed::get,
+    )
   }
   private val coordinator = LatestWinsSyncCoordinator(
     scope = coroutineScope,
@@ -74,10 +76,13 @@ class ReqwsProjectService(
   /** Sync Now bypasses VFS debounce but enters the same serialized coordinator. */
   fun refresh(): Job? = requestRefresh(SyncTrigger.MANUAL)
 
+  /** Startup, VFS, trust, and Tool Window lifecycle refreshes retain automatic no-op semantics. */
+  internal fun refreshAutomatically(): Job? = requestRefresh(SyncTrigger.AUTOMATIC)
+
   private fun requestRefresh(trigger: SyncTrigger): Job? {
     if (disposed.get() || project.isDisposed) return null
     val projectRoot = ReqwsProjectDetector.projectRoot(project)
-    val requestGeneration = readGeneration.incrementAndGet()
+    val request = readRequests.begin(trigger)
     publish(
       state.copy(
         lifecycle = ReqwsLifecycleState.READING,
@@ -90,8 +95,8 @@ class ReqwsProjectService(
         ?.let(::ensureWatcher)
       val previous = state
       val loaded = loadWithRetry(projectRoot, previous)
-      if (disposed.get() || readGeneration.get() != requestGeneration) return@launch
-      acceptLoadedState(loaded, trigger)
+      if (disposed.get()) return@launch
+      acceptLoadedState(loaded, request)
     }
   }
 
@@ -108,34 +113,42 @@ class ReqwsProjectService(
     return loaded.withPersistedDigest()
   }
 
-  private fun acceptLoadedState(loaded: ReqwsProjectState, trigger: SyncTrigger) {
+  private fun acceptLoadedState(loaded: ReqwsProjectState, request: SyncReadRequest) {
     when (loaded.lifecycle) {
       ReqwsLifecycleState.INACTIVE -> {
-        trustMonitor.cancelPending()
-        publish(loaded)
+        readRequests.runIfLatest(request) {
+          trustMonitor.cancelPending()
+          publish(loaded)
+        }
       }
       ReqwsLifecycleState.SAFE_MODE_BLOCKED -> {
-        publish(loaded)
-        trustMonitor.awaitTrusted()
+        readRequests.runIfLatest(request) {
+          publish(loaded)
+          trustMonitor.awaitTrusted()
+        }
       }
       ReqwsLifecycleState.ERROR -> {
-        trustMonitor.cancelPending()
-        coordinator.offerReadFailure(
-          cause = ReadStateFailure(loaded),
-          trigger = trigger,
-          digestSha256 = loaded.lastError?.digestSha256,
-        )
+        readRequests.runIfLatest(request) { trigger ->
+          trustMonitor.cancelPending()
+          coordinator.offerReadFailure(
+            cause = ReadStateFailure(loaded),
+            trigger = trigger,
+            digestSha256 = loaded.lastError?.digestSha256,
+          )
+        }
       }
       ReqwsLifecycleState.SYNCHRONIZED,
       ReqwsLifecycleState.DEGRADED,
       -> {
         val snapshot = requireNotNull(loaded.snapshot)
-        trustMonitor.cancelPending()
-        rememberCandidate(snapshot.digestSha256, loaded)
-        coordinator.offer(
-          candidate = SyncCandidate(snapshot.digestSha256, snapshot),
-          trigger = trigger,
-        )
+        readRequests.offerCandidateIfLatest(request) { trigger ->
+          trustMonitor.cancelPending()
+          rememberCandidate(snapshot.digestSha256, loaded)
+          coordinator.offer(
+            candidate = SyncCandidate(snapshot.digestSha256, snapshot),
+            trigger = trigger,
+          )
+        }
       }
       ReqwsLifecycleState.READING,
       ReqwsLifecycleState.SYNCHRONIZING,
@@ -285,7 +298,7 @@ class ReqwsProjectService(
     try {
       statePublisher.publish(ReqwsProjectState.DISPOSED)
     } finally {
-      readGeneration.incrementAndGet()
+      readRequests.invalidate()
       trustMonitor.close()
       watcherRef.getAndSet(null)?.dispose()
       coordinator.close()

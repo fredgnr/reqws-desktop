@@ -106,6 +106,14 @@ internal data class VcsMappingApplyResult(
 )
 
 internal fun interface VcsMappingOwnershipRecorder {
-  /** Must update in-memory ownership synchronously before this method returns. */
-  fun replace(ownership: List<VcsMappingOwnership>)
+  /**
+   * Performs any path validation and returns a pure in-memory commit prepared for the supplied
+   * ownership. The adapter invokes this before entering the serialized VCS mapping write context.
+   */
+  fun prepare(ownership: List<VcsMappingOwnership>): VcsMappingOwnershipCommit
+}
+
+internal fun interface VcsMappingOwnershipCommit {
+  /** Must update in-memory ownership synchronously without filesystem access. */
+  fun commit()
 }

@@ -20,9 +20,11 @@ class ReqwsVcsOwnershipStateServiceTest {
     Files.createDirectory(root.resolve("repo-a"))
     val service = ReqwsVcsOwnershipStateService()
 
-    service.replaceForProject(
-      root,
-      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+    service.commitPreparedReplacement(
+      service.prepareReplacementForProject(
+        root,
+        listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
+      ),
     )
 
     val state = service.state
@@ -80,9 +82,11 @@ class ReqwsVcsOwnershipStateServiceTest {
   fun `returned state is isolated from stored ownership`() {
     val root = workspaceRoot()
     val service = ReqwsVcsOwnershipStateService()
-    service.replaceForProject(
-      root,
-      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
+    service.commitPreparedReplacement(
+      service.prepareReplacementForProject(
+        root,
+        listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
+      ),
     )
 
     service.state.managedMappings.clear()

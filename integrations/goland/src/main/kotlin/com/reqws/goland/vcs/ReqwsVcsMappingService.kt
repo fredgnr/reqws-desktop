@@ -15,22 +15,32 @@ internal class ReqwsVcsMappingService(private val project: Project) {
     get() = project.service()
 
   /**
-   * Mapping reconciliation and Git repository refresh perform filesystem work. Platform 261's
-   * setDirectoryMappings explicitly supports a background-thread update path, so keep the whole
-   * operation off EDT rather than blocking a UI callback.
+   * Filesystem identity/ownership preparation and Git refresh stay on a background dispatcher.
+   * The adapter moves only its final full-list equality check, pure in-memory ownership commits,
+   * and mapping commit onto EDT so the VCS Settings writer cannot interleave with replacement.
    */
-  suspend fun apply(snapshot: ManifestSnapshot): VcsMappingApplyResult = withContext(Dispatchers.IO) {
-    ensureMutationAllowed()
+  suspend fun apply(
+    snapshot: ManifestSnapshot,
+    isServiceDisposed: () -> Boolean = { false },
+  ): VcsMappingApplyResult = withContext(Dispatchers.IO) {
+    val isDisposed = { project.isDisposed || isServiceDisposed() }
+    ensureMutationAllowed(isDisposed)
     val loadedOwnership = ownershipState.readForProject(snapshot.canonicalProjectRoot)
     val result = IntellijVcsMappingAdapter(
       platform = IntellijVcsMappingPlatform(project),
-      isProjectDisposed = { project.isDisposed },
+      isProjectDisposed = isDisposed,
       isProjectTrusted = { TrustedProjects.isProjectTrusted(project) },
     ).apply(
       snapshot = snapshot,
       currentOwnership = loadedOwnership.ownership,
       ownershipRecorder = VcsMappingOwnershipRecorder { nextOwnership ->
-        ownershipState.replaceForProject(snapshot.canonicalProjectRoot, nextOwnership)
+        val replacement = ownershipState.prepareReplacementForProject(
+          snapshot.canonicalProjectRoot,
+          nextOwnership,
+        )
+        VcsMappingOwnershipCommit {
+          ownershipState.commitPreparedReplacement(replacement)
+        }
       },
     )
     if (loadedOwnership.diagnostics.isEmpty()) {
@@ -44,9 +54,9 @@ internal class ReqwsVcsMappingService(private val project: Project) {
     }
   }
 
-  private fun ensureMutationAllowed() {
+  private fun ensureMutationAllowed(isDisposed: () -> Boolean) {
     val code = when {
-      project.isDisposed -> VcsMappingApplyErrorCode.PROJECT_DISPOSED
+      isDisposed() -> VcsMappingApplyErrorCode.PROJECT_DISPOSED
       !TrustedProjects.isProjectTrusted(project) -> VcsMappingApplyErrorCode.SAFE_MODE_BLOCKED
       else -> return
     }

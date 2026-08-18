@@ -45,12 +45,13 @@ internal fun interface AppliedDigestRecorder {
 /** Applies both projection layers and advances the overall digest only after both fully converge. */
 internal class ReqwsProjectionApplier(
   private val isTrusted: () -> Boolean,
+  private val isProjectDisposed: () -> Boolean = { false },
   private val projectModel: ProjectModelProjection,
   private val vcsMappings: VcsMappingProjection,
   private val digestRecorder: AppliedDigestRecorder,
 ) {
   suspend fun apply(snapshot: ManifestSnapshot) {
-    if (!isTrusted()) throw safeModeFailure()
+    ensureProjectionAllowed()
 
     try {
       projectModel.apply(snapshot)
@@ -66,7 +67,7 @@ internal class ReqwsProjectionApplier(
 
     // Trust is checked again before the independently committed VCS layer. The model adapter
     // performs its own pre-transaction gate as well.
-    if (!isTrusted()) throw safeModeFailure()
+    ensureProjectionAllowed()
 
     val vcsResult = try {
       vcsMappings.apply(snapshot)
@@ -90,7 +91,20 @@ internal class ReqwsProjectionApplier(
     degradedCode(vcsResult)?.let { stableCode ->
       throw ReqwsProjectionApplyException(stableCode = stableCode, degraded = true)
     }
+    // Service disposal can precede Project.isDisposed while a synchronous platform call is in
+    // flight. Never publish a clean digest after that project-level lifecycle boundary.
+    ensureProjectionAllowed()
     digestRecorder.markApplied(snapshot.digestSha256)
+  }
+
+  private fun ensureProjectionAllowed() {
+    if (isProjectDisposed()) {
+      throw ReqwsProjectionApplyException(
+        stableCode = ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
+        degraded = false,
+      )
+    }
+    if (!isTrusted()) throw safeModeFailure()
   }
 
   private fun mapProjectModelFailure(exception: ProjectModelApplyException): ReqwsProjectionApplyException {
@@ -128,15 +142,20 @@ internal class ReqwsProjectionApplier(
   )
 
   companion object {
-    fun forProject(project: Project): ReqwsProjectionApplier {
+    fun forProject(
+      project: Project,
+      isServiceDisposed: () -> Boolean = { false },
+    ): ReqwsProjectionApplier {
       val persistence = project.service<ReqwsSyncPersistence>()
+      val isDisposed = { project.isDisposed || isServiceDisposed() }
       return ReqwsProjectionApplier(
         isTrusted = { TrustedProjects.isProjectTrusted(project) },
+        isProjectDisposed = isDisposed,
         projectModel = ProjectModelProjection { snapshot ->
-          project.service<ReqwsProjectModelAdapter>().apply(snapshot)
+          project.service<ReqwsProjectModelAdapter>().apply(snapshot, isDisposed)
         },
         vcsMappings = VcsMappingProjection { snapshot ->
-          project.service<ReqwsVcsMappingService>().apply(snapshot)
+          project.service<ReqwsVcsMappingService>().apply(snapshot, isDisposed)
         },
         digestRecorder = AppliedDigestRecorder(persistence::markApplied),
       )

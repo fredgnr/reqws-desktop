@@ -248,6 +248,68 @@ $excludeElements
     assertEquals(beforeState, ownershipMap(state))
   }
 
+  fun testRejectsPartialPendingAddWithoutDeletingTheUserVisibleTarget() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    addExclude(".reqws")
+    val state = ReqwsManagedModelState().also { service ->
+      service.replaceOwnership(
+        moduleName = module.name,
+        managedExcludes = emptyMap(),
+        pendingAdds = mapOf(".reqws" to TOKEN_A),
+      )
+    }
+    val beforeModel = excludedRelativePathsList(root)
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
+    assertEquals(beforeModel, excludedRelativePathsList(root))
+    assertTrue(targetExcludedRelativePaths(root).contains(".reqws"))
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+    assertTrue(ownershipMap(state).isEmpty())
+  }
+
+  fun testRestartsAnAbsentPendingRemovalWithAFreshMarkerToken() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-c")
+    addExclude(".reqws")
+    addExclude(markerRelative(TOKEN_A))
+    val state = ReqwsManagedModelState().also { service ->
+      service.replaceOwnership(
+        moduleName = module.name,
+        managedExcludes = mapOf(".reqws" to TOKEN_A),
+        pendingRemovals = mapOf("repo-c" to TOKEN_B),
+      )
+    }
+
+    val result = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        markerTokenFactory = tokenFactory(TOKEN_C),
+        persistPendingState = {},
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(setOf("repo-c"), result.added)
+    assertEquals(
+      mapOf(".reqws" to TOKEN_A, "repo-c" to TOKEN_C),
+      ownershipMap(state),
+    )
+    assertTrue(pendingRemoveMap(state).isEmpty())
+    assertFalse(markerRelativePaths(root).contains(markerRelative(TOKEN_B)))
+    assertTrue(markerRelativePaths(root).contains(markerRelative(TOKEN_C)))
+  }
+
   fun testRejectsDuplicateOwnershipMarkerWithoutChangingModelOrState() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
@@ -528,6 +590,32 @@ $excludeElements
     assertEquals(1, state.ownership().stateVersion)
   }
 
+  fun testMigratesVersionTwoOwnershipStateOnTheNextSuccessfulApply() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    addExclude(".reqws")
+    addExclude(markerRelative(TOKEN_A))
+    val state = ReqwsManagedModelState().also { service ->
+      service.loadState(ReqwsManagedModelState.Data().also { data ->
+        data.stateVersion = REQWS_LEGACY_MODEL_STATE_VERSION
+        data.targetModuleName = module.name
+        data.managedExcludes = mutableListOf(persistedClaim(".reqws", TOKEN_A))
+      })
+    }
+
+    val migrated = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(setOf(".reqws"), migrated.kept)
+    assertEquals(REQWS_MODEL_STATE_VERSION, state.ownership().stateVersion)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(state))
+  }
+
   fun testRejectsMalformedAndDuplicateOwnershipClaims() {
     val root = rootPath()
     val malformedStates = listOf(
@@ -567,6 +655,31 @@ $excludeElements
     }
   }
 
+  fun testRejectsClaimsDuplicatedAcrossStableAndPendingPhases() {
+    val root = rootPath()
+    val state = ReqwsManagedModelState().also { service ->
+      service.replaceOwnership(
+        moduleName = module.name,
+        managedExcludes = mapOf(".reqws" to TOKEN_A),
+        pendingAdds = mapOf(".reqws" to TOKEN_B),
+      )
+    }
+    val before = excludedRelativePathsList(root)
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, failure.code)
+    assertEquals(before, excludedRelativePathsList(root))
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(state))
+    assertEquals(mapOf(".reqws" to TOKEN_B), pendingAddMap(state))
+  }
+
   fun testRejectsUntrustedProjectBeforeChangingModelOrOwnership() {
     val root = rootPath()
     val state = ReqwsManagedModelState()
@@ -597,15 +710,90 @@ $excludeElements
       WorkspaceExcludeModelAdapter(
         project,
         state,
-        isTrusted = { ++trustChecks < 6 },
+        isTrusted = { ++trustChecks < 8 },
         markerTokenFactory = tokenFactory(TOKEN_A),
       ).apply(snapshot(root, emptyList()))
     }
 
     assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
-    assertEquals(6, trustChecks)
+    assertEquals(8, trustChecks)
     assertEquals(before, excludedRelativePathsList(root))
     assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+  }
+
+  fun testPersistsPendingBeforeAndAfterModelCommitBeforeStableOwnership() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+    val durableStates = mutableListOf<ReqwsManagedModelState.Data>()
+    val durableModels = mutableListOf<Set<String>>()
+
+    awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        markerTokenFactory = tokenFactory(TOKEN_A),
+        persistPendingState = {
+          durableStates.add(state.state)
+          durableModels.add(excludedRelativePathsList(root).toSet())
+        },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(3, durableStates.size)
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(durableStates[0]))
+    assertFalse(durableModels[0].contains(".reqws"))
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(durableStates[1]))
+    assertTrue(durableModels[1].contains(".reqws"))
+    assertTrue(durableModels[1].contains(markerRelative(TOKEN_A)))
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(durableStates[2]))
+    assertTrue(pendingAddMap(durableStates[2]).isEmpty())
+
+    val coldState = ReqwsManagedModelState().also { it.loadState(durableStates[1]) }
+    val recovered = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        coldState,
+        isTrusted = { true },
+        persistPendingState = {},
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(setOf(".reqws"), recovered.kept)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(coldState))
+    assertTrue(pendingAddMap(coldState).isEmpty())
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(state))
+    assertTrue(pendingAddMap(state).isEmpty())
+  }
+
+  fun testFailsClosedWhenExcludesChangeAfterThePendingJournalIsPersisted() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+    var durableState: ReqwsManagedModelState.Data? = null
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        markerTokenFactory = tokenFactory(TOKEN_A),
+        persistPendingState = {
+          durableState = state.state
+          addExclude("user-after-plan")
+        },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
+    assertEquals(setOf("user-after-plan"), targetExcludedRelativePaths(root))
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+    val coldState = ReqwsManagedModelState().also {
+      it.loadState(requireNotNull(durableState))
+    }
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(coldState))
   }
 
   fun testRollsBackModelWhenProjectIsDisposedAtTheTransactionCommitBoundary() {
@@ -620,20 +808,135 @@ $excludeElements
         project,
         state,
         isTrusted = { true },
-        isProjectDisposed = { ++disposeChecks >= 6 },
+        isProjectDisposed = { ++disposeChecks >= 8 },
         markerTokenFactory = tokenFactory(TOKEN_A),
       ).apply(snapshot(root, emptyList()))
     }
 
     assertEquals(ProjectModelErrorCode.PROJECT_DISPOSED, failure.code)
-    assertEquals(6, disposeChecks)
+    assertEquals(8, disposeChecks)
     assertEquals(before, excludedRelativePathsList(root))
     assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
   }
 
-  fun testDoesNotRecordOwnershipWhenTrustChangesAfterTheModelCommit() {
+  fun testRevokesStableRemovalRightsBeforeAModelRollbackAndRetriesFromTheJournal() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-c")
+    val state = ReqwsManagedModelState()
+    awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
+      ).apply(snapshot(root, emptyList()))
+    }
+    var trustChecks = 0
+    var durableState: ReqwsManagedModelState.Data? = null
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { ++trustChecks < 8 },
+        persistPendingState = {
+          durableState = state.state
+          assertTrue(targetExcludedRelativePaths(root).contains("repo-c"))
+          assertEquals(mapOf("repo-c" to TOKEN_B), pendingRemoveMap(state))
+        },
+      ).apply(snapshot(root, listOf("repo-c")))
+    }
+
+    assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
+    assertEquals(8, trustChecks)
+    assertTrue(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(state))
+    assertEquals(mapOf("repo-c" to TOKEN_B), pendingRemoveMap(state))
+
+    val reloadedState = ReqwsManagedModelState().also {
+      it.loadState(requireNotNull(durableState))
+    }
+    val recovered = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        reloadedState,
+        isTrusted = { true },
+      ).apply(snapshot(root, listOf("repo-c")))
+    }
+
+    assertEquals(setOf("repo-c"), recovered.removed)
+    assertFalse(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(reloadedState))
+    assertTrue(pendingRemoveMap(reloadedState).isEmpty())
+  }
+
+  fun testRecoversPendingAddAfterPostCommitTrustChangeAndColdReload() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+    val unchangedSnapshot = snapshot(root, emptyList())
+    var trustChecks = 0
+    val durableStates = mutableListOf<ReqwsManagedModelState.Data>()
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { ++trustChecks < 11 },
+        markerTokenFactory = tokenFactory(TOKEN_A),
+        persistPendingState = { durableStates.add(state.state) },
+      ).apply(unchangedSnapshot)
+    }
+
+    assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
+    assertEquals(11, trustChecks)
+    assertEquals(2, durableStates.size)
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(durableStates.last()))
+    assertTrue(targetExcludedRelativePaths(root).contains(".reqws"))
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+
+    val reloadedState = ReqwsManagedModelState().also { it.loadState(durableStates.last()) }
+    val recovered = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        reloadedState,
+        isTrusted = { true },
+        persistPendingState = {},
+      ).apply(unchangedSnapshot)
+    }
+
+    assertEquals(setOf(".reqws"), recovered.kept)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(reloadedState))
+    assertTrue(pendingAddMap(reloadedState).isEmpty())
+  }
+
+  fun testRestoresPendingJournalWhenTrustChangesAfterFinalOwnershipRecording() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { ownershipMap(state).isEmpty() },
+        markerTokenFactory = tokenFactory(TOKEN_A),
+        persistPendingState = {},
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
+    assertTrue(targetExcludedRelativePaths(root).contains(".reqws"))
+    assertTrue(ownershipMap(state).isEmpty())
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+  }
+
+  fun testRecoversPendingAddsAfterPostCommitTrustChangeColdReloadAndRepositoryReadd() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-c")
     val state = ReqwsManagedModelState()
     var trustChecks = 0
 
@@ -641,16 +944,136 @@ $excludeElements
       WorkspaceExcludeModelAdapter(
         project,
         state,
-        isTrusted = { ++trustChecks < 7 },
-        markerTokenFactory = tokenFactory(TOKEN_A),
-      ).apply(snapshot(root, emptyList()))
+        isTrusted = { ++trustChecks < 10 },
+        markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
+      ).apply(snapshot(root, listOf("repo-a")))
     }
 
     assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
-    assertEquals(7, trustChecks)
+    assertEquals(10, trustChecks)
     assertTrue(targetExcludedRelativePaths(root).contains(".reqws"))
-    assertEquals(setOf(markerRelative(TOKEN_A)), markerRelativePaths(root))
+    assertTrue(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertEquals(
+      setOf(markerRelative(TOKEN_A), markerRelative(TOKEN_B)),
+      markerRelativePaths(root),
+    )
     assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertEquals(
+      mapOf(".reqws" to TOKEN_A, "repo-c" to TOKEN_B),
+      pendingAddMap(state),
+    )
+
+    val reloadedState = ReqwsManagedModelState().also { it.loadState(state.state) }
+    val recovered = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        reloadedState,
+        isTrusted = { true },
+      ).apply(snapshot(root, listOf("repo-c")))
+    }
+
+    assertEquals(setOf("repo-c"), recovered.removed)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(reloadedState))
+    assertTrue(pendingAddMap(reloadedState).isEmpty())
+    assertTrue(pendingRemoveMap(reloadedState).isEmpty())
+    assertFalse(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertFalse(markerRelativePaths(root).contains(markerRelative(TOKEN_B)))
+  }
+
+  fun testRecoversPendingAddAfterPostCommitDisposeAndColdReload() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+    var disposeChecks = 0
+    val durableStates = mutableListOf<ReqwsManagedModelState.Data>()
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        isProjectDisposed = { ++disposeChecks >= 11 },
+        markerTokenFactory = tokenFactory(TOKEN_A),
+        persistPendingState = { durableStates.add(state.state) },
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.PROJECT_DISPOSED, failure.code)
+    assertEquals(11, disposeChecks)
+    assertEquals(2, durableStates.size)
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(durableStates.last()))
+    assertEquals(mapOf(".reqws" to TOKEN_A), pendingAddMap(state))
+    assertTrue(targetExcludedRelativePaths(root).contains(".reqws"))
+
+    val reloadedState = ReqwsManagedModelState().also { it.loadState(durableStates.last()) }
+    val recovered = awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        reloadedState,
+        isTrusted = { true },
+        isProjectDisposed = { false },
+        persistPendingState = {},
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(setOf(".reqws"), recovered.kept)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(reloadedState))
+    assertTrue(pendingAddMap(reloadedState).isEmpty())
+  }
+
+  fun testRecoversPendingRemovalAfterPostCommitTrustChangeAndReaddsWithANewToken() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-c")
+    val originalState = ReqwsManagedModelState()
+    awaitUpdate {
+      WorkspaceExcludeModelAdapter(
+        project,
+        originalState,
+        isTrusted = { true },
+        markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
+      ).apply(snapshot(root, emptyList()))
+    }
+    var trustChecks = 0
+
+    val failure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        originalState,
+        isTrusted = { ++trustChecks < 10 },
+      ).apply(snapshot(root, listOf("repo-c")))
+    }
+
+    assertEquals(ProjectModelErrorCode.UNTRUSTED_PROJECT, failure.code)
+    assertEquals(10, trustChecks)
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(originalState))
+    assertEquals(mapOf("repo-c" to TOKEN_B), pendingRemoveMap(originalState))
+    assertFalse(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertFalse(markerRelativePaths(root).contains(markerRelative(TOKEN_B)))
+
+    val reloadedState = ReqwsManagedModelState().also { it.loadState(originalState.state) }
+    val recoveryAdapter = WorkspaceExcludeModelAdapter(
+      project,
+      reloadedState,
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_C),
+    )
+    awaitUpdate { recoveryAdapter.apply(snapshot(root, listOf("repo-c"))) }
+
+    assertTrue(pendingRemoveMap(reloadedState).isEmpty())
+    assertEquals(mapOf(".reqws" to TOKEN_A), ownershipMap(reloadedState))
+
+    val readded = awaitUpdate { recoveryAdapter.apply(snapshot(root, emptyList())) }
+
+    assertEquals(setOf("repo-c"), readded.added)
+    assertEquals(
+      mapOf(".reqws" to TOKEN_A, "repo-c" to TOKEN_C),
+      ownershipMap(reloadedState),
+    )
+    assertEquals(
+      setOf(markerRelative(TOKEN_A), markerRelative(TOKEN_C)),
+      markerRelativePaths(root),
+    )
   }
 
   private fun rootPath(): Path {
@@ -753,6 +1176,18 @@ $excludeElements
 
   private fun ownershipMap(state: ReqwsManagedModelState): Map<String, String> =
     state.ownership().managedExcludes.associate { it.relativePath to it.markerToken }
+
+  private fun ownershipMap(state: ReqwsManagedModelState.Data): Map<String, String> =
+    state.managedExcludes.associate { it.relativePath to it.markerToken }
+
+  private fun pendingAddMap(state: ReqwsManagedModelState): Map<String, String> =
+    state.ownership().pendingAdds.associate { it.relativePath to it.markerToken }
+
+  private fun pendingAddMap(state: ReqwsManagedModelState.Data): Map<String, String> =
+    state.pendingAdds.associate { it.relativePath to it.markerToken }
+
+  private fun pendingRemoveMap(state: ReqwsManagedModelState): Map<String, String> =
+    state.ownership().pendingRemovals.associate { it.relativePath to it.markerToken }
 
   private fun persistedClaim(
     relativePath: String,
