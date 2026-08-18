@@ -181,7 +181,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
 | W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
 | W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现/test。 |
-| W4 | 完成 VCS 与 Desktop 启动 | 保守 created/borrowed VCS 改用 verified atomic v2 pending/tombstone，并以 mapping revision/full-snapshot quiescent merge-retry 同时覆盖 Settings 与 pooled auto-detect writer；安全 GoLand launcher 已实现，最终自动化与真实启动待验证。 |
+| W4 | 完成 VCS 与 Desktop 启动 | verified atomic v3 workspace/session fencing、pending/tombstone、旧 v2 降权迁移及 Settings writer 串行已实现；公开 API 只有 whole-list setter，无法封闭 pooled auto-detect 的 mutation-before-set / event-after-set 窗口，W4 仍被 GL-04/06/13 的架构冲突阻塞。 |
 | W5 | 完成功能、规模和安全验证 | 当前 Desktop/插件自动化、结构检查、插件 ZIP 与 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen 和规模证据仍未完成。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
@@ -362,10 +362,10 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 实现：
 
 - 读取现存 VCS mappings；
-- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；expected/set/self-event/quiescence 全部使用平台 observable canonical form（exact directory last-wins，再按 directory 排序）。后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，且不把 pending external 误当作最新 live：只保留不同 directory 的 live-only 完整对象；pending-only 或同 directory 不等对象均等待事件，达到上限就在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复 pending-only。只有当前 plugin write 的同步回调可识别为 self-event，延迟的相同列表回调仍记作 external。EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；pooled auto-detect 的外部 revision/snapshot 进入下一轮有界 quiescent 重规划；
+- apply 前重新检查 repository 实时 filesystem identity/`.git` 状态；expected/set/self-event/quiescence 全部使用平台 observable canonical form（exact directory last-wins，再按 directory 排序）。后台 plan 绑定 mapping change tracker 的 revision 与完整 snapshot，且不把 pending external 误当作最新 live：只保留不同 directory 的 live-only 完整对象；pending-only 或同 directory 不等对象均等待事件，达到上限就在任何 ownership/mapping 写入前零写入 fail closed，绝不自动恢复 pending-only。只有当前 plugin write 的同步回调可识别为 self-event，延迟的相同列表回调仍记作 external。EDT closure 内执行 final 完整 equality（含 root settings）/revision 检查与整表 set，Settings writer 不能插入其间；已发布或再次读取时仍可见的 pooled auto-detect revision/snapshot 进入下一轮有界 quiescent 重规划；
 - 对同路径 Git mapping 记录为 `BORROWED`，不取得删除权；
 - 添加缺失 active mappings；
-- `.idea/reqws-vcs-ownership.json` v2 以 verified atomic write 保存 stable、pending add 与 pending remove；真正的 plugin add 按 actual live → expected whole-list 的真实变化在 mutation 前写 pending add，pending-only external 恢复不尝试写入。只有同 JVM 平台提交、同步 ack 和静止检查成功后才记录为 `CREATED`；本轮 observer 已观察到的 external event、snapshot mismatch 或 retry 都在继续前将 `CREATED` 持久降为 `BORROWED`，最终 verify 后才到达的事件则使 baseline dirty 并由下一轮 automatic reconcile 先降权。移除前先持久化已撤权 tombstone，cold pending 永不授权删除；legacy PSC v1 只在 atomic 文件不存在时迁移，atomic 文件存在但不可验证时禁止 fallback；
+- `.idea/reqws-vcs-ownership.json` v3 以 verified atomic write 保存 manifest workspaceId/root fingerprint、generation/project-service writer epoch、stable、pending add 与 pending remove；独立 lock file 把 read/check/replace/readback 放在同一 OS lock 内，一次 plan 从首次 load 固定 generation/epoch 并只按自身成功 checkpoint 推进，禁止 prepare-time rebase。真正的 plugin add 按 actual live → expected whole-list 的真实变化在 mutation 前写 pending add，pending-only external 恢复不尝试写入。只有当前 writer epoch 的平台提交、同步 ack 和静止检查成功后才记录为 `CREATED`；foreign service/JVM load 以及本轮 observer 已观察到的 external event、snapshot mismatch 或 retry 都在继续前将 `CREATED` 降为 `BORROWED`，最终 verify 后才到达的事件则使 baseline dirty 并由下一轮 automatic reconcile 先降权。移除前先持久化已撤权 tombstone，cold pending 永不授权删除；旧 atomic v2 与 legacy PSC v1 read 都只返回 migration input、不改写文件，旧 `CREATED` 降为 `BORROWED`，迁移仅在当前 workspaceId 已绑定且 trust/dispose gate 通过的 checkpoint 发布，atomic 文件存在但不可验证时禁止 fallback；
 - 保留用户 mapping；
 - workspace 内额外/root mapping 保留并进入 degraded，stale `CREATED` 删除权在 mapping 消失时丢弃；
 - path identity normalization；
@@ -374,7 +374,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - Git repository manager refresh；
 - Tool Window 展示 model/VCS 分层状态。
 
-261 public API 没有 mapping CAS，也不暴露后台 auto-detect 使用的内部锁，因此 production 以公开 `VCS_CONFIGURATION_CHANGED` 的 revision/完整 snapshot capture 建立乐观并发协议；更晚 external event 使 digest baseline dirty 并强制 automatic reconcile。自动化用独立 pooled writer 的两种反序时序证明不会静默丢未知 mapping/`rootSettings`；exact-head GUI 仍验证真实平台事件和 Git UI，但不把后台 scanner 竞态降级为仅 GUI 才处理的残余风险，也不宣称平台级线性化。
+261/262 public API 没有 mapping CAS、per-entry production mutation，也不暴露后台 auto-detect 使用的内部锁。当前 revision/完整 snapshot 协议只能收敛已观察变化，不能恢复 `ModuleVcsDetector` 在 ReqWS final read 后内部写入、却在 ReqWS whole-list set 覆盖后才发布事件的未知 mapping/`rootSettings`。这不是 GUI 抽样或增加 retry 可以关闭的窗口；在产品选择放宽 GL-04/06 或 GL-13，或 JetBrains 提供稳定原子写 API 前，W4 不满足退出条件。
 
 ### 10.3 Desktop
 
@@ -411,8 +411,9 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - active repository Git roots 与 manifest 一致；
 - retained repository 不在 Git roots；
 - 用户 mapping 不丢失；
-- verified atomic VCS state 在失败窗口不授予陈旧删除权，cold pending 不删除 mapping；
-- Settings 与独立 pooled writer 的两种反序时序都由 canonical revision/full-snapshot merge-retry 保留不同 directory 的 live-only mapping 和 `rootSettings`；mutation 与 event publication 分离时，pending-only 或同 directory ambiguity 都零写入，actual plugin add 才先持久 pending add；本轮观察到的 external event 会在重规划前撤销 `CREATED`，最终 verify 后到达的事件使 baseline dirty并强制下一次 automatic reconcile；
+- verified atomic VCS state 在失败窗口不授予陈旧删除权，cold pending 与 foreign-session `CREATED` 不删除 mapping；同 root/different workspaceId、跨 service/JVM generation 竞争和 transition/final 间外部推进全部 fail closed；legacy read 无写副作用且迁移提交受 trust/dispose gate；
+- Settings writer 与已观察 pooled writer 的反序时序由 canonical revision/full-snapshot merge-retry 保留不同 directory 的 live-only mapping 和 `rootSettings`；mutation 与 event publication 分离时，pending-only 或同 directory ambiguity 都零写入，actual plugin add 才先持久 pending add；本轮观察到的 external event 会在重规划前撤销 `CREATED`，最终 verify 后到达的事件使 baseline dirty并强制下一次 automatic reconcile；
+- pooled writer 在 ReqWS final read 后内部提交未知 mapping、但在 ReqWS set 覆盖后才发布 payload-less event 的时序必须能够保留完整对象；当前公开 API 无法满足，因此 W4 exit criteria 未达成；
 - Tool Window 能区分 model 与 VCS degraded；
 - Desktop 相关全量测试通过。
 

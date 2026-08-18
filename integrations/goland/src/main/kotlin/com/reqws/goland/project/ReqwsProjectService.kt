@@ -63,8 +63,6 @@ class ReqwsProjectService(
     },
     observer = SyncCoordinatorObserver(::onCoordinatorEvent),
   )
-  private val vcsChangeRegistration = project.service<ReqwsVcsConfigurationMonitor>()
-    .addExternalChangeListener(::handleExternalVcsConfigurationChange)
   private val trustMonitor = TrustTransitionMonitor(
     scope = coroutineScope,
     probe = TrustStateProbe(trustGate::isTrusted),
@@ -72,23 +70,86 @@ class ReqwsProjectService(
       requestRefresh(SyncTrigger.AUTOMATIC)
     },
   )
+  private val vcsChangeLifecycleLock = Any()
+  private var vcsChangeMonitoringState = VcsChangeMonitoringState.NOT_STARTED
+  private var vcsChangeRegistration: AutoCloseable? = null
+  private val vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
+    project.service<ReqwsVcsConfigurationMonitor>()
+      .addExternalChangeListener { listener() }
+  }
 
   val state: ReqwsProjectState
     get() = statePublisher.state
 
   /** Sync Now bypasses VFS debounce but enters the same serialized coordinator. */
-  fun refresh(): Job? = requestRefresh(SyncTrigger.MANUAL)
+  fun refresh(): Job? = refreshAfterStart(SyncTrigger.MANUAL)
 
   /** Startup, VFS, trust, and Tool Window lifecycle refreshes retain automatic no-op semantics. */
-  internal fun refreshAutomatically(): Job? = requestRefresh(SyncTrigger.AUTOMATIC)
+  internal fun refreshAutomatically(): Job? = refreshAfterStart(SyncTrigger.AUTOMATIC)
 
-  private fun handleExternalVcsConfigurationChange() {
-    if (disposed.get() || project.isDisposed) return
+  private fun refreshAfterStart(trigger: SyncTrigger): Job? {
+    if (!startVcsChangeMonitoring()) return null
+    return requestRefresh(trigger)
+  }
+
+  /**
+   * Starts callback registration only after the service constructor has returned to its caller.
+   * A registrar is allowed to invoke the callback synchronously during registration.
+   */
+  internal fun startVcsChangeMonitoring(
+    registrar: ReqwsVcsChangeRegistrar = vcsChangeRegistrar,
+  ): Boolean = synchronized(vcsChangeLifecycleLock) {
+    if (disposed.get() || project.isDisposed) {
+      vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
+      val registration = vcsChangeRegistration
+      vcsChangeRegistration = null
+      closeVcsChangeRegistration(registration)
+      return@synchronized false
+    }
+    when (vcsChangeMonitoringState) {
+      VcsChangeMonitoringState.STARTED -> return@synchronized true
+      VcsChangeMonitoringState.DISPOSED -> return@synchronized false
+      // Only a same-thread registrar re-entry can observe STARTING because other callers wait for
+      // this monitor. The registered callback bypasses start and therefore never takes this path.
+      VcsChangeMonitoringState.STARTING -> return@synchronized false
+      VcsChangeMonitoringState.NOT_STARTED -> Unit
+    }
+
+    vcsChangeMonitoringState = VcsChangeMonitoringState.STARTING
+    val registration = try {
+      registrar.addExternalChangeListener(::handleExternalVcsConfigurationChange)
+    } catch (failure: Throwable) {
+      vcsChangeMonitoringState = if (disposed.get() || project.isDisposed) {
+        VcsChangeMonitoringState.DISPOSED
+      } else {
+        VcsChangeMonitoringState.NOT_STARTED
+      }
+      throw failure
+    }
+
+    // Publish the handle before the terminal recheck. If dispose won while registration was in
+    // progress, this branch owns closing it; otherwise a later dispose takes it under the same lock.
+    vcsChangeRegistration = registration
+    if (disposed.get() || project.isDisposed) {
+      vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
+      vcsChangeRegistration = null
+      closeVcsChangeRegistration(registration)
+      return@synchronized false
+    }
+
+    vcsChangeMonitoringState = VcsChangeMonitoringState.STARTED
+    true
+  }
+
+  private fun handleExternalVcsConfigurationChange(): Job? {
+    if (disposed.get() || project.isDisposed) return null
     // A platform writer may publish after a previously successful same-digest apply. Carry a
     // monotonic dirty epoch into the automatic candidate so an in-flight older apply cannot make
     // this recovery request look clean again.
     coordinator.invalidateAppliedDigest()
-    refreshAutomatically()
+    // Registration-time callbacks must not re-enter the STARTING state. Once the platform can
+    // invoke this listener, the current registration attempt already owns the startup boundary.
+    return requestRefresh(SyncTrigger.AUTOMATIC)
   }
 
   private fun requestRefresh(trigger: SyncTrigger): Job? {
@@ -305,15 +366,24 @@ class ReqwsProjectService(
     statePublisher.publish(next)
   }
 
+  private fun closeVcsChangeRegistration(registration: AutoCloseable?) {
+    try {
+      registration?.close()
+    } catch (_: Exception) {
+      // Project disposal must still tear down the remaining lifecycle-owned resources.
+    }
+  }
+
   override fun dispose() {
     if (!disposed.compareAndSet(false, true)) return
     try {
       statePublisher.publish(ReqwsProjectState.DISPOSED)
     } finally {
-      try {
-        vcsChangeRegistration.close()
-      } catch (_: Exception) {
-        // Project disposal must still tear down the remaining lifecycle-owned resources.
+      synchronized(vcsChangeLifecycleLock) {
+        vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
+        val registration = vcsChangeRegistration
+        vcsChangeRegistration = null
+        closeVcsChangeRegistration(registration)
       }
       readRequests.invalidate()
       trustMonitor.close()
@@ -329,6 +399,13 @@ class ReqwsProjectService(
     val state: ReqwsProjectState,
   )
 
+  private enum class VcsChangeMonitoringState {
+    NOT_STARTED,
+    STARTING,
+    STARTED,
+    DISPOSED,
+  }
+
   private class ReadStateFailure(val failedState: ReqwsProjectState) :
     RuntimeException(failedState.lastError?.code ?: "MANIFEST_READ_FAILED") {
     override fun toString(): String =
@@ -340,4 +417,8 @@ class ReqwsProjectService(
     private const val MANIFEST_RETRY_DELAY_MILLIS = 100L
     private const val MAX_PENDING_CANDIDATES = 8
   }
+}
+
+internal fun interface ReqwsVcsChangeRegistrar {
+  fun addExternalChangeListener(listener: () -> Job?): AutoCloseable
 }

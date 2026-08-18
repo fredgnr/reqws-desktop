@@ -233,19 +233,21 @@ workspace/
 - apply 前实时重查 filesystem/.git，missing→appears 或 present→missing 按本轮真实状态规划；
 - 后台规划后在 EDT write context 内执行 final full-equality check 与 set；用户 Settings writer 在 final read 后尝试写入时必须被串行，不能丢 mapping 或 `rootSettings`；
 - final equality 发现同路径用户 `Git + rootSettings` 已落地时退出 EDT 重规划，保留原对象并记为 `BORROWED` 而不是错误的 `CREATED`；连续三次 stale 时 mapping/ownership/refresh 均不得写；
-- `.idea/reqws-vcs-ownership.json` v2 verified atomic round-trip；pending add/remove 必须在平台 mutation 前落盘，write/move/readback 失败不得调用 mapping setter；
-- legacy VCS PSC v1 只在 atomic 文件不存在时迁移；atomic 文件已存在但损坏、版本不支持、workspace identity 不匹配或回读不一致时必须 fail closed，不得 fallback PSC；
-- destructive remove 前先把 `CREATED` 转为 pending-remove tombstone 并落盘；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；cold pending add/remove 均不得授权删除；
+- `.idea/reqws-vcs-ownership.json` v3 verified atomic round-trip，并同时验证 manifest workspaceId/root fingerprint binding、generation/project-service writer epoch；同 root/different workspaceId 不能读取或覆盖旧状态；pending add/remove 必须在平台 mutation 前落盘，write/move/readback 失败不得调用 mapping setter；
+- 独立 lock file 必须覆盖 locked read、generation/epoch compare、atomic replace 和 readback；两个独立 service 从同一 generation 通过 barrier 同时争锁时最多一个成功，winner 内容不得被 loser 覆盖；transition 成功后被外部 writer 推进 generation 时原 plan 的 final checkpoint 必须失败，不能在 prepare 时 rebase；
+- 旧 atomic v2 与 legacy VCS PSC v1 都只作为 migration input；`readForProject` 本身不得改写 atomic 文件或清空 PSC，旧 `CREATED` 必须降为 `BORROWED`，迁移发布前在 locked decode 后再次检查 trust/service dispose，翻转时 state/mapping 零写入；atomic 文件已存在但损坏、版本不支持、workspace identity 不匹配或回读不一致时必须 fail closed，不得 fallback PSC；
+- destructive remove 前先把 `CREATED` 转为 pending-remove tombstone 并落盘；若平台 set 失败，后续同路径用户 mapping 不得被旧 claim 删除；cold pending add/remove 均不得授权删除；clean persisted `CREATED` 经新 project-service/JVM load 后必须降为 `BORROWED`，即使出现同路径 plain Git mapping 且 repository 已 inactive 也绝不删除；
 - 实际 plugin add 的 expected-present/actual-absent transition 必须在 set 前写 `PENDING_ADD`；pending-only external 恢复不尝试 set 或创建 pending，达到有界等待上限后 mapping/ownership/refresh 均为零；cold plain Git / customized rootSettings mapping 都只能 borrow/保留，不能继承旧删除权；
 - expected、set、自事件识别和 quiescence 使用与 261/262 平台相同的 exact-directory last-wins + directory sort canonical form；反序两个 active repository 与 `/z-user` 后追加 workspace repo 都只提交一次并保留 `CREATED`/用户 rootSettings；
 - mapping change tracker 保存单调 revision 与对应完整 snapshot；用不获取 EDT lock 的独立 pooled thread 和 latch 确定性覆盖外部 writer 在 final read 前后落地，并把 live list mutation 与 payload-less event publication 拆成两个可控阶段。pending 较旧时只合入不同 directory 的 live-only 完整 mapping/rootSettings；pending-only 或同 directory 对象不同时等待事件，事件发布前和有界等待到期后 mapping/ownership/refresh 均为零；只有当前 plugin write 的同步等列表回调被抑制，延迟等列表回调必须记作 external；
 - pooled writer 持 stale base 在 ReqWS set 后落地时，下一 revision 必须以保守重规划收敛；本轮观察到的 external event、snapshot mismatch 或 retry 都要在继续前把 stable `CREATED` 持久降为 `BORROWED`，并覆盖 final ownership 已落盘后才发现 drift、下一轮开始前 dispose 的 cold-read 回归；最终 verify 后到达的事件必须使 clean digest baseline dirty 并强制下一次 automatic reconcile。持续 revision churn 达上限时 fail closed；公开事件不持久化与 recovery I/O 失败边界不得被表述为平台级线性化；
+- 单独固定当前无法通过的隐藏窗口：pooled writer 在 ReqWS final read 后把内部列表从 `A` 改为 `A+U`，事件延迟到 ReqWS whole-list set `A+R` 之后才发布。通过条件是最终同时保留完整 `U/rootSettings` 与 `R`；261/262 公开 API 目前没有 CAS/per-entry mutation/shared lock，事件又无 payload，因此该场景仍是 `NO-GO`，不能用其他 pooled writer 绿色用例代替；
 - active、missing 和 inactive 三种路径下，只要用户给 `CREATED` mapping 增加 `rootSettings`，就必须丢弃删除资格、degraded 且绝不删除；
 - extra/root mapping 与 NFC/NFD root coverage 保留并 degraded；
 - VCS apply failure degraded state；
 - Git plugin disabled（明确诊断，不 crash）。
 
-上述自动化分别证明 Settings writer 串行、pooled writer revision/full-snapshot quiescent merge-retry 和 ownership fail-closed 行为：没有公开 CAS 时，未能判明的 pending-only 或同目录冲突走零写入，而不是作为残余风险转交 GUI。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果；fake platform 结果不能表述为 JetBrains 内部 CAS 或平台级线性化，但后台 auto-detect 竞态必须先有 deterministic 自动化覆盖，不能只留给 GUI。
+上述自动化分别证明 Settings writer 串行、已观察 pooled writer 的 revision/full-snapshot quiescent merge-retry，以及 ownership fail-closed 行为；没有公开 CAS 时，未能判明的 pending-only 或同目录冲突走零写入。它们不证明 mutation-before-set / event-after-set 的未知 mapping 可恢复。真实 GoLand 仍需验证 261 平台事件、ModuleVcsDetector 与 Git Tool Window 的集成结果，但 GUI 抽样同样不能关闭该确定性架构缺口。
 
 ### 6.3 Safe Mode
 
@@ -280,6 +282,8 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - Tool Window 对 file-based project 可动态激活，但 ordinary project 不闪现 UI；
 - `shouldBeAvailable` 在 manifest absent 时初始为 false，service state controller 在内容尚未创建时也能在 EDT 完成 absent → create availability transition；
 - state listener 的 initial/publish/dispose 并发按队列顺序通知；`DISPOSED` 后 state 永不回退，晚到 publish 被拒绝；
+- VCS external listener 只能在 callback 依赖全部初始化后注册；registrar 同步触发 callback 时不得访问半初始化 service 或递归注册；
+- 并发 refresh 必须等注册完成后才进入读取；registration 与 dispose 交错时 late handle 恰好关闭一次，终态后不得泄漏 listener 或重新进入读取；
 - dispose 后 watcher、debounce、trust probe 和 coordinator 均停止。
 
 ## 7. Plugin Verifier 与构建

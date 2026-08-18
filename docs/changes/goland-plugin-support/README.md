@@ -40,8 +40,8 @@
 ## 本轮 review 修复的文档分类结论
 
 - 需求说明：不更新。本轮只修复实现没有满足既有 ownership、用户配置保护和最终收敛要求的问题，不改变用户行为或验收语义。
-- 技术方案：更新。Project Model 与 VCS ownership 改用 `.idea` 下插件自有的 verified atomic 文件，并补全冷启动恢复、VCS pending/tombstone 与 pooled writer merge-retry 设计。
-- 测试方案：更新。增加原子状态失败窗口、legacy PSC 迁移、同 JVM/cold recovery 和后台 auto-detect 确定性并发回归。
+- 技术方案：更新。Project Model 与 VCS ownership 改用 `.idea` 下插件自有的 verified atomic 文件，并补全 VCS workspace binding、跨 service/JVM fencing、foreign-session 降权、无副作用 legacy read、pending/tombstone 与 pooled writer merge-retry 设计。
+- 测试方案：更新。增加原子状态失败窗口、workspace identity、OS file lock/generation 竞争、legacy PSC 门禁迁移、foreign-session recovery 和后台 auto-detect 确定性并发回归。
 - 使用指南：不更新。[GoLand 插件使用指南](../../guides/goland-plugin-guide.md)的安装、界面和用户操作没有变化。
 - 开发指南：更新。补充两个 ownership 文件、迁移边界和 VCS revision/snapshot 并发约束。
 - 交付记录：不创建。本轮没有发布、安装迁移、回滚或对外交付里程碑。
@@ -49,4 +49,4 @@
 
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 工作树候选已用更强持久化与并发协议修复 Project Model 跨事务 ownership、手动 same-digest reconcile 和 VCS 并发覆盖问题：Project Model 与 VCS 分别使用 `.idea/reqws-managed-project-model.json`、`.idea/reqws-vcs-ownership.json` 的 verified atomic 状态；VCS 以 v2 pending add/remove、删除前 tombstone、平台 canonical mapping 及 revision/full-snapshot quiescent merge-retry 防止 UI/pooled auto-detect 竞争被静默当作成功，无法区分的 pending-only/同目录冲突走零写入 fail closed；公开 API 仍没有 CAS，不能宣称平台级线性化。Node.js 24 下 Desktop 全量检查为 31 个文件/335 项测试；JDK 21 下插件 263 项测试、项目配置/结构检查与 ZIP 构建均通过，GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier 均为 Compatible。当前 ZIP SHA-256 为 `9816cc025b4478189dea9460c4a80d32cabd963925f981a920f759ea92f4299c`。这些自动化与哈希绑定当前代码候选，但尚未把该 ZIP 安装到真实 GoLand 重新执行完整 GUI 矩阵，因此不能继承前一候选的 GUI/冷启动结论。按原型收口的[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)同样绑定更早候选，只作为界面参考；[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)继续保持 `NO-GO`，直到新的 exact-candidate 验证重新覆盖 atomic ownership recovery、manual reconcile、UI/pooled VCS 并发修改、project close/IDE quit、Project View 刷新和全部视觉/安全场景。
+功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 工作树候选已用更强持久化协议修复 Project Model 跨事务 ownership、手动 same-digest reconcile，以及 VCS workspace/session ownership：Project Model 与 VCS 分别使用 `.idea/reqws-managed-project-model.json`、`.idea/reqws-vcs-ownership.json` 的 verified atomic 状态；VCS 当前格式为 v3，绑定 manifest workspaceId/root fingerprint，以 generation/project-service writer epoch 与独立 OS file lock fence transition→final，foreign-session `CREATED` 降为 `BORROWED`，旧 atomic v2 与 legacy PSC v1 只读并经门禁迁移。JDK 21 下插件 274 项测试、项目配置/结构检查与 ZIP 构建均通过，GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier 均为 Compatible；当前 ZIP SHA-256 为 `72940c8a35828e178d1412d8d72f8cd859ca4802480cc5784b695f99eac486ad`。但这不能关闭后台 pooled writer 的架构缺口：261/262 生产可用的公开 mapping 写 API 只有 whole-list `setDirectoryMappings`，`ModuleVcsDetector` 可在 ReqWS final read 后先内部写入未知 mapping、再在 ReqWS 覆盖后发布无 payload 事件，此时 revision/snapshot/retry 已无法重建被覆盖对象或 `rootSettings`。因此 GL-04/GL-06/GL-13 目前不能同时被公开稳定 API 证明满足，PR 必须保持 Draft / `NO-GO`，该评审线程也不能靠 GUI 抽样或更多 retry 标为已解决。新 ZIP 尚未安装到真实 GoLand，不能继承前一候选的 GUI 或冷启动结论；[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)继续保持 `NO-GO`。

@@ -481,6 +481,16 @@ internal class IntellijVcsMappingAdapter(
     if (commit == null) return
     try {
       commit.persistAndVerify()
+    } catch (exception: VcsOwnershipMutationBlockedException) {
+      throw VcsMappingApplyException(
+        code = exception.code,
+        stage = VcsMappingApplyStage.OWNERSHIP,
+        mappingsCommitted = mappingsCommitted,
+        ownershipCommitted = ownershipCommitted,
+        cause = exception,
+      )
+    } catch (exception: VcsMappingApplyException) {
+      throw exception
     } catch (exception: Exception) {
       throw VcsMappingApplyException(
         code = VcsMappingApplyErrorCode.VCS_MAPPING_APPLY_FAILED,

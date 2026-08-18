@@ -8,10 +8,18 @@ import com.intellij.openapi.components.StoragePathMacros
 import com.reqws.goland.persistence.AtomicStateCodec
 import com.reqws.goland.persistence.VerifiedAtomicStateFile
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * VCS ownership is stored outside the IntelliJ component store so a destructive mapping update
@@ -22,9 +30,17 @@ import java.security.MessageDigest
   name = "ReqwsVcsOwnershipState",
   storages = [Storage(StoragePathMacros.WORKSPACE_FILE)],
 )
-internal class ReqwsVcsOwnershipStateService :
+internal class ReqwsVcsOwnershipStateService(
+  private val writerEpoch: String = newWriterEpoch(),
+  private val beforeWriterLockAttempt: () -> Unit = {},
+  private val afterWriterLockAcquired: () -> Unit = {},
+) :
   PersistentStateComponent<ReqwsVcsOwnershipStateService.LegacyPersistedState> {
   private var legacyState = LegacyPersistedState()
+
+  init {
+    require(WRITER_EPOCH.matches(writerEpoch)) { "Invalid ReqWS VCS writer epoch" }
+  }
 
   @Synchronized
   override fun getState(): LegacyPersistedState = legacyState.deepCopy()
@@ -34,17 +50,31 @@ internal class ReqwsVcsOwnershipStateService :
     legacyState = state.deepCopy()
   }
 
-  fun readForProject(projectRoot: Path): VcsOwnershipLoadResult {
+  /** Read-only load. Legacy state is decoded here but is never published until a gated apply. */
+  fun readForProject(projectRoot: Path, workspaceId: String): VcsOwnershipLoadResult {
+    val binding = stateBinding(projectRoot, workspaceId)
+    val file = stateFile(projectRoot)
     val persisted = try {
-      readOrMigrate(projectRoot)
+      file.read()?.also { state -> validatePersistedBinding(state, binding) }
     } catch (_: Exception) {
-      return conflictLoadResult()
-    } ?: return VcsOwnershipLoadResult(
-      ownership = emptyList(),
-      pendingAdds = emptyList(),
-      pendingRemovals = emptyList(),
-      diagnostics = emptyList(),
-    )
+      return conflictLoadResult(binding)
+    }
+    val legacySnapshot = try {
+      if (persisted == null) legacySnapshot() else null
+    } catch (_: Exception) {
+      return conflictLoadResult(binding)
+    }
+    if (persisted == null && legacySnapshot == null) {
+      return VcsOwnershipLoadResult(
+        ownership = emptyList(),
+        pendingAdds = emptyList(),
+        pendingRemovals = emptyList(),
+        diagnostics = emptyList(),
+        binding = binding,
+        version = null,
+        legacyMigration = null,
+      )
+    }
 
     val resolvedIdentities = hashSetOf<String>()
     fun resolve(relativeDirectory: String): OwnedPath? {
@@ -55,21 +85,43 @@ internal class ReqwsVcsOwnershipStateService :
     val ownership = ArrayList<VcsMappingOwnership>()
     val pendingAdds = ArrayList<VcsMappingPendingOwnership>()
     val pendingRemovals = ArrayList<VcsMappingPendingOwnership>()
-    persisted.stableMappings.forEach { entry ->
-      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult()
-      val kind = try {
+    val stableMappings = if (persisted != null) {
+      persisted.stableMappings
+    } else {
+      requireNotNull(legacySnapshot).managedMappings.map { entry ->
+        require(entry.kind == "CREATED" || entry.kind == "BORROWED") {
+          "Invalid legacy ReqWS VCS ownership kind"
+        }
+        PersistedMapping(entry.relativeDirectory, entry.kind)
+      }
+    }
+    val pendingAddMappings = persisted?.pendingAdds.orEmpty()
+    val pendingRemovalMappings = persisted?.pendingRemovals.orEmpty()
+    val foreignWriter = persisted == null ||
+      persisted.stateVersion == LEGACY_ATOMIC_STATE_VERSION ||
+      persisted.writerEpoch != writerEpoch
+    stableMappings.forEach { entry ->
+      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult(binding)
+      val persistedKind = try {
         VcsMappingOwnershipKind.valueOf(entry.kind)
       } catch (_: IllegalArgumentException) {
-        return conflictLoadResult()
+        return conflictLoadResult(binding)
+      }
+      // A plain path/Git/rootSettings match cannot authenticate an object across project-service
+      // or JVM lifetimes. Foreign CREATED claims therefore lose deletion authority on load.
+      val kind = if (foreignWriter && persistedKind == VcsMappingOwnershipKind.CREATED) {
+        VcsMappingOwnershipKind.BORROWED
+      } else {
+        persistedKind
       }
       ownership.add(VcsMappingOwnership(resolved.relativeDirectory, kind))
     }
-    persisted.pendingAdds.forEach { entry ->
-      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult()
+    pendingAddMappings.forEach { entry ->
+      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult(binding)
       pendingAdds.add(VcsMappingPendingOwnership(resolved.relativeDirectory, entry.operationToken))
     }
-    persisted.pendingRemovals.forEach { entry ->
-      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult()
+    pendingRemovalMappings.forEach { entry ->
+      val resolved = resolve(entry.relativeDirectory) ?: return conflictLoadResult(binding)
       pendingRemovals.add(VcsMappingPendingOwnership(resolved.relativeDirectory, entry.operationToken))
     }
     return VcsOwnershipLoadResult(
@@ -77,14 +129,67 @@ internal class ReqwsVcsOwnershipStateService :
       pendingAdds = pendingAdds,
       pendingRemovals = pendingRemovals,
       diagnostics = emptyList(),
+      binding = binding,
+      version = persisted?.version(),
+      legacyMigration = legacySnapshot,
     )
   }
 
-  /** Resolves all paths before an EDT mapping checkpoint and prepares immutable file contents. */
-  fun prepareReplacementForProject(
+  /**
+   * Captures the generation/writer epoch observed by the initial load for the whole apply. Each
+   * successful transition advances that exact fence; an external advance makes every remaining
+   * commit from the old plan fail instead of silently rebasing at prepare time.
+   */
+  fun recorderForProject(
     projectRoot: Path,
+    workspaceId: String,
+    loaded: VcsOwnershipLoadResult,
+    mutationGate: () -> VcsMappingApplyErrorCode? = { null },
+  ): VcsMappingOwnershipRecorder {
+    val binding = stateBinding(projectRoot, workspaceId)
+    require(loaded.binding == binding) { "VCS ownership load belongs to another workspace" }
+    val fence = Any()
+    var expectedVersion = loaded.version
+    var legacyMigration = loaded.legacyMigration
+    return VcsMappingOwnershipRecorder { state ->
+      val (expected, legacy) = synchronized(fence) {
+        expectedVersion to legacyMigration
+      }
+      val replacement = prepareReplacementForProject(
+        projectRoot = projectRoot,
+        binding = binding,
+        expectedVersion = expected,
+        state = state,
+        legacyMigration = legacy,
+      )
+      VcsMappingOwnershipCommit {
+        ensureMutationAllowed(mutationGate)
+        val persistedVersion = persistPreparedReplacement(replacement, mutationGate)
+        synchronized(fence) {
+          require(expectedVersion == expected) {
+            "ReqWS VCS ownership plan advanced concurrently"
+          }
+          expectedVersion = persistedVersion
+          legacyMigration = null
+        }
+      }
+    }
+  }
+
+  /** Resolves all paths before an EDT mapping checkpoint and prepares immutable file contents. */
+  internal fun prepareReplacementForProject(
+    projectRoot: Path,
+    binding: VcsOwnershipStateBinding,
+    expectedVersion: VcsOwnershipFileVersion?,
     state: VcsMappingOwnershipState,
+    legacyMigration: LegacyPersistedState? = null,
   ): PreparedReplacement {
+    require(binding == stateBinding(projectRoot, binding.workspaceId)) {
+      "VCS ownership binding does not match the project root"
+    }
+    require(expectedVersion?.generation != Long.MAX_VALUE) {
+      "ReqWS VCS ownership generation is exhausted"
+    }
     val identities = hashSetOf<String>()
     val tokens = hashSetOf<String>()
     fun resolve(relativeDirectory: String): OwnedPath {
@@ -112,11 +217,12 @@ internal class ReqwsVcsOwnershipStateService :
       PersistedMapping(resolved.relativeDirectory, item.kind.name)
     }
     val file = stateFile(projectRoot)
-    val expected = readOrMigrate(projectRoot)
     val replacement = PersistedState(
       stateVersion = CURRENT_STATE_VERSION,
-      generation = (expected?.generation ?: 0L) + 1L,
-      workspaceRootFingerprint = rootFingerprint(projectRoot),
+      workspaceId = binding.workspaceId,
+      workspaceRootFingerprint = binding.rootFingerprint,
+      generation = (expectedVersion?.generation ?: 0L) + 1L,
+      writerEpoch = writerEpoch,
       stableMappings = stable.sortedBy(PersistedMapping::relativeDirectory),
       pendingAdds = state.pendingAdds.map(::pending)
         .sortedBy(PersistedPendingMapping::relativeDirectory),
@@ -124,29 +230,79 @@ internal class ReqwsVcsOwnershipStateService :
         .sortedBy(PersistedPendingMapping::relativeDirectory),
     )
     validatePersistedState(replacement)
-    return PreparedReplacement(file, expected, replacement)
+    return PreparedReplacement(
+      projectRoot = projectRoot,
+      file = file,
+      binding = binding,
+      expectedVersion = expectedVersion,
+      state = replacement,
+      legacyMigration = legacyMigration?.deepCopy(),
+    )
   }
 
-  /** Performs fsync + atomic replace + strict decode/read-back through the shared file primitive. */
-  @Synchronized
-  fun persistPreparedReplacement(replacement: PreparedReplacement) {
-    val current = replacement.file.read()
-    require(current == replacement.expectedState) {
-      "ReqWS VCS ownership generation changed before the prepared write"
+  /** Holds an OS lock across read/check/atomic replace/read-back for cross-service/JVM fencing. */
+  internal fun persistPreparedReplacement(
+    replacement: PreparedReplacement,
+    mutationGate: () -> VcsMappingApplyErrorCode? = { null },
+  ): VcsOwnershipFileVersion {
+    ensureMutationAllowed(mutationGate)
+    ensureSafeStateLocation(replacement.projectRoot)
+    val lockFile = replacement.projectRoot.resolve(STATE_DIRECTORY).resolve(LOCK_FILE_NAME)
+    ensureSafeLockFile(lockFile)
+    try {
+      beforeWriterLockAttempt()
+      FileChannel.open(
+        lockFile,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.WRITE,
+        LinkOption.NOFOLLOW_LINKS,
+      ).use { channel ->
+        val fileLock = try {
+          channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+          null
+        } ?: error("Another ReqWS VCS ownership writer is active")
+        fileLock.use {
+          afterWriterLockAcquired()
+          val current = replacement.file.read()
+          current?.let { state -> validatePersistedBinding(state, replacement.binding) }
+          require(current?.version() == replacement.expectedVersion) {
+            "ReqWS VCS ownership generation or writer epoch changed before the prepared write"
+          }
+          ensureMutationAllowed(mutationGate)
+          replacement.file.writeAndVerify(replacement.state)
+          // The authoritative state is already durably committed at this point. A trust/dispose
+          // flip must stop later platform mutation, but it cannot truthfully turn this checkpoint
+          // into a failed write or leave the recorder on the previous generation. Only the
+          // non-authoritative legacy mirror cleanup remains gated.
+          if (mutationGate() == null) {
+            replacement.legacyMigration?.let(::clearLegacyMigration)
+          }
+          return replacement.state.version()
+        }
+      }
+    } catch (exception: VcsOwnershipMutationBlockedException) {
+      throw exception
+    } catch (exception: Exception) {
+      throw IllegalStateException("Unable to persist ReqWS VCS ownership state", exception)
     }
-    replacement.file.writeAndVerify(replacement.state)
   }
 
   internal class PreparedReplacement internal constructor(
+    internal val projectRoot: Path,
     internal val file: VerifiedAtomicStateFile<PersistedState>,
-    internal val expectedState: PersistedState?,
+    internal val binding: VcsOwnershipStateBinding,
+    internal val expectedVersion: VcsOwnershipFileVersion?,
     internal val state: PersistedState,
+    internal val legacyMigration: LegacyPersistedState?,
   )
 
   internal data class PersistedState(
     val stateVersion: Int,
-    val generation: Long,
+    val workspaceId: String?,
     val workspaceRootFingerprint: String,
+    val generation: Long,
+    val writerEpoch: String?,
     val stableMappings: List<PersistedMapping>,
     val pendingAdds: List<PersistedPendingMapping>,
     val pendingRemovals: List<PersistedPendingMapping>,
@@ -176,42 +332,6 @@ internal class ReqwsVcsOwnershipStateService :
     var kind: String = "",
   )
 
-  @Synchronized
-  private fun readOrMigrate(projectRoot: Path): PersistedState? {
-    val file = stateFile(projectRoot)
-    val persisted = file.read()
-    if (persisted != null) {
-      require(persisted.workspaceRootFingerprint == rootFingerprint(projectRoot)) {
-        "ReqWS VCS ownership belongs to a different workspace root"
-      }
-      return persisted
-    }
-    if (legacyState.managedMappings.isEmpty()) return null
-    require(legacyState.stateVersion == LEGACY_STATE_VERSION) {
-      "Unsupported legacy ReqWS VCS ownership state"
-    }
-    val migrated = PersistedState(
-      stateVersion = CURRENT_STATE_VERSION,
-      generation = 1L,
-      workspaceRootFingerprint = rootFingerprint(projectRoot),
-      stableMappings = legacyState.managedMappings.map { entry ->
-        val resolved = requireNotNull(
-          VcsPathIdentity.resolveOwned(projectRoot, entry.relativeDirectory),
-        ) { "Invalid legacy ReqWS VCS ownership path" }
-        require(entry.kind == "CREATED" || entry.kind == "BORROWED") {
-          "Invalid legacy ReqWS VCS ownership kind"
-        }
-        PersistedMapping(resolved.relativeDirectory, entry.kind)
-      }.sortedBy(PersistedMapping::relativeDirectory),
-      pendingAdds = emptyList(),
-      pendingRemovals = emptyList(),
-    )
-    validatePersistedState(migrated)
-    file.writeAndVerify(migrated)
-    legacyState = LegacyPersistedState()
-    return migrated
-  }
-
   private fun stateFile(projectRoot: Path): VerifiedAtomicStateFile<PersistedState> =
     VerifiedAtomicStateFile(
       file = projectRoot.resolve(STATE_DIRECTORY).resolve(STATE_FILE_NAME),
@@ -220,24 +340,136 @@ internal class ReqwsVcsOwnershipStateService :
       validate = ::validatePersistedState,
     )
 
-  private fun conflictLoadResult() = VcsOwnershipLoadResult(
+  @Synchronized
+  private fun legacySnapshot(): LegacyPersistedState? {
+    if (legacyState.managedMappings.isEmpty()) return null
+    require(legacyState.stateVersion == LEGACY_STATE_VERSION) {
+      "Unsupported legacy ReqWS VCS ownership state"
+    }
+    legacyState.managedMappings.forEach { entry ->
+      require(entry.kind == "CREATED" || entry.kind == "BORROWED") {
+        "Invalid legacy ReqWS VCS ownership kind"
+      }
+    }
+    return legacyState.deepCopy()
+  }
+
+  @Synchronized
+  private fun clearLegacyMigration(migrated: LegacyPersistedState) {
+    if (legacyState == migrated) legacyState = LegacyPersistedState()
+  }
+
+  private fun stateBinding(projectRoot: Path, workspaceId: String): VcsOwnershipStateBinding {
+    require(workspaceId.isNotBlank() && workspaceId.length <= MAX_STATE_STRING) {
+      "Invalid ReqWS VCS workspace identity"
+    }
+    return VcsOwnershipStateBinding(
+      workspaceId = workspaceId,
+      rootFingerprint = rootFingerprint(projectRoot),
+    )
+  }
+
+  private fun validatePersistedBinding(
+    state: PersistedState,
+    binding: VcsOwnershipStateBinding,
+  ) {
+    val matches = when (state.stateVersion) {
+      CURRENT_STATE_VERSION -> state.workspaceId == binding.workspaceId &&
+        state.workspaceRootFingerprint == binding.rootFingerprint
+      LEGACY_ATOMIC_STATE_VERSION ->
+        state.workspaceRootFingerprint == binding.rootFingerprint
+      else -> false
+    }
+    require(matches) { "ReqWS VCS ownership belongs to a different workspace" }
+  }
+
+  private fun PersistedState.version() = VcsOwnershipFileVersion(
+    stateVersion = stateVersion,
+    generation = generation,
+    writerEpoch = writerEpoch,
+  )
+
+  private fun ensureMutationAllowed(mutationGate: () -> VcsMappingApplyErrorCode?) {
+    mutationGate()?.let { code -> throw VcsOwnershipMutationBlockedException(code) }
+  }
+
+  private fun ensureSafeStateLocation(projectRoot: Path) {
+    val normalizedRoot = projectRoot.toAbsolutePath().normalize()
+    val ideaDirectory = normalizedRoot.resolve(STATE_DIRECTORY)
+    val rootAttributes = Files.readAttributes(
+      normalizedRoot,
+      BasicFileAttributes::class.java,
+      LinkOption.NOFOLLOW_LINKS,
+    )
+    require(rootAttributes.isDirectory && !rootAttributes.isSymbolicLink) {
+      "ReqWS VCS workspace root must be a real directory"
+    }
+    val ideaAttributes = Files.readAttributes(
+      ideaDirectory,
+      BasicFileAttributes::class.java,
+      LinkOption.NOFOLLOW_LINKS,
+    )
+    require(ideaAttributes.isDirectory && !ideaAttributes.isSymbolicLink) {
+      "ReqWS VCS state directory must be a real directory"
+    }
+    val canonicalRoot = normalizedRoot.toRealPath(LinkOption.NOFOLLOW_LINKS)
+    val canonicalIdea = ideaDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS)
+    require(
+      canonicalRoot == normalizedRoot &&
+        canonicalIdea.parent == canonicalRoot &&
+        canonicalIdea.fileName.toString() == STATE_DIRECTORY,
+    ) { "ReqWS VCS state directory escapes the workspace root" }
+  }
+
+  private fun ensureSafeLockFile(lockFile: Path) {
+    val attributes = try {
+      Files.readAttributes(lockFile, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+    } catch (_: NoSuchFileException) {
+      return
+    }
+    require(attributes.isRegularFile && !attributes.isSymbolicLink) {
+      "ReqWS VCS ownership lock must be a regular file"
+    }
+  }
+
+  private fun conflictLoadResult(binding: VcsOwnershipStateBinding) = VcsOwnershipLoadResult(
     ownership = emptyList(),
     pendingAdds = emptyList(),
     pendingRemovals = emptyList(),
     diagnostics = listOf(VcsMappingDiagnostic(VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT)),
+    binding = binding,
+    version = null,
+    legacyMigration = null,
   )
 
   companion object {
-    const val CURRENT_STATE_VERSION = 2
+    const val CURRENT_STATE_VERSION = 3
     const val STATE_FILE_NAME = "reqws-vcs-ownership.json"
+    internal const val LOCK_FILE_NAME = ".$STATE_FILE_NAME.lock"
     private const val STATE_DIRECTORY = ".idea"
     private const val MAX_STATE_BYTES = 256 * 1024
+    private const val MAX_STATE_STRING = 1024
     private val OPERATION_TOKEN = Regex("[0-9a-f]{32}")
+    private val WRITER_EPOCH = Regex("[0-9a-f]{32}")
     private val ROOT_FINGERPRINT = Regex("[0-9a-f]{64}")
 
     private fun validatePersistedState(state: PersistedState) {
-      require(state.stateVersion == CURRENT_STATE_VERSION) {
-        "Unsupported ReqWS VCS ownership state version"
+      require(
+        state.stateVersion == CURRENT_STATE_VERSION ||
+          state.stateVersion == LEGACY_ATOMIC_STATE_VERSION,
+      ) { "Unsupported ReqWS VCS ownership state version" }
+      if (state.stateVersion == CURRENT_STATE_VERSION) {
+        require(
+          !state.workspaceId.isNullOrBlank() &&
+            state.workspaceId.length <= MAX_STATE_STRING,
+        ) { "Invalid ReqWS VCS workspace identity" }
+        require(state.writerEpoch != null && WRITER_EPOCH.matches(state.writerEpoch)) {
+          "Invalid ReqWS VCS ownership writer epoch"
+        }
+      } else {
+        require(state.workspaceId == null && state.writerEpoch == null) {
+          "Legacy ReqWS VCS ownership state must remain unbound"
+        }
       }
       require(state.generation > 0L) { "Invalid ReqWS VCS ownership generation" }
       require(ROOT_FINGERPRINT.matches(state.workspaceRootFingerprint)) {
@@ -263,7 +495,10 @@ internal class ReqwsVcsOwnershipStateService :
     }
 
     private const val MAX_OWNERSHIP_ENTRIES = 4096
+    private const val LEGACY_ATOMIC_STATE_VERSION = 2
     private const val LEGACY_STATE_VERSION = 1
+
+    private fun newWriterEpoch(): String = UUID.randomUUID().toString().replace("-", "")
 
     private fun rootFingerprint(projectRoot: Path): String {
       val digest = MessageDigest.getInstance("SHA-256")
@@ -279,16 +514,37 @@ internal data class VcsOwnershipLoadResult(
   val pendingAdds: List<VcsMappingPendingOwnership>,
   val pendingRemovals: List<VcsMappingPendingOwnership>,
   val diagnostics: List<VcsMappingDiagnostic>,
+  internal val binding: VcsOwnershipStateBinding,
+  internal val version: VcsOwnershipFileVersion?,
+  internal val legacyMigration: ReqwsVcsOwnershipStateService.LegacyPersistedState?,
+)
+
+internal data class VcsOwnershipStateBinding(
+  val workspaceId: String,
+  val rootFingerprint: String,
+)
+
+internal data class VcsOwnershipFileVersion(
+  val stateVersion: Int,
+  val generation: Long,
+  val writerEpoch: String?,
 )
 
 private object VcsOwnershipStateCodec : AtomicStateCodec<ReqwsVcsOwnershipStateService.PersistedState> {
   override fun encode(value: ReqwsVcsOwnershipStateService.PersistedState): ByteArray = buildString {
+    require(value.stateVersion == ReqwsVcsOwnershipStateService.CURRENT_STATE_VERSION) {
+      "Only current ReqWS VCS ownership state can be written"
+    }
     append("{\"stateVersion\":")
     append(value.stateVersion)
-    append(",\"generation\":")
-    append(value.generation)
+    append(",\"workspaceId\":")
+    appendJsonString(requireNotNull(value.workspaceId))
     append(",\"workspaceRootFingerprint\":")
     appendJsonString(value.workspaceRootFingerprint)
+    append(",\"generation\":")
+    append(value.generation)
+    append(",\"writerEpoch\":")
+    appendJsonString(requireNotNull(value.writerEpoch))
     append(",\"stableMappings\":")
     appendStable(value.stableMappings)
     append(",\"pendingAdds\":")
@@ -306,12 +562,37 @@ private object VcsOwnershipStateCodec : AtomicStateCodec<ReqwsVcsOwnershipStateS
     cursor.expect('{')
     cursor.expectKey("stateVersion")
     val version = cursor.readPositiveInt()
-    cursor.expect(',')
-    cursor.expectKey("generation")
-    val generation = cursor.readPositiveLong()
-    cursor.expect(',')
-    cursor.expectKey("workspaceRootFingerprint")
-    val workspaceRootFingerprint = cursor.readString()
+    val workspaceId: String?
+    val workspaceRootFingerprint: String
+    val generation: Long
+    val writerEpoch: String?
+    when (version) {
+      2 -> {
+        cursor.expect(',')
+        cursor.expectKey("generation")
+        generation = cursor.readPositiveLong()
+        cursor.expect(',')
+        cursor.expectKey("workspaceRootFingerprint")
+        workspaceRootFingerprint = cursor.readString()
+        workspaceId = null
+        writerEpoch = null
+      }
+      ReqwsVcsOwnershipStateService.CURRENT_STATE_VERSION -> {
+        cursor.expect(',')
+        cursor.expectKey("workspaceId")
+        workspaceId = cursor.readString()
+        cursor.expect(',')
+        cursor.expectKey("workspaceRootFingerprint")
+        workspaceRootFingerprint = cursor.readString()
+        cursor.expect(',')
+        cursor.expectKey("generation")
+        generation = cursor.readPositiveLong()
+        cursor.expect(',')
+        cursor.expectKey("writerEpoch")
+        writerEpoch = cursor.readString()
+      }
+      else -> error("Unsupported ReqWS VCS ownership state version")
+    }
     cursor.expect(',')
     cursor.expectKey("stableMappings")
     val stable = cursor.readArray {
@@ -334,8 +615,10 @@ private object VcsOwnershipStateCodec : AtomicStateCodec<ReqwsVcsOwnershipStateS
     cursor.requireEnd()
     return ReqwsVcsOwnershipStateService.PersistedState(
       stateVersion = version,
-      generation = generation,
+      workspaceId = workspaceId,
       workspaceRootFingerprint = workspaceRootFingerprint,
+      generation = generation,
+      writerEpoch = writerEpoch,
       stableMappings = stable,
       pendingAdds = pendingAdds,
       pendingRemovals = pendingRemovals,

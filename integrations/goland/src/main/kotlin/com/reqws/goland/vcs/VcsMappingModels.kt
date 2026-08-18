@@ -169,3 +169,8 @@ internal fun interface VcsMappingOwnershipCommit {
   /** Must atomically persist and strictly read back the prepared state outside EDT. */
   fun persistAndVerify()
 }
+
+/** A trust/dispose gate changed while an ownership checkpoint was being committed. */
+internal class VcsOwnershipMutationBlockedException(
+  val code: VcsMappingApplyErrorCode,
+) : IllegalStateException(code.name)

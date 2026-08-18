@@ -25,7 +25,16 @@ internal class ReqwsVcsMappingService(private val project: Project) {
   ): VcsMappingApplyResult = withContext(Dispatchers.IO) {
     val isDisposed = { project.isDisposed || isServiceDisposed() }
     ensureMutationAllowed(isDisposed)
-    val loadedOwnership = ownershipState.readForProject(snapshot.canonicalProjectRoot)
+    val loadedOwnership = ownershipState.readForProject(
+      snapshot.canonicalProjectRoot,
+      snapshot.manifest.id,
+    )
+    val ownershipRecorder = ownershipState.recorderForProject(
+      projectRoot = snapshot.canonicalProjectRoot,
+      workspaceId = snapshot.manifest.id,
+      loaded = loadedOwnership,
+      mutationGate = { mutationBlock(isDisposed) },
+    )
     val result = IntellijVcsMappingAdapter(
       platform = IntellijVcsMappingPlatform(project),
       isProjectDisposed = isDisposed,
@@ -33,17 +42,7 @@ internal class ReqwsVcsMappingService(private val project: Project) {
     ).apply(
       snapshot = snapshot,
       currentOwnership = loadedOwnership.ownership,
-      ownershipRecorder = VcsMappingOwnershipRecorder { nextState ->
-        VcsMappingOwnershipCommit {
-          // Prepare immediately before persistence so the generation check chains transition and
-          // final checkpoints instead of letting two precomputed writes share one base version.
-          val replacement = ownershipState.prepareReplacementForProject(
-            snapshot.canonicalProjectRoot,
-            nextState,
-          )
-          ownershipState.persistPreparedReplacement(replacement)
-        }
-      },
+      ownershipRecorder = ownershipRecorder,
     )
     if (loadedOwnership.diagnostics.isEmpty()) {
       result
@@ -57,16 +56,18 @@ internal class ReqwsVcsMappingService(private val project: Project) {
   }
 
   private fun ensureMutationAllowed(isDisposed: () -> Boolean) {
-    val code = when {
-      isDisposed() -> VcsMappingApplyErrorCode.PROJECT_DISPOSED
-      !TrustedProjects.isProjectTrusted(project) -> VcsMappingApplyErrorCode.SAFE_MODE_BLOCKED
-      else -> return
-    }
+    val code = mutationBlock(isDisposed) ?: return
     throw VcsMappingApplyException(
       code = code,
       stage = VcsMappingApplyStage.AVAILABILITY,
       mappingsCommitted = false,
       ownershipCommitted = false,
     )
+  }
+
+  private fun mutationBlock(isDisposed: () -> Boolean): VcsMappingApplyErrorCode? = when {
+    isDisposed() -> VcsMappingApplyErrorCode.PROJECT_DISPOSED
+    !TrustedProjects.isProjectTrusted(project) -> VcsMappingApplyErrorCode.SAFE_MODE_BLOCKED
+    else -> null
   }
 }

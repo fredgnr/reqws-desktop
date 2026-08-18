@@ -560,13 +560,14 @@ class IntellijVcsMappingAdapterTest {
     val platform = FakePlatform(mappings = mutableListOf(replacement))
     platform.replaceMappingsAsPooledWriter(listOf(replacement))
     val ownershipState = ReqwsVcsOwnershipStateService()
+    val durableRecorder = persistentRecorder(ownershipState, root)
     val committedStates = mutableListOf<VcsMappingOwnershipState>()
 
     IntellijVcsMappingAdapter(platform).apply(
       snapshot(root, listOf("repo-a")),
       listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
       VcsMappingOwnershipRecorder { state ->
-        val commit = persistentRecorder(ownershipState, root).prepare(state)
+        val commit = durableRecorder.prepare(state)
         VcsMappingOwnershipCommit {
           commit.persistAndVerify()
           committedStates.add(state)
@@ -584,7 +585,7 @@ class IntellijVcsMappingAdapterTest {
     assertTrue(platform.events.indexOf("ownership") < platform.events.indexOf("external-ack"))
     assertEquals(
       listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
-      ReqwsVcsOwnershipStateService().readForProject(root).ownership,
+      ownershipState.readForProject(root, TEST_WORKSPACE_ID).ownership,
     )
   }
 
@@ -607,6 +608,7 @@ class IntellijVcsMappingAdapterTest {
       },
     )
     val ownershipState = ReqwsVcsOwnershipStateService()
+    val durableRecorder = persistentRecorder(ownershipState, root)
     var sawFinalCreated = false
 
     val failure = expectApplyFailure {
@@ -617,7 +619,7 @@ class IntellijVcsMappingAdapterTest {
         snapshot(root, listOf("repo-a")),
         listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED)),
         VcsMappingOwnershipRecorder { state ->
-          val commit = persistentRecorder(ownershipState, root).prepare(state)
+          val commit = durableRecorder.prepare(state)
           VcsMappingOwnershipCommit {
             commit.persistAndVerify()
             val kind = state.stableMappings.singleOrNull()?.kind
@@ -639,7 +641,7 @@ class IntellijVcsMappingAdapterTest {
     assertSame(externalReplacement, platform.mappings.single())
     assertEquals(
       listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
-      ReqwsVcsOwnershipStateService().readForProject(root).ownership,
+      ownershipState.readForProject(root, TEST_WORKSPACE_ID).ownership,
     )
   }
 
@@ -896,22 +898,21 @@ class IntellijVcsMappingAdapterTest {
     val repository = root.resolve("repo-a")
     Files.createDirectory(repository)
     val ownershipState = ReqwsVcsOwnershipStateService()
-    ownershipState.persistPreparedReplacement(
-      ownershipState.prepareReplacementForProject(
-        root,
-        VcsMappingOwnershipState(
-          stableMappings = emptyList(),
-          pendingRemovals = listOf(
-            VcsMappingPendingOwnership(
-              relativeDirectory = "repo-a",
-              operationToken = "0123456789abcdef0123456789abcdef",
-            ),
+    persistOwnershipState(
+      ownershipState,
+      root,
+      VcsMappingOwnershipState(
+        stableMappings = emptyList(),
+        pendingRemovals = listOf(
+          VcsMappingPendingOwnership(
+            relativeDirectory = "repo-a",
+            operationToken = "0123456789abcdef0123456789abcdef",
           ),
         ),
       ),
     )
     val cold = ReqwsVcsOwnershipStateService()
-    val loaded = cold.readForProject(root)
+    val loaded = cold.readForProject(root, TEST_WORKSPACE_ID)
     val userMapping = VcsDirectoryMapping(repository.toString(), GIT_VCS_NAME)
     val platform = FakePlatform(mappings = mutableListOf(userMapping))
 
@@ -926,8 +927,8 @@ class IntellijVcsMappingAdapterTest {
     assertTrue(result.plan.diagnostics.any {
       it.code == VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT
     })
-    assertTrue(cold.readForProject(root).ownership.isEmpty())
-    assertTrue(cold.readForProject(root).pendingRemovals.isEmpty())
+    assertTrue(cold.readForProject(root, TEST_WORKSPACE_ID).ownership.isEmpty())
+    assertTrue(cold.readForProject(root, TEST_WORKSPACE_ID).pendingRemovals.isEmpty())
   }
 
   @Test
@@ -936,22 +937,21 @@ class IntellijVcsMappingAdapterTest {
     Files.createDirectory(root.resolve(".idea"))
     gitRepository(root, "repo-a")
     val ownershipState = ReqwsVcsOwnershipStateService()
-    ownershipState.persistPreparedReplacement(
-      ownershipState.prepareReplacementForProject(
-        root,
-        VcsMappingOwnershipState(
-          stableMappings = emptyList(),
-          pendingRemovals = listOf(
-            VcsMappingPendingOwnership(
-              relativeDirectory = "repo-a",
-              operationToken = "0123456789abcdef0123456789abcdef",
-            ),
+    persistOwnershipState(
+      ownershipState,
+      root,
+      VcsMappingOwnershipState(
+        stableMappings = emptyList(),
+        pendingRemovals = listOf(
+          VcsMappingPendingOwnership(
+            relativeDirectory = "repo-a",
+            operationToken = "0123456789abcdef0123456789abcdef",
           ),
         ),
       ),
     )
     val cold = ReqwsVcsOwnershipStateService()
-    val loaded = cold.readForProject(root)
+    val loaded = cold.readForProject(root, TEST_WORKSPACE_ID)
     val customized = VcsDirectoryMapping(
       root.resolve("repo-a").toString(),
       GIT_VCS_NAME,
@@ -969,7 +969,48 @@ class IntellijVcsMappingAdapterTest {
     assertEquals(0, platform.setCalls)
     assertEquals(
       listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
-      cold.readForProject(root).ownership,
+      cold.readForProject(root, TEST_WORKSPACE_ID).ownership,
+    )
+  }
+
+  @Test
+  fun `foreign service never deletes an inactive plain mapping from a persisted created claim`() {
+    val root = workspaceRoot()
+    Files.createDirectory(root.resolve(".idea"))
+    val repository = root.resolve("repo-a")
+    Files.createDirectory(repository)
+    val originalSession = ReqwsVcsOwnershipStateService()
+    persistOwnershipState(
+      originalSession,
+      root,
+      VcsMappingOwnershipState(
+        stableMappings = listOf(
+          VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.CREATED),
+        ),
+      ),
+    )
+    val foreignSession = ReqwsVcsOwnershipStateService()
+    val loaded = foreignSession.readForProject(root, TEST_WORKSPACE_ID)
+    val plainMapping = VcsDirectoryMapping(repository.toString(), GIT_VCS_NAME)
+    val platform = FakePlatform(mappings = mutableListOf(plainMapping))
+
+    val result = IntellijVcsMappingAdapter(platform).apply(
+      snapshot(root, emptyList()),
+      loaded.ownership,
+      persistentRecorder(foreignSession, root),
+    )
+
+    assertEquals(
+      listOf(VcsMappingOwnership("repo-a", VcsMappingOwnershipKind.BORROWED)),
+      loaded.ownership,
+    )
+    assertEquals(listOf(plainMapping), platform.mappings)
+    assertEquals(0, platform.setCalls)
+    assertTrue(result.plan.diagnostics.any {
+      it.code == VcsMappingDiagnosticCode.OWNERSHIP_CONFLICT
+    })
+    assertTrue(
+      foreignSession.readForProject(root, TEST_WORKSPACE_ID).ownership.isEmpty(),
     )
   }
 
@@ -1153,22 +1194,21 @@ class IntellijVcsMappingAdapterTest {
     Files.createDirectory(root.resolve(".idea"))
     gitRepository(root, "repo-a")
     val state = ReqwsVcsOwnershipStateService()
-    state.persistPreparedReplacement(
-      state.prepareReplacementForProject(
-        root,
-        VcsMappingOwnershipState(
-          stableMappings = emptyList(),
-          pendingAdds = listOf(
-            VcsMappingPendingOwnership(
-              relativeDirectory = "repo-a",
-              operationToken = "0123456789abcdef0123456789abcdef",
-            ),
+    persistOwnershipState(
+      state,
+      root,
+      VcsMappingOwnershipState(
+        stableMappings = emptyList(),
+        pendingAdds = listOf(
+          VcsMappingPendingOwnership(
+            relativeDirectory = "repo-a",
+            operationToken = "0123456789abcdef0123456789abcdef",
           ),
         ),
       ),
     )
     val cold = ReqwsVcsOwnershipStateService()
-    val loaded = cold.readForProject(root)
+    val loaded = cold.readForProject(root, TEST_WORKSPACE_ID)
     val settings = if (customized) TestRootSettings("user-readded") else null
     val userMapping = VcsDirectoryMapping(
       root.resolve("repo-a").toString(),
@@ -1187,7 +1227,7 @@ class IntellijVcsMappingAdapterTest {
     assertEquals(listOf(userMapping), platform.mappings)
     assertEquals(0, platform.setCalls)
     if (settings != null) assertSame(settings, platform.mappings.single().rootSettings)
-    assertTrue(cold.readForProject(root).ownership.isEmpty())
+    assertTrue(cold.readForProject(root, TEST_WORKSPACE_ID).ownership.isEmpty())
   }
 
   private fun gitRepository(root: Path, name: String) {
@@ -1249,12 +1289,21 @@ private fun ownershipRecorder(
 private fun persistentRecorder(
   service: ReqwsVcsOwnershipStateService,
   root: Path,
-): VcsMappingOwnershipRecorder = VcsMappingOwnershipRecorder { state ->
-  VcsMappingOwnershipCommit {
-    val replacement = service.prepareReplacementForProject(root, state)
-    service.persistPreparedReplacement(replacement)
-  }
+): VcsMappingOwnershipRecorder = service.recorderForProject(
+  projectRoot = root,
+  workspaceId = TEST_WORKSPACE_ID,
+  loaded = service.readForProject(root, TEST_WORKSPACE_ID),
+)
+
+private fun persistOwnershipState(
+  service: ReqwsVcsOwnershipStateService,
+  root: Path,
+  state: VcsMappingOwnershipState,
+) {
+  persistentRecorder(service, root).prepare(state).persistAndVerify()
 }
+
+private const val TEST_WORKSPACE_ID = "ws_test"
 
 private class FakePlatform(
   private val gitAvailable: Boolean = true,
