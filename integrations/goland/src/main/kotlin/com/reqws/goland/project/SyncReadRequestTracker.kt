@@ -1,31 +1,41 @@
 package com.reqws.goland.project
 
 import com.reqws.goland.sync.SyncTrigger
+import com.reqws.goland.sync.mergeReconcileTrigger
+import com.reqws.goland.sync.requiresReconciliation
 
 /**
- * Linearizes latest-read selection and carries an unconsumed manual reconciliation request.
+ * Linearizes latest-read selection and carries an unconsumed forced reconciliation request.
  *
- * A newer automatic read may supersede the manual read's bytes, but it must inherit the manual
- * trigger. The intent is consumed only after the latest valid candidate is accepted by the sync
- * coordinator; stale, failed, individually-cancelled, or rejected reads leave it pending. Service
- * disposal invalidates all generations and clears the intent.
+ * A newer automatic read may supersede a manual or trust-transition read's bytes, but it must
+ * inherit the forced trigger. The intent is consumed only after the latest valid candidate is
+ * accepted by the sync coordinator; stale, failed, individually-cancelled, or rejected reads
+ * leave it pending. MANUAL wins if both kinds overlap. Service disposal invalidates all
+ * generations and clears the intent.
  */
 internal class SyncReadRequestTracker {
   private val lock = Any()
   private var latestGeneration = 0L
-  private var nextManualEpoch = 0L
-  private var pendingManualEpoch: Long? = null
+  private var nextReconcileEpoch = 0L
+  private var pendingReconcileEpoch: Long? = null
+  private var pendingReconcileTrigger: SyncTrigger? = null
 
   fun begin(trigger: SyncTrigger): SyncReadRequest = synchronized(lock) {
     latestGeneration += 1
-    if (trigger == SyncTrigger.MANUAL) {
-      nextManualEpoch += 1
-      pendingManualEpoch = nextManualEpoch
+    if (trigger.requiresReconciliation) {
+      nextReconcileEpoch += 1
+      pendingReconcileEpoch = nextReconcileEpoch
+      pendingReconcileTrigger = mergeReconcileTrigger(pendingReconcileTrigger, trigger)
     }
     SyncReadRequest(
       generation = latestGeneration,
       requestedTrigger = trigger,
     )
+  }
+
+  /** Fast first-phase gate for work that must run outside the selection lock. */
+  fun isLatest(request: SyncReadRequest): Boolean = synchronized(lock) {
+    request.generation == latestGeneration
   }
 
   fun runIfLatest(
@@ -42,11 +52,16 @@ internal class SyncReadRequestTracker {
     offer: (SyncTrigger) -> Boolean,
   ): Boolean = synchronized(lock) {
     if (request.generation != latestGeneration) return@synchronized false
-    val manualEpoch = pendingManualEpoch
+    val reconcileEpoch = pendingReconcileEpoch
     val trigger = effectiveTrigger(request)
     val offered = offer(trigger)
-    if (offered && manualEpoch != null && pendingManualEpoch == manualEpoch) {
-      pendingManualEpoch = null
+    if (
+      offered &&
+      reconcileEpoch != null &&
+      pendingReconcileEpoch == reconcileEpoch
+    ) {
+      pendingReconcileEpoch = null
+      pendingReconcileTrigger = null
     }
     offered
   }
@@ -54,16 +69,21 @@ internal class SyncReadRequestTracker {
   fun invalidate() {
     synchronized(lock) {
       latestGeneration += 1
-      pendingManualEpoch = null
+      pendingReconcileEpoch = null
+      pendingReconcileTrigger = null
     }
   }
 
   internal fun hasPendingManualIntent(): Boolean = synchronized(lock) {
-    pendingManualEpoch != null
+    pendingReconcileTrigger == SyncTrigger.MANUAL
+  }
+
+  internal fun pendingReconcileIntent(): SyncTrigger? = synchronized(lock) {
+    pendingReconcileTrigger
   }
 
   private fun effectiveTrigger(request: SyncReadRequest): SyncTrigger =
-    if (pendingManualEpoch != null) SyncTrigger.MANUAL else request.requestedTrigger
+    pendingReconcileTrigger ?: request.requestedTrigger
 }
 
 internal data class SyncReadRequest(

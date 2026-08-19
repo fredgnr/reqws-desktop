@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：验证中
-- 更新日期：2026-08-18
+- 更新日期：2026-08-19
 
 ## 文档
 
@@ -15,4 +15,4 @@
 
 [2026-08-17 报告](verification-2026-08-17.md)绑定旧候选 ZIP（SHA-256 `c1cd6966869bae86d72b998e401d3a9a470e19f6811f51248b3cb763988d9609`）及当时的 164 项测试证据，并因可复现的 project-dispose 异常、Project View 刷新缺口、矩阵未完成和缺少 exact commit 判定为 `NO-GO`。
 
-当前产品契约已改为自动同步 Project Model、只读诊断 VCS，并由用户在 GoLand Directory Mappings 中手动维护 Git Roots。插件不调用 mapping mutation API、不直接写 `.idea/vcs.xml`；GoLand 原生 auto-detection 仍由 IDE/用户设置控制并需单独归因。旧 `.idea/reqws-vcs-ownership.json` 与 lock 为 inert 文件，不读取、不迁移、不自动清理。2026-08-18 当前源码候选已在 JDK 21 下通过 220 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `d4ee9ee6352cf8a8c0ee3ca7e198fb37357f967ca881644dcd0c1790136b7652`，大小 394,894 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。真实 GUI 仍须覆盖生产无 VCS writer、手动配置步骤、配置事件自动复核、`Sync Now` 只读检查、用户 mapping/`rootSettings`、纯 inspection 的 `.idea/vcs.xml` 保持、平台原生变化归因，以及 old ownership/lock inert，并绑定推送后的 exact commit；在此之前不形成 `GO`。[按原型收口后的同步态实现截图](../ui/tool-window-implementation-2026-08-17.png)仍只用于旧候选界面参考；[2026-08-17 报告](verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。
+当前产品契约已改为自动同步 Project Model、只读诊断 VCS，并由用户在 GoLand Directory Mappings 中手动维护 Git Roots。插件不调用 mapping mutation API、不直接写 `.idea/vcs.xml`；GoLand 原生 auto-detection 仍由 IDE/用户设置控制并需单独归因。旧 `.idea/reqws-vcs-ownership.json` 与 lock 为 inert 文件，不读取、不迁移、不自动清理。2026-08-19 当前源码候选补齐 trust-transition 强制 reconcile、valid-manifest 后 VCS listener 注册与复检、每个 present repository 在单次 VCS inspection 中复用同一 live filesystem identity，以及 VCS diagnostic boundary 的 cancellation propagation 回归，并已在 JDK 21 下通过 234 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9f4cd27f6198c35c2ad765dd2266704f8f7560422b6d2ec3d739067bc178b8d5`，大小 406,954 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。真实 GUI 仍须覆盖生产无 VCS writer、手动配置步骤、配置事件自动复核、`Sync Now` 只读检查、用户 mapping/`rootSettings`、纯 inspection 的 `.idea/vcs.xml` 保持、平台原生变化归因，以及 old ownership/lock inert，并绑定推送后的 exact commit；在此之前不形成 `GO`。[按原型收口后的同步态实现截图](../ui/tool-window-implementation-2026-08-17.png)仍只用于旧候选界面参考；[2026-08-17 报告](verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。

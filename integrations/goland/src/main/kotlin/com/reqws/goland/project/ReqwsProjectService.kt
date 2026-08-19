@@ -17,6 +17,7 @@ import com.reqws.goland.sync.SyncFailureStage
 import com.reqws.goland.sync.SyncTrigger
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.ReqwsVcsDiagnosticsService
+import com.reqws.goland.vcs.VcsRootInspection
 import com.reqws.goland.watch.ManifestSyncRequest
 import com.reqws.goland.watch.ManifestVfsWatcher
 import java.nio.file.Path
@@ -30,10 +31,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Service(Service.Level.PROJECT)
-class ReqwsProjectService(
+class ReqwsProjectService private constructor(
   private val project: Project,
   private val coroutineScope: CoroutineScope,
+  private val runtimeOverrides: ReqwsProjectServiceRuntimeOverrides?,
 ) : Disposable {
+  constructor(project: Project, coroutineScope: CoroutineScope) : this(
+    project = project,
+    coroutineScope = coroutineScope,
+    runtimeOverrides = null,
+  )
+
   private val disposed = AtomicBoolean(false)
   private val readRequests = SyncReadRequestTracker()
   private val statePublisher = TerminalStatePublisher(
@@ -46,7 +54,8 @@ class ReqwsProjectService(
   private val candidateStates = LinkedHashMap<String, ReqwsProjectState>()
   private val persistence: ReqwsSyncPersistence
     get() = project.service()
-  private val trustGate = ReqwsTrustGate { TrustedProjects.isProjectTrusted(project) }
+  private val trustGate = runtimeOverrides?.trustGate
+    ?: ReqwsTrustGate { TrustedProjects.isProjectTrusted(project) }
   private val loader = ReqwsProjectLoadEngine(
     manifestReader = ManifestReader(),
     trustGate = trustGate,
@@ -59,60 +68,68 @@ class ReqwsProjectService(
   }
   private val coordinator = LatestWinsSyncCoordinator(
     scope = coroutineScope,
-    applier = SyncCandidateApplier<ManifestSnapshot> { candidate ->
-      projectionApplier.apply(candidate.value)
-    },
+    applier = runtimeOverrides?.candidateApplier
+      ?: SyncCandidateApplier<ManifestSnapshot> { candidate ->
+        projectionApplier.apply(candidate.value)
+      },
     observer = SyncCoordinatorObserver(::onCoordinatorEvent),
   )
   private val trustMonitor = TrustTransitionMonitor(
     scope = coroutineScope,
     probe = TrustStateProbe(trustGate::isTrusted),
     action = TrustedTransitionAction {
-      requestRefresh(SyncTrigger.AUTOMATIC)
+      requestRefresh(SyncTrigger.TRUST_TRANSITION)
     },
+    pollMillis = runtimeOverrides?.trustPollMillis
+      ?: TrustTransitionMonitor.DEFAULT_POLL_MILLIS,
+    waiter = runtimeOverrides?.trustPollWaiter
+      ?: TrustPollWaiter { delay(it) },
   )
   private val vcsChangeLifecycleLock = Any()
   private var vcsChangeMonitoringState = VcsChangeMonitoringState.NOT_STARTED
+  private var vcsChangeRegistrationVersion = 0L
   private var vcsChangeRegistration: AutoCloseable? = null
-  private val vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
-    project.service<ReqwsVcsConfigurationMonitor>()
-      .addExternalChangeListener { listener() }
-  }
+  private val vcsChangeRegistrar = runtimeOverrides?.vcsChangeRegistrar
+    ?: ReqwsVcsChangeRegistrar { listener ->
+      project.service<ReqwsVcsConfigurationMonitor>()
+        .addExternalChangeListener { listener() }
+    }
+  private val vcsInspector = runtimeOverrides?.vcsInspector
+    ?: ReqwsVcsInspector { snapshot ->
+      project.service<ReqwsVcsDiagnosticsService>().inspect(snapshot)
+    }
 
   val state: ReqwsProjectState
     get() = statePublisher.state
 
   /** Sync Now bypasses VFS debounce but enters the same serialized coordinator. */
-  fun refresh(): Job? = refreshAfterStart(SyncTrigger.MANUAL)
+  fun refresh(): Job? = requestRefresh(SyncTrigger.MANUAL)
 
-  /** Startup, VFS, trust, and Tool Window lifecycle refreshes retain automatic no-op semantics. */
-  internal fun refreshAutomatically(): Job? = refreshAfterStart(SyncTrigger.AUTOMATIC)
+  /** Startup, VFS, VCS, and Tool Window lifecycle refreshes retain automatic no-op semantics. */
+  internal fun refreshAutomatically(): Job? = requestRefresh(SyncTrigger.AUTOMATIC)
 
-  private fun refreshAfterStart(trigger: SyncTrigger): Job? {
-    if (!startVcsChangeMonitoring()) return null
-    return requestRefresh(trigger)
-  }
-
-  /**
-   * Starts callback registration only after the service constructor has returned to its caller.
-   * A registrar is allowed to invoke the callback synchronously during registration.
-   */
+  /** Starts callback registration only after a current read has produced a valid snapshot. */
   internal fun startVcsChangeMonitoring(
     registrar: ReqwsVcsChangeRegistrar = vcsChangeRegistrar,
-  ): Boolean = synchronized(vcsChangeLifecycleLock) {
+  ): VcsChangeMonitoringStart = synchronized(vcsChangeLifecycleLock) {
     if (disposed.get() || project.isDisposed) {
       vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
       val registration = vcsChangeRegistration
       vcsChangeRegistration = null
       closeVcsChangeRegistration(registration)
-      return@synchronized false
+      return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
     }
     when (vcsChangeMonitoringState) {
-      VcsChangeMonitoringState.STARTED -> return@synchronized true
-      VcsChangeMonitoringState.DISPOSED -> return@synchronized false
-      // Only a same-thread registrar re-entry can observe STARTING because other callers wait for
-      // this monitor. The registered callback bypasses start and therefore never takes this path.
-      VcsChangeMonitoringState.STARTING -> return@synchronized false
+      VcsChangeMonitoringState.STARTED -> {
+        return@synchronized VcsChangeMonitoringStart.ALREADY_STARTED
+      }
+      VcsChangeMonitoringState.DISPOSED -> {
+        return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
+      }
+      // Only a same-thread registrar re-entry can observe STARTING because other callers wait.
+      VcsChangeMonitoringState.STARTING -> {
+        return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
+      }
       VcsChangeMonitoringState.NOT_STARTED -> Unit
     }
 
@@ -135,27 +152,36 @@ class ReqwsProjectService(
       vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
       vcsChangeRegistration = null
       closeVcsChangeRegistration(registration)
-      return@synchronized false
+      return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
     }
 
     vcsChangeMonitoringState = VcsChangeMonitoringState.STARTED
-    true
+    vcsChangeRegistrationVersion += 1
+    VcsChangeMonitoringStart.STARTED_NOW
   }
 
   private fun handleExternalVcsConfigurationChange(): Job? {
     if (disposed.get() || project.isDisposed) return null
-    // Registration-time callbacks must not re-enter the STARTING state. Once the platform can
-    // invoke this listener, the current registration attempt already owns the startup boundary.
-    // Manifest loading always performs the read-only VCS inspection before offering a candidate;
-    // an automatic same-digest NoOp therefore still publishes the fresh diagnostics without
-    // replaying the independently owned Project Model transaction.
-    return requestRefresh(SyncTrigger.AUTOMATIC)
+    val started = synchronized(vcsChangeLifecycleLock) {
+      vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED
+    }
+    // A registrar may invoke its callback synchronously. The mandatory post-registration
+    // inspection covers every change before STARTED, without recursively starting a newer
+    // manifest read while the first valid candidate is still being accepted.
+    if (!started) return null
+    // Once active, VCS changes retain the existing full automatic refresh semantics: a clean
+    // model baseline NoOps after publishing fresh diagnostics, while an already-dirty baseline
+    // can converge through the normal coordinator.
+    return coroutineScope.launch(Dispatchers.IO) {
+      requestRefresh(SyncTrigger.AUTOMATIC)?.join()
+    }
   }
 
   private fun requestRefresh(trigger: SyncTrigger): Job? {
     if (disposed.get() || project.isDisposed) return null
     val projectRoot = ReqwsProjectDetector.projectRoot(project)
     val request = readRequests.begin(trigger)
+    val observedVcsRegistrationVersion = currentVcsRegistrationVersion()
     publish(
       state.copy(
         lifecycle = ReqwsLifecycleState.READING,
@@ -169,7 +195,7 @@ class ReqwsProjectService(
       val previous = state
       val loaded = loadWithRetry(projectRoot, previous)
       if (disposed.get()) return@launch
-      acceptLoadedState(loaded, request)
+      acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
     }
   }
 
@@ -188,7 +214,11 @@ class ReqwsProjectService(
     return loaded.withPersistedDigest().withVcsInspection()
   }
 
-  private fun acceptLoadedState(loaded: ReqwsProjectState, request: SyncReadRequest) {
+  private fun acceptLoadedState(
+    loaded: ReqwsProjectState,
+    request: SyncReadRequest,
+    observedVcsRegistrationVersion: Long,
+  ) {
     when (loaded.lifecycle) {
       ReqwsLifecycleState.INACTIVE -> {
         readRequests.runIfLatest(request) {
@@ -197,8 +227,10 @@ class ReqwsProjectService(
         }
       }
       ReqwsLifecycleState.SAFE_MODE_BLOCKED -> {
+        if (!readRequests.isLatest(request)) return
+        val monitored = prepareValidState(loaded, observedVcsRegistrationVersion) ?: return
         readRequests.runIfLatest(request) {
-          publish(loaded)
+          publish(monitored)
           trustMonitor.awaitTrusted()
         }
       }
@@ -216,13 +248,12 @@ class ReqwsProjectService(
       ReqwsLifecycleState.DEGRADED,
       -> {
         val snapshot = requireNotNull(loaded.snapshot)
+        if (!readRequests.isLatest(request)) return
+        val monitored = prepareValidState(loaded, observedVcsRegistrationVersion) ?: return
         readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
-          rememberCandidate(snapshot.digestSha256, loaded)
-          coordinator.offer(
-            candidate = SyncCandidate(snapshot.digestSha256, snapshot),
-            trigger = trigger,
-          )
+          rememberCandidate(snapshot.digestSha256, monitored)
+          coordinator.offer(SyncCandidate(snapshot.digestSha256, snapshot), trigger)
         }
       }
       ReqwsLifecycleState.READING,
@@ -310,8 +341,39 @@ class ReqwsProjectService(
   private fun ReqwsProjectState.withVcsInspection(): ReqwsProjectState {
     val currentSnapshot = snapshot ?: return copy(vcsInspection = null)
     return copy(
-      vcsInspection = project.service<ReqwsVcsDiagnosticsService>().inspect(currentSnapshot),
+      vcsInspection = vcsInspector.inspect(currentSnapshot),
     )
+  }
+
+  /**
+   * Arms the VCS observer only for a valid manifest state. The first registration is followed by
+   * a second inspection of these exact snapshot bytes: changes before listener installation are
+   * therefore observed by the second read, and later changes are covered by the listener. The
+   * caller performs both latest-read gates; registration and inspection stay outside that lock so
+   * an EDT Sync Now request never waits for VCS IO.
+   */
+  private fun prepareValidState(
+    loaded: ReqwsProjectState,
+    observedVcsRegistrationVersion: Long,
+  ): ReqwsProjectState? {
+    val snapshot = requireNotNull(loaded.snapshot) {
+      "VCS monitoring requires a valid manifest snapshot"
+    }
+    val start = startVcsChangeMonitoring()
+    if (start == VcsChangeMonitoringStart.UNAVAILABLE) return null
+    val registeredAfterReadStarted =
+      observedVcsRegistrationVersion != currentVcsRegistrationVersion()
+    return if (start == VcsChangeMonitoringStart.STARTED_NOW || registeredAfterReadStarted) {
+      loaded.copy(
+        vcsInspection = vcsInspector.inspect(snapshot),
+      )
+    } else {
+      loaded
+    }
+  }
+
+  private fun currentVcsRegistrationVersion(): Long = synchronized(vcsChangeLifecycleLock) {
+    vcsChangeRegistrationVersion
   }
 
   private fun ReqwsProjectState.isRetryableManifestGap(): Boolean =
@@ -417,9 +479,38 @@ class ReqwsProjectService(
     private const val MANIFEST_RETRY_COUNT = 3
     private const val MANIFEST_RETRY_DELAY_MILLIS = 100L
     private const val MAX_PENDING_CANDIDATES = 8
+
+    internal fun createForTest(
+      project: Project,
+      coroutineScope: CoroutineScope,
+      runtimeOverrides: ReqwsProjectServiceRuntimeOverrides,
+    ): ReqwsProjectService = ReqwsProjectService(
+      project = project,
+      coroutineScope = coroutineScope,
+      runtimeOverrides = runtimeOverrides,
+    )
   }
+}
+
+internal enum class VcsChangeMonitoringStart {
+  STARTED_NOW,
+  ALREADY_STARTED,
+  UNAVAILABLE,
+}
+
+internal fun interface ReqwsVcsInspector {
+  fun inspect(snapshot: ManifestSnapshot): VcsRootInspection
 }
 
 internal fun interface ReqwsVcsChangeRegistrar {
   fun addExternalChangeListener(listener: () -> Job?): AutoCloseable
 }
+
+internal data class ReqwsProjectServiceRuntimeOverrides(
+  val trustGate: ReqwsTrustGate? = null,
+  val candidateApplier: SyncCandidateApplier<ManifestSnapshot>? = null,
+  val trustPollMillis: Long? = null,
+  val trustPollWaiter: TrustPollWaiter? = null,
+  val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
+  val vcsInspector: ReqwsVcsInspector? = null,
+)

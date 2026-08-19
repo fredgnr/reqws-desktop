@@ -163,6 +163,59 @@ class VcsRootInspectorTest {
   }
 
   @Test
+  fun `uses the live identity after a symlink entry is replaced by a directory`() {
+    val root = workspaceRoot()
+    val previousTarget = gitRepository(root, "previous-target")
+    val repository = root.resolve("repository")
+    Files.createSymbolicLink(repository, previousTarget)
+    val staleSnapshot = snapshot(root, listOf("repository"))
+
+    Files.delete(repository)
+    gitRepository(root, "repository")
+    assertEquals(previousTarget, staleSnapshot.repositories.single().canonicalPath)
+    assertEquals(repository, repository.toRealPath())
+
+    val result = inspector.inspect(
+      snapshot = staleSnapshot,
+      gitAvailable = true,
+      mappings = listOf(mapping(previousTarget)),
+    )
+
+    assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, result.repositoryStatuses.single().status)
+    assertEquals(
+      listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+      result.workspaceDiagnostics,
+    )
+  }
+
+  @Test
+  fun `uses the live identity after an internal repository symlink is retargeted`() {
+    val root = workspaceRoot()
+    val previousTarget = gitRepository(root, "previous-target")
+    val liveTarget = gitRepository(root, "live-target")
+    val repository = root.resolve("repository")
+    Files.createSymbolicLink(repository, previousTarget)
+    val staleSnapshot = snapshot(root, listOf("repository"))
+
+    Files.delete(repository)
+    Files.createSymbolicLink(repository, liveTarget)
+    assertEquals(previousTarget, staleSnapshot.repositories.single().canonicalPath)
+    assertEquals(liveTarget, repository.toRealPath())
+
+    val result = inspector.inspect(
+      snapshot = staleSnapshot,
+      gitAvailable = true,
+      mappings = listOf(mapping(previousTarget)),
+    )
+
+    assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, result.repositoryStatuses.single().status)
+    assertEquals(
+      listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+      result.workspaceDiagnostics,
+    )
+  }
+
+  @Test
   fun `reports unavailable Git integration without claiming configured roots`() {
     val root = workspaceRoot()
     gitRepository(root, "repository")
@@ -207,9 +260,8 @@ class VcsRootInspectorTest {
 
   private fun workspaceRoot(): Path = temporaryFolder.newFolder("workspace").toPath().toRealPath()
 
-  private fun gitRepository(root: Path, name: String) {
-    Files.createDirectories(root.resolve(name).resolve(".git"))
-  }
+  private fun gitRepository(root: Path, name: String): Path =
+    Files.createDirectories(root.resolve(name).resolve(".git")).parent
 
   private fun mapping(
     path: Path,

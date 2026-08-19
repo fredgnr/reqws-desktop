@@ -3,6 +3,7 @@ package com.reqws.goland.project
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -38,6 +39,8 @@ internal class TrustTransitionMonitor(
   private val closed = AtomicBoolean(false)
   private val lock = Any()
   private var pollingJob: Job? = null
+  private var transitionActionRunning = false
+  private var rearmAfterAction = false
 
   init {
     require(pollMillis >= MIN_POLL_MILLIS) {
@@ -47,12 +50,35 @@ internal class TrustTransitionMonitor(
 
   fun awaitTrusted(): Boolean = synchronized(lock) {
     if (closed.get() || !parentJob.isActive) return false
-    if (pollingJob?.isActive == true) return true
+    if (pollingJob?.isActive == true) {
+      // A load started by the observed transition can become blocked again before this polling
+      // job's completion callback clears it. Remember that request so the next transition is not
+      // lost in the narrow action -> completion window.
+      if (transitionActionRunning) rearmAfterAction = true
+      return true
+    }
 
-    val job = scope.launch {
+    startPollingLocked()
+    true
+  }
+
+  private fun startPollingLocked() {
+    transitionActionRunning = false
+    rearmAfterAction = false
+    lateinit var job: Job
+    job = scope.launch(start = CoroutineStart.LAZY) {
       try {
         while (!closed.get()) {
           if (probe.isTrusted()) {
+            val mayRun = synchronized(lock) {
+              if (pollingJob !== job || closed.get()) {
+                false
+              } else {
+                transitionActionRunning = true
+                true
+              }
+            }
+            if (!mayRun) return@launch
             action.run()
             return@launch
           }
@@ -70,25 +96,40 @@ internal class TrustTransitionMonitor(
     }
     pollingJob = job
     job.invokeOnCompletion {
-      synchronized(lock) {
-        if (pollingJob === job) pollingJob = null
+      val shouldRearm = synchronized(lock) {
+        if (pollingJob !== job) {
+          false
+        } else {
+          pollingJob = null
+          transitionActionRunning = false
+          val requested = rearmAfterAction
+          rearmAfterAction = false
+          requested && !closed.get() && parentJob.isActive
+        }
       }
+      if (shouldRearm) awaitTrusted()
     }
-    true
+    job.start()
   }
 
   fun cancelPending() {
     synchronized(lock) {
-      pollingJob?.cancel()
+      val job = pollingJob
       pollingJob = null
+      transitionActionRunning = false
+      rearmAfterAction = false
+      job?.cancel()
     }
   }
 
   override fun close() {
     synchronized(lock) {
       if (!closed.compareAndSet(false, true)) return
-      pollingJob?.cancel()
+      val job = pollingJob
       pollingJob = null
+      transitionActionRunning = false
+      rearmAfterAction = false
+      job?.cancel()
     }
   }
 

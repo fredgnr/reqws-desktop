@@ -24,16 +24,22 @@ internal class VcsRootInspector {
     val activeIdentities = linkedSetOf<String>()
     val repositoryStatuses = snapshot.repositories.mapIndexed { index, resolved ->
       val candidate = projectRoot.resolve(resolved.repository.relativePath).normalize()
-      val identities = VcsPathIdentity.repositoryIdentities(candidate, resolved.canonicalPath)
-      activeIdentities.addAll(identities)
+      val lexicalIdentity = VcsPathIdentity.lexical(candidate)
+      activeIdentities.add(lexicalIdentity)
+      val liveObservation = if (resolved.availability == RepositoryAvailability.MISSING) {
+        null
+      } else {
+        observeLiveRepository(projectRoot, candidate)
+      }
+      liveObservation?.identities?.let(activeIdentities::addAll)
       val status = when {
         resolved.availability == RepositoryAvailability.MISSING ->
           VcsRepositoryStatus.MISSING_DIRECTORY
-        !Files.exists(candidate, LinkOption.NOFOLLOW_LINKS) ->
+        liveObservation == null ->
           VcsRepositoryStatus.MISSING_DIRECTORY
-        !isStableGitRepository(projectRoot, candidate) -> VcsRepositoryStatus.NOT_GIT
+        !liveObservation.isGitRepository -> VcsRepositoryStatus.NOT_GIT
         !gitAvailable -> VcsRepositoryStatus.NOT_CONFIGURED
-        else -> classifyConfiguredRepository(identities, mappingObservations)
+        else -> classifyConfiguredRepository(liveObservation.identities, mappingObservations)
       }
       VcsRepositoryInspection(index, status)
     }
@@ -63,12 +69,21 @@ internal class VcsRootInspector {
     )
   }
 
-  private fun isStableGitRepository(projectRoot: Path, candidate: Path): Boolean {
-    val canonical = candidate.toRealPath()
-    return canonical != projectRoot &&
-      canonical.startsWith(projectRoot) &&
-      Files.isDirectory(canonical, LinkOption.NOFOLLOW_LINKS) &&
-      Files.isDirectory(canonical.resolve(".git"), LinkOption.NOFOLLOW_LINKS)
+  private fun observeLiveRepository(
+    projectRoot: Path,
+    candidate: Path,
+  ): LiveRepositoryObservation? {
+    if (!Files.exists(candidate, LinkOption.NOFOLLOW_LINKS)) return null
+
+    val liveCanonicalPath = candidate.toRealPath()
+    val isGitRepository = liveCanonicalPath != projectRoot &&
+      liveCanonicalPath.startsWith(projectRoot) &&
+      Files.isDirectory(liveCanonicalPath, LinkOption.NOFOLLOW_LINKS) &&
+      Files.isDirectory(liveCanonicalPath.resolve(".git"), LinkOption.NOFOLLOW_LINKS)
+    return LiveRepositoryObservation(
+      identities = VcsPathIdentity.repositoryIdentities(candidate, liveCanonicalPath),
+      isGitRepository = isGitRepository,
+    )
   }
 
   private fun isRetainedGitRepository(projectRoot: Path, mappingDirectory: String): Boolean {
@@ -108,4 +123,9 @@ internal class VcsRootInspector {
 private data class MappingObservation(
   val mapping: ObservedVcsMapping,
   val identities: Set<String>,
+)
+
+private data class LiveRepositoryObservation(
+  val identities: Set<String>,
+  val isGitRepository: Boolean,
 )

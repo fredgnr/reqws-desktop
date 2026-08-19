@@ -1,10 +1,12 @@
 package com.reqws.goland.vcs
 
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.openapi.vcs.VcsDirectoryMapping
 import com.reqws.goland.manifest.ManifestSnapshot
+import kotlinx.coroutines.CancellationException
 
 internal interface VcsInspectionPlatform {
   fun isGitAvailable(): Boolean
@@ -54,6 +56,10 @@ internal class ReqwsVcsDiagnosticsService(project: Project) {
         emptyList()
       }
       inspector.inspect(snapshot, gitAvailable, mappings)
+    } catch (exception: ProcessCanceledException) {
+      throw exception
+    } catch (exception: CancellationException) {
+      throw exception
     } catch (_: Exception) {
       VcsRootInspection.inspectionFailed()
     }

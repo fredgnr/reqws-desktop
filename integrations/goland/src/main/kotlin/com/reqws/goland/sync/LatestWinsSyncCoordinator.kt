@@ -14,7 +14,24 @@ import kotlinx.coroutines.launch
 
 internal enum class SyncTrigger {
   AUTOMATIC,
+  TRUST_TRANSITION,
   MANUAL,
+}
+
+internal val SyncTrigger.requiresReconciliation: Boolean
+  get() = this != SyncTrigger.AUTOMATIC
+
+/** Keeps explicit user intent ahead of an automatic trust-transition replay. */
+internal fun mergeReconcileTrigger(
+  current: SyncTrigger?,
+  incoming: SyncTrigger,
+): SyncTrigger? {
+  if (!incoming.requiresReconciliation) return current
+  return if (current == SyncTrigger.MANUAL || incoming == SyncTrigger.MANUAL) {
+    SyncTrigger.MANUAL
+  } else {
+    SyncTrigger.TRUST_TRANSITION
+  }
 }
 
 internal data class SyncCandidate<T>(
@@ -90,7 +107,7 @@ internal class LatestWinsSyncCoordinator<T>(
   private val appliedDigest = AtomicReference<String?>(initialAppliedDigest)
   private val submissionLock = Any()
   private var pendingSubmission: Submission<T>? = null
-  private var manualReconcilePending = false
+  private var pendingReconcileTrigger: SyncTrigger? = null
   private val submissionSignal = Channel<Unit>(Channel.CONFLATED)
   private val worker: Job
 
@@ -108,7 +125,7 @@ internal class LatestWinsSyncCoordinator<T>(
       closed.set(true)
       synchronized(submissionLock) {
         pendingSubmission = null
-        manualReconcilePending = false
+        pendingReconcileTrigger = null
       }
       submissionSignal.close()
     }
@@ -148,14 +165,13 @@ internal class LatestWinsSyncCoordinator<T>(
     if (closed.get() || !worker.isActive) return false
     synchronized(submissionLock) {
       if (closed.get() || !worker.isActive) return false
-      if (submission.trigger == SyncTrigger.MANUAL) manualReconcilePending = true
-      pendingSubmission = if (
-        manualReconcilePending && submission.trigger == SyncTrigger.AUTOMATIC
-      ) {
-        submission.withTrigger(SyncTrigger.MANUAL)
-      } else {
-        submission
-      }
+      pendingReconcileTrigger = mergeReconcileTrigger(
+        pendingReconcileTrigger,
+        submission.trigger,
+      )
+      pendingSubmission = submission.withTrigger(
+        pendingReconcileTrigger ?: submission.trigger,
+      )
     }
     return submissionSignal.trySend(Unit).isSuccess
   }
@@ -166,10 +182,11 @@ internal class LatestWinsSyncCoordinator<T>(
       val submission = synchronized(submissionLock) {
         val next = pendingSubmission ?: return@synchronized null
         pendingSubmission = null
-        if (next is CandidateSubmission && next.trigger == SyncTrigger.MANUAL) {
-          // The explicit intent is consumed only when a valid candidate actually starts apply.
-          // A read failure keeps it sticky so the next valid automatic read still reconciles.
-          manualReconcilePending = false
+        if (next is CandidateSubmission && next.trigger.requiresReconciliation) {
+          // Manual and trust-transition intents are consumed only when a valid candidate actually
+          // starts apply. A read failure keeps either intent sticky so the next valid automatic
+          // read still reconciles; MANUAL wins when both intents overlap.
+          pendingReconcileTrigger = null
         }
         next
       } ?: continue
@@ -190,10 +207,10 @@ internal class LatestWinsSyncCoordinator<T>(
 
   private suspend fun apply(submission: CandidateSubmission<T>) {
     val candidate = submission.candidate
-    // A manual refresh is an explicit reconciliation request: the live project model, VCS
-    // mappings, or filesystem may have drifted even when the manifest bytes are unchanged.
+    // A manual refresh or Safe Mode -> trusted transition is an explicit reconciliation request:
+    // the live project model may have drifted even when the manifest bytes are unchanged.
     if (
-      submission.trigger != SyncTrigger.MANUAL &&
+      !submission.trigger.requiresReconciliation &&
       candidate.digestSha256 == appliedDigest.get()
     ) {
       notifyObserver(
@@ -256,7 +273,7 @@ internal class LatestWinsSyncCoordinator<T>(
     if (!closed.compareAndSet(false, true)) return
     synchronized(submissionLock) {
       pendingSubmission = null
-      manualReconcilePending = false
+      pendingReconcileTrigger = null
     }
     submissionSignal.close()
     worker.cancel(CancellationException("ReqWS sync coordinator disposed"))

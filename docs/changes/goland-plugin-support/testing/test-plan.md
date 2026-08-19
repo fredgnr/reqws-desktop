@@ -2,7 +2,7 @@
 title: GoLand 插件支持测试方案
 type: test-plan
 status: active
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # GoLand 插件支持测试方案
@@ -188,6 +188,7 @@ workspace/
 - project disposed；
 - manual sync races automatic sync；
 - manual same digest 在 clean baseline 下仍重放 apply；重放失败后 baseline 保持 dirty，后续自动同 digest 可继续恢复；
+- trust-transition force reconcile 在 clean same-digest baseline 下仍重放 apply；后到 automatic candidate/read failure 不能消费该 intent，下一份有效 candidate 必须修复 Safe Mode 期间的 model drift；
 - pending manual candidate 后到 automatic candidate 时使用最新内容并继承 manual；后到 automatic read failure 时发布最新失败但保留 intent，下一份 valid automatic candidate 必须以 manual trigger apply，不能应用旧 snapshot 或错误 no-op；
 - exception does not deadlock queue；
 - A 成功、B 部分 apply 后失败、manifest 回退 A 时必须重放 A，不能错误 no-op；
@@ -228,6 +229,7 @@ workspace/
 - workspace 直系、仍存在且带普通 `.git` 目录的 retained repository mapping 分类为 review required；不存在、普通目录、嵌套路径与 workspace 外 mapping 不误报 retained；
 - workspace-root/default 的宽范围 Git mapping 单独提示 review required；workspace 外 unrelated/extra mapping、顺序和 custom `rootSettings` 原样保留且不制造 ownership 诊断；
 - snapshot present 的 filesystem/.git 在检查前实时重查，present→missing 产生降级诊断且不触发 setter；snapshot missing 后目录才出现时，本 candidate 仍保持 missing，下一次 manifest refresh 或 `Sync Now` 读取新 candidate 后恢复，避免 Project Model/UI 分叉；
+- snapshot present 只捕获一次 live canonical identity；manifest 读取后 repository 入口被普通目录替换或 workspace 内 symlink 从 A retarget 到 B 时，旧 A mapping 不得把当前 B 错判为 configured，且旧 A 可按 live 状态报告 inactive；
 - trusted、Safe Mode、startup/restart、manifest add/remove/re-add、automatic refresh、manual `Sync Now` 均不调用 mapping mutation API；
 - 生产源码和 plugin bytecode 不引用 `setDirectoryMappings`、`setDirectoryMapping` 或内部 mapping writer；
 - 纯 inspection、配置事件和只读复核前后 mapping 与 `.idea/vcs.xml` bytes/hash 不变；manifest 驱动 Project Model 后若 GoLand 原生 auto-detection 改变配置，记录 IDE 设置、事件和差异，不归因于 ReqWS writer；
@@ -236,6 +238,7 @@ workspace/
 - 事件丢失时 `Sync Now` 重新读取当前 mappings，但仍不写 VCS；
 - Settings writer、`ModuleVcsDetector` 或其他插件在读取前后改变 mapping 时，ReqWS 最多短暂展示旧诊断，绝不覆盖未知 mapping/`rootSettings`；后续事件或 `Sync Now` 收敛视图；
 - Git plugin disabled 或读取失败时给出明确 degraded 诊断，不 crash、不回滚成功的 Project Model。
+- `ProcessCanceledException` 与 coroutine `CancellationException` 必须原样向上传播，不得转换为 `VCS_DIAGNOSTIC_FAILED` 或发布过期 degraded state。
 
 上述自动化与 GUI 共同证明 ReqWS 没有 VCS writer，因此不再需要 CAS、ownership、pending/tombstone、self-event 或 merge-retry 协议。不得把用户手动 Settings 操作造成的 `.idea/vcs.xml` 变化归因于插件。
 
@@ -247,6 +250,7 @@ workspace/
 - trust/dispose 在 Workspace Model transaction commit boundary 翻转时回滚 model/state；model 已在 trusted 时提交而随后 gate 翻转时不得 mint ownership 或推进 digest；
 - service terminal dispose 与 `Project.isDisposed` 都必须贯穿 Project Model 投影、VCS 读取、refresh 与 overall digest；VCS 没有写阶段；
 - 只在 blocked 期间通过稳定 trust probe 低频检测，trust transition triggers one sync；
+- apply digest D → 进入 Safe Mode → 制造 owned Project Model drift → 恢复 trusted 时必须用独立 force intent 第二次 apply D 并修复漂移，不能走 automatic NoOp；
 - repeated trust event idempotent。
 
 ### 6.4 Tool Window
@@ -275,7 +279,8 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - `shouldBeAvailable` 在 manifest absent 时初始为 false，service state controller 在内容尚未创建时也能在 EDT 完成 absent → create availability transition；
 - state listener 的 initial/publish/dispose 并发按队列顺序通知；`DISPOSED` 后 state 永不回退，晚到 publish 被拒绝；
 - VCS external listener 只能在 callback 依赖全部初始化后注册；registrar 同步触发 callback 时不得访问半初始化 service 或递归注册；
-- 并发 refresh 必须等注册完成后才进入读取；registration 与 dispose 交错时 late handle 恰好关闭一次，终态后不得泄漏 listener 或重新进入读取；
+- VCS external listener 只在首个有效 candidate 后注册，并在注册完成后立即复检同一 snapshot；普通非 ReqWS project 永不注册，手工发布 VCS event 也不触发 `READING`、manifest read 或 state churn；
+- 并发 refresh 若跨过首次 listener registration，必须通过 registration version 识别窗口并在发布前复检当前 snapshot；registration 与 dispose 交错时 late handle 恰好关闭一次，终态后不得泄漏 listener 或重新进入读取；
 - dispose 后 watcher、debounce、trust probe 和 coordinator 均停止。
 
 ## 7. Plugin Verifier 与构建
@@ -457,7 +462,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-2026-08-18 当前源码候选已在 JDK 21 下通过 220 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `d4ee9ee6352cf8a8c0ee3ca7e198fb37357f967ca881644dcd0c1790136b7652`，大小 394,894 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
+2026-08-19 当前源码候选已在 JDK 21 下通过 234 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9f4cd27f6198c35c2ad765dd2266704f8f7560422b6d2ec3d739067bc178b8d5`，大小 406,954 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
 
 dated verification 建议结构：
 

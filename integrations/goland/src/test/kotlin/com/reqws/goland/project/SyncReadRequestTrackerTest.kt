@@ -8,6 +8,70 @@ import org.junit.Test
 
 class SyncReadRequestTrackerTest {
   @Test
+  fun `a newer automatic read inherits trust-transition intent from a stale generation`() {
+    val tracker = SyncReadRequestTracker()
+    val transition = tracker.begin(SyncTrigger.TRUST_TRANSITION)
+    val automatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var offeredTrigger: SyncTrigger? = null
+
+    assertFalse(tracker.offerCandidateIfLatest(transition) { true })
+    assertEquals(SyncTrigger.TRUST_TRANSITION, tracker.pendingReconcileIntent())
+    assertTrue(
+      tracker.offerCandidateIfLatest(automatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.TRUST_TRANSITION, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `a read failure preserves trust-transition intent for the next valid candidate`() {
+    val tracker = SyncReadRequestTracker()
+    tracker.begin(SyncTrigger.TRUST_TRANSITION)
+    val failedAutomatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var failureTrigger: SyncTrigger? = null
+
+    assertTrue(
+      tracker.runIfLatest(failedAutomatic) { trigger -> failureTrigger = trigger },
+    )
+    assertEquals(SyncTrigger.TRUST_TRANSITION, failureTrigger)
+    assertEquals(SyncTrigger.TRUST_TRANSITION, tracker.pendingReconcileIntent())
+
+    val recoveredAutomatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var recoveryTrigger: SyncTrigger? = null
+    assertTrue(
+      tracker.offerCandidateIfLatest(recoveredAutomatic) { trigger ->
+        recoveryTrigger = trigger
+        true
+      },
+    )
+    assertEquals(SyncTrigger.TRUST_TRANSITION, recoveryTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `manual intent wins when it overlaps a trust-transition replay`() {
+    val tracker = SyncReadRequestTracker()
+    tracker.begin(SyncTrigger.TRUST_TRANSITION)
+    tracker.begin(SyncTrigger.MANUAL)
+    val automatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var offeredTrigger: SyncTrigger? = null
+
+    assertTrue(
+      tracker.offerCandidateIfLatest(automatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.MANUAL, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
   fun `a newer automatic read inherits manual intent from a stale generation`() {
     val tracker = SyncReadRequestTracker()
     val manual = tracker.begin(SyncTrigger.MANUAL)

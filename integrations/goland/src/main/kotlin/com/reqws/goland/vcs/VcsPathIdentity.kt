@@ -31,10 +31,9 @@ internal object VcsPathIdentity {
     }
   }
 
-  fun repositoryIdentities(path: Path, canonicalPath: Path?): Set<String> = buildSet {
+  fun repositoryIdentities(path: Path, liveCanonicalPath: Path): Set<String> = buildSet {
     add(lexical(path))
-    canonicalPath?.let { add(lexical(it)) }
-    canonical(path)?.let(::add)
+    add(lexical(liveCanonicalPath))
   }
 
   fun isWithin(projectRoot: Path, identity: String): Boolean = try {

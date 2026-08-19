@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：实现与验证中
-- 更新日期：2026-08-18
+- 更新日期：2026-08-19
 - 实施分支：`feat/goland-plugin-support`
 
 ## 文档
@@ -49,4 +49,4 @@
 
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 已确定新的产品边界：Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。这一取舍从产品路径移除了 whole-list writer 覆盖用户配置的风险。当前源码候选已在 JDK 21 下通过 220 项插件测试、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `d4ee9ee6352cf8a8c0ee3ca7e198fb37357f967ca881644dcd0c1790136b7652`，大小 394,894 bytes。Desktop `npm run check` 同时通过 31 个测试文件、335 项测试。真实 GoLand 的手动 Directory Mappings、平台原生 auto-detection 归因、Project/Search/Go 功能、reopen、规模与 GUI 状态矩阵仍待绑定推送后 exact commit 验收，不能据自动化结果给出 `GO`。[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为旧候选的界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。
+功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 已确定新的产品边界：Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。这一取舍从产品路径移除了 whole-list writer 覆盖用户配置的风险。2026-08-19 当前源码候选进一步确保 Safe Mode 恢复 trusted 后强制重放同 digest Project Model、VCS listener 仅在有效 manifest 后注册并立即复检、每个 present repository 在每次 VCS inspection 中只捕获一次 live filesystem identity，且 VCS diagnostic boundary 不会把取消信号降级为普通诊断。该候选已在 JDK 21 下通过 234 项插件测试、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9f4cd27f6198c35c2ad765dd2266704f8f7560422b6d2ec3d739067bc178b8d5`，大小 406,954 bytes。Desktop `npm run check` 同时通过 31 个测试文件、335 项测试。真实 GoLand 的手动 Directory Mappings、平台原生 auto-detection 归因、Project/Search/Go 功能、reopen、规模与 GUI 状态矩阵仍待绑定推送后 exact commit 验收，不能据自动化结果给出 `GO`。[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为旧候选的界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。

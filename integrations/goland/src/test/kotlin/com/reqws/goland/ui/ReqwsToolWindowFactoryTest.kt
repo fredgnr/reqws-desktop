@@ -18,11 +18,19 @@ class ReqwsToolWindowFactoryTest : BasePlatformTestCase() {
     val projectRoot = Path.of(requireNotNull(project.basePath))
     val manifestPath = ReqwsProjectDetector.manifestPath(projectRoot)
 
+    // Platform tests reuse the project base path across methods in this suite. Establish the
+    // absent-manifest precondition explicitly so service tests that create a valid manifest do not
+    // make this availability assertion order-dependent.
+    Files.deleteIfExists(manifestPath)
     assertFalse(factory.shouldBeAvailable(project))
 
-    Files.createDirectories(manifestPath.parent)
-    Files.writeString(manifestPath, "{}")
+    try {
+      Files.createDirectories(manifestPath.parent)
+      Files.writeString(manifestPath, "{}")
 
-    assertTrue(factory.shouldBeAvailable(project))
+      assertTrue(factory.shouldBeAvailable(project))
+    } finally {
+      Files.deleteIfExists(manifestPath)
+    }
   }
 }

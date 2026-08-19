@@ -2,7 +2,7 @@
 title: GoLand 插件支持探索与实施计划
 type: technical-design
 status: active
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # GoLand 插件支持探索与实施计划
@@ -180,9 +180,9 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 | W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；只读 VCS 当前源码候选已通过 GO-261.25134.147 / GO-262.8665.270 Verifier。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
 | W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
-| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现，并纳入本轮 220 项插件测试。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、跨 read failure 保留的手动与 trust-transition 强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现，并纳入本轮 234 项插件测试。 |
 | W4 | 完成 VCS 与 Desktop 启动 | 产品边界已改为生产零 VCS mutation：插件只读 mappings、显示手动 Directory Mappings 步骤并监听配置事件复核；旧 VCS ownership/lock inert，不自动迁移或清理。实现、项目/结构检查与 261/262 Verifier 已通过，真实 GoLand 手动配置路径待验收。 |
-| W5 | 完成功能、规模和安全验证 | 当前源码候选的 Desktop `npm run check`、220 项插件测试、结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
+| W5 | 完成功能、规模和安全验证 | 2026-08-19 当前源码候选的 Desktop `npm run check`、234 项插件测试、结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -324,6 +324,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - single-flight coordinator；
 - latest-wins pending candidate；
 - 仅同一个 clean coordinator 生命周期内的自动/VFS same-digest 请求 no-op；手动 `Sync Now` 与新 service/reopen 均强制 reconcile；
+- Safe Mode 恢复 trusted 使用独立 force-reconcile intent；它和手动 intent 一样跨 automatic read/candidate/read failure 保留，不能被 same-digest baseline 跳过；
 - temporary missing 的有限 retry；
 - invalid candidate 保留 last good model；
 - project dispose cancellation；
@@ -363,9 +364,11 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 
 - 读取现存 VCS mappings，并按 exact directory last-wins canonicalize，保留 VCS 类型与完整 `rootSettings`；
 - apply/复核前重新检查 snapshot-present repository 的实时 filesystem identity 和普通 `.git` 状态；snapshot-missing 只在下一份完整 candidate 中恢复；
+- snapshot-present repository 每轮只捕获一次 lexical + live canonical identity；containment、`.git` 与 mapping 比对复用同一结果，snapshot 旧 canonical target 不参与 live configured 判定；
 - 把活动 repository 分类为 configured、missing 或 wrong-VCS，把已移除但仍有 mapping 的 repository 分类为 retained/review required；
 - Tool Window 展示 Settings → Version Control → Directory Mappings 手动步骤；不新增未经实现验证的跳转按钮；
-- 配置变化 listener 只使诊断失效并提交后台复核；同步注册 callback、dispose 和事件丢失由 lifecycle/`Sync Now` 回归覆盖；
+- 配置变化 listener 只在首个有效 candidate 后注册，注册完成后立即对同一 snapshot 再做一次只读 inspection；普通项目不订阅，配置事件只使诊断失效并提交后台复核；同步注册 callback、dispose 和事件丢失由 lifecycle/`Sync Now` 回归覆盖；
+- VCS inspection 原样传播 `ProcessCanceledException` 与 coroutine cancellation，只把真实读取/分类异常映射为稳定 degraded 诊断；
 - 删除所有 mapping setter、self-event、revision/quiescence merge writer、Git repository manager 强制刷新和 VCS ownership writer；
 - `.idea/reqws-vcs-ownership.json` 与 lock 不读取、不迁移、不压缩、不自动删除；
 - 保留所有用户 mapping、顺序和 `rootSettings`；
@@ -409,6 +412,9 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - command/args 分离并使用 `shell: false`；
 - app missing、root missing、spawn error、non-zero exit 有稳定错误；
 - missing/wrong-VCS/retained Git Root 产生明确、可执行的手动 Directory Mappings 诊断；用户配置后事件自动复核，`Sync Now` 可在丢事件时重新检查；
+- 普通非 ReqWS project 不注册 VCS listener或因 VCS event 进入 `READING`；首个有效 candidate 的注册后复检能观察注册窗口内的最新 mappings；
+- Safe Mode 恢复 trusted 后，即使 manifest digest 未变，也会强制重放 Project Model 并修复 blocked 期间的 live drift；
+- 目录替换/symlink retarget 不会把 snapshot 旧 canonical target 与 live identity 混合成 configured；取消信号不被降级诊断吞掉；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh、manual sync 与 restart 的 ReqWS 调用链均没有 VCS mutation API；
 - 用户 mapping、顺序、VCS 类型与 `rootSettings` 不被 ReqWS writer 覆盖；Project Model 触发的 GoLand 原生 auto-detection 另行记录和归因；
 - 生产源码不引用 mapping setter 或 VCS ownership writer；旧 ownership/lock 文件保持 inert 且不自动清理；

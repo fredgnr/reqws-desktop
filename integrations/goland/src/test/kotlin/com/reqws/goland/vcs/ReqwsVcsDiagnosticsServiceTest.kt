@@ -1,5 +1,6 @@
 package com.reqws.goland.vcs
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.openapi.vcs.VcsDirectoryMapping
 import com.intellij.openapi.vcs.VcsRootSettings
@@ -12,6 +13,7 @@ import com.reqws.goland.manifest.WorkspaceRepository
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
+import kotlinx.coroutines.CancellationException
 import org.jdom.Element
 
 class ReqwsVcsDiagnosticsServiceTest : BasePlatformTestCase() {
@@ -33,6 +35,42 @@ class ReqwsVcsDiagnosticsServiceTest : BasePlatformTestCase() {
       result.workspaceDiagnostics,
     )
     assertEquals("VCS_DIAGNOSTIC_FAILED", result.stableErrorCode())
+  }
+
+  fun testPropagatesProcessCancellationFromTheVcsPlatform() {
+    val cancellation = ProcessCanceledException()
+    val platform = object : VcsInspectionPlatform {
+      override fun isGitAvailable(): Boolean = throw cancellation
+
+      override fun getDirectoryMappings(): List<VcsDirectoryMapping> = error("unreachable")
+    }
+
+    val thrown = org.junit.Assert.assertThrows(ProcessCanceledException::class.java) {
+      ReqwsVcsDiagnosticsService.inspectWithPlatform(
+        snapshot(projectRoot(), emptyList()),
+        platform,
+      )
+    }
+
+    assertSame(cancellation, thrown)
+  }
+
+  fun testPropagatesCoroutineCancellationFromTheVcsPlatform() {
+    val cancellation = CancellationException("cancelled")
+    val platform = object : VcsInspectionPlatform {
+      override fun isGitAvailable(): Boolean = true
+
+      override fun getDirectoryMappings(): List<VcsDirectoryMapping> = throw cancellation
+    }
+
+    val thrown = org.junit.Assert.assertThrows(CancellationException::class.java) {
+      ReqwsVcsDiagnosticsService.inspectWithPlatform(
+        snapshot(projectRoot(), emptyList()),
+        platform,
+      )
+    }
+
+    assertSame(cancellation, thrown)
   }
 
   fun testDoesNotReadMappingsWhenGitIntegrationIsUnavailable() {

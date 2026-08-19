@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # ReqWS 开发指南
@@ -201,9 +201,9 @@ cd integrations/goland
 
 `verifyPlugin` 对 GoLand 2026.1.3 和 2026.2 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，实现边界和待验证矩阵见[GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
 
-生产代码使用公开 261 API：保留 GoLand 既有 workspace-root Content Root；每个插件创建的 target exclude 都配一个虚拟 companion marker exclude。Project Model ownership 的权威文件是 `<workspace-root>/.idea/reqws-managed-project-model.json`：每次 mutation 前 verified atomic 写入 managed + recovery claims，同一 JVM 不清 recovery，legacy PSC 只作一次迁移；进程重启后的 cold service 若 target+marker pair 仍完整就保留 recovery 并完成精确删除，只有两者都不存在时才压缩 recovery，partial proof 必须冲突。Manual intent 跨 automatic candidate/read failure 保留到下一份有效 candidate 开始 reconcile；project service 的 terminal dispose probe 贯穿模型、VCS 读取、refresh 与 digest gate。Safe Mode 只通过稳定 `TrustedProjects.isProjectTrusted` 查询，并仅在 blocked 期间低频检查 trust transition；禁止使用 `@Internal`、`@Experimental`、反射或私有 API。
+生产代码使用公开 261 API：保留 GoLand 既有 workspace-root Content Root；每个插件创建的 target exclude 都配一个虚拟 companion marker exclude。Project Model ownership 的权威文件是 `<workspace-root>/.idea/reqws-managed-project-model.json`：每次 mutation 前 verified atomic 写入 managed + recovery claims，同一 JVM 不清 recovery，legacy PSC 只作一次迁移；进程重启后的 cold service 若 target+marker pair 仍完整就保留 recovery 并完成精确删除，只有两者都不存在时才压缩 recovery，partial proof 必须冲突。Manual 与 trust-transition force intent 都要跨后到的 automatic candidate/read failure 保留到下一份有效 candidate 开始 reconcile；Safe Mode 恢复 trusted 不能沿用 same-digest automatic NoOp。project service 的 terminal dispose probe 贯穿模型、VCS 读取、refresh 与 digest gate。Safe Mode 只通过稳定 `TrustedProjects.isProjectTrusted` 查询，并仅在 blocked 期间低频检查 trust transition；禁止使用 `@Internal`、`@Experimental`、反射或私有 API。
 
-VCS 是强制只读边界：production 不得调用 `setDirectoryMappings`、`setDirectoryMapping` 或任何直接/间接 mapping writer，不得主动刷新可改写 Directory Mappings 的内部 detector，也不得直接写 `.idea/vcs.xml`。允许使用公开 API 读取 canonical mappings、保留完整 `rootSettings`、计算 configured/missing/wrong-VCS/retained 诊断，并监听 `VCS_CONFIGURATION_CHANGED` 后提交后台复核。`Sync Now` 会重放 Project Model reconcile，并在 VCS 阶段只重新读取当前 mappings。用户按 Tool Window 提示在 Settings → Version Control → Directory Mappings 手动配置；事件丢失时才用 `Sync Now` 重查。Project Model 更新可能使 GoLand 按其原生用户设置自行运行 auto-detection；插件既不调用也不禁用该平台机制，验证时必须区分平台原生变化与 ReqWS API 调用。
+VCS 是强制只读边界：production 不得调用 `setDirectoryMappings`、`setDirectoryMapping` 或任何直接/间接 mapping writer，不得主动刷新可改写 Directory Mappings 的内部 detector，也不得直接写 `.idea/vcs.xml`。允许使用公开 API 读取 canonical mappings、保留完整 `rootSettings`、计算 configured/missing/wrong-VCS/retained 诊断；repository present 时一次捕获 lexical + live canonical identity并复用于 containment、普通 `.git` 与 mapping 比对，不能混入 manifest snapshot 的旧 canonical target。`VCS_CONFIGURATION_CHANGED` 只在首个有效 manifest candidate 后订阅，注册后立即复检同一 snapshot；普通项目不得因 VCS event 进入 ReqWS 读取。inspection 必须原样传播 IntelliJ/coroutine cancellation。`Sync Now` 会重放 Project Model reconcile，并在 VCS 阶段只重新读取当前 mappings。用户按 Tool Window 提示在 Settings → Version Control → Directory Mappings 手动配置；事件丢失时才用 `Sync Now` 重查。Project Model 更新可能使 GoLand 按其原生用户设置自行运行 auto-detection；插件既不调用也不禁用该平台机制，验证时必须区分平台原生变化与 ReqWS API 调用。
 
 当前实现不建立 VCS ownership 或删除权。未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与匹配 lock 是 inert 文件：production 不读取、不迁移、不压缩，也不自动清理。测试必须证明源码/bytecode 无 ReqWS mapping writer、纯 VCS inspection/配置事件/只读重查不改变 mappings，以及配置事件能自动刷新诊断；manifest 驱动的 Project Model 变化若触发 GoLand 原生 auto-detection，必须单独标记为平台行为，不能伪装成 ReqWS 写入或声称插件能阻止。
 

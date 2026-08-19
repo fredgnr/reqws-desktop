@@ -2,7 +2,7 @@
 title: GoLand 插件支持需求说明
 type: requirements
 status: active
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # GoLand 插件支持需求说明
@@ -105,8 +105,9 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 只删除插件明确拥有且当前不再需要的项目模型条目；VCS Directory Mappings 完全由用户与 GoLand 所有；
 - 生产代码不得调用 VCS mapping mutation API，不得直接写 `.idea/vcs.xml` 或 VCS ownership state；GoLand 原生 auto-detection 仍由 IDE/用户设置控制，插件既不调用也不禁用；旧 `.idea/reqws-vcs-ownership.json` 及其 lock 为 inert 文件，不读取、不迁移、不自动清理；
 - 普通非 ReqWS 项目不受到行为或 UI 干扰；
+- VCS configuration listener 只在首个有效 manifest candidate 后注册；注册后立即复检同一 snapshot，普通非 ReqWS 项目的 VCS 事件不得触发 ReqWS 读取、状态抖动或额外 IO；
 - Safe Mode 下只允许读取和诊断，不修改项目模型或启动外部进程；VCS 在 trusted 与 Safe Mode 下都保持只读。
-- Safe Mode 使用稳定的 `TrustedProjects.isProjectTrusted` 查询；仅在有效 ReqWS project 被阻塞期间低频检查信任状态，转为 trusted 后只提交一次同步，不依赖 261 中的 experimental trust listener。
+- Safe Mode 使用稳定的 `TrustedProjects.isProjectTrusted` 查询；仅在有效 ReqWS project 被阻塞期间低频检查信任状态，转为 trusted 后只提交一次强制 Project Model reconcile，不得因 manifest digest 与 blocked 前相同而 no-op，也不依赖 261 中的 experimental trust listener。
 
 ### 4.4 构建、测试和文档
 
@@ -204,8 +205,9 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 
 - VCS 配置完全由用户和 GoLand 所有；ReqWS 在 trusted、Safe Mode、自动同步、手动同步和重启恢复中都不得调用 mapping mutation API。
 - 对每个存在且为普通 Git repository 的活动路径，精确的 `Git` mapping 视为已配置；同路径非 Git mapping 视为冲突，缺失 mapping 视为待配置。
+- 活动路径的 lexical 与 live canonical filesystem identity 必须在单次 inspection 中捕获并复用；manifest 时点的旧 canonical target 不得与目录替换或 symlink retarget 后的 live identity 合并。
 - 已从 manifest 移除但仍存在的 repository mapping 只显示为待用户复核；插件不得根据历史状态删除它。其他无关 mapping 不影响 ReqWS 项目模型同步，也不得被重排或覆盖。
-- VCS 配置事件触发后台刷新，VCS 阶段始终只读；若同一 service 的 Project Model baseline 尚未建立或因前次失败保持 dirty，该刷新可与本来就需要的 ReqWS-owned Project Model reconcile 合并，但不得写 manifest、VCS mapping 或其他用户项目配置。
+- 只有已经确认有效 manifest 的项目才订阅 VCS 配置事件；事件触发后台刷新且 VCS 阶段始终只读。若同一 service 的 Project Model baseline 尚未建立或因前次失败保持 dirty，该刷新可与本来就需要的 ReqWS-owned Project Model reconcile 合并，但不得写 manifest、VCS mapping 或其他用户项目配置。
 - `Sync Now` 强制重新读取当前 mapping，但不自动 add/remove，不修改 `rootSettings` 或 `.idea/vcs.xml`。
 - 旧开发候选留下的 `.idea/reqws-vcs-ownership.json` 及其 lock 不再是契约输入；插件不读取、不迁移、不压缩，也不自动删除。
 
@@ -228,6 +230,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - 同一项目同一时刻最多一个 apply；
 - apply 期间收到的新内容合并为下一轮最新目标；
 - 同一 live project service/coordinator 生命周期内，只有上一次项目模型 apply 和 VCS 只读快照均完成后，相同 manifest digest 才可跳过自动项目模型重放；VCS 配置事件仍必须触发一次只读复核；
+- `SAFE_MODE_BLOCKED → trusted` 是 same-digest no-op 的明确例外：必须保留一个强制 reconcile intent，直到最新有效 candidate 真正开始 Project Model apply；
 - 原子 rename 产生的多个 VFS 事件合并为一次稳定读取；
 - manifest 临时不存在时有限重试，不因单个 delete 事件立即清空 roots；
 - invalid manifest 保留上次有效状态，并在文件恢复后自动重试；
@@ -245,6 +248,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - 以 50 个活动仓库和 20 个保留仓库作为规模回归；
 - 不允许持续 CPU、无限 indexing、明显 UI freeze 或与事件数量等量的重复 apply；
 - 插件错误不能阻止普通 GoLand 项目打开或使用不相关功能。
+- IntelliJ `ProcessCanceledException` 与 coroutine cancellation 必须原样传播，不得被包装成普通 VCS degraded 诊断后继续发布过期状态。
 
 ### 7.4 兼容性
 
@@ -286,7 +290,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 | GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环。 |
 | GL-09 | manifest 损坏或临时缺失 | 保留上次有效模型，不应用部分数据，并提供稳定诊断和恢复入口。 |
 | GL-10 | 路径攻击 | root mismatch、绝对 relativePath、`..` 或 symlink escape 被拒绝。 |
-| GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新和外部进程动作禁用。 |
+| GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新和外部进程动作禁用；恢复 trusted 后即使 digest 未变也强制重放一次 Project Model，修复 blocked 期间的 live drift。 |
 | GL-12 | 重启恢复 | GoLand 重启后从 manifest 幂等重建项目模型并重新读取 VCS 配置，不依赖 Desktop 正在运行。 |
 | GL-13 | 用户自定义配置 | 插件同步不删除非 ReqWS-owned module/Content Root，并且不调用 API 新增、删除、替换、重排 VCS mapping 或修改 `rootSettings`/`.idea/vcs.xml`；GoLand 原生 auto-detection 的独立行为必须单独记录。 |
 | GL-14 | 50+20 仓库样例 | 同步完成，无重复事件风暴、持续 CPU 或无限 indexing。 |

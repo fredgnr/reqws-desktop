@@ -42,6 +42,33 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
+  fun `trust transition same digest reapplies and restores a drifted projection`() = runBlocking {
+    val attempts = mutableListOf<String>()
+    var projection = ""
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = {
+        attempts += it.value
+        projection = it.value
+      },
+    )
+
+    assertTrue(coordinator.offer(candidate("a")))
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+    projection = "drifted"
+    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.TRUST_TRANSITION))
+    val reapplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+
+    assertEquals(SyncTrigger.TRUST_TRANSITION, reapplied.trigger)
+    assertEquals(listOf("a", "a"), attempts)
+    assertEquals("a", projection)
+    assertEquals("a", coordinator.lastAppliedDigest)
+    coordinator.close()
+  }
+
+  @Test
   fun `automatic same digest remains a no-op after a successful apply`() = runBlocking {
     val applied = mutableListOf<String>()
     val events = eventChannel()
@@ -255,6 +282,80 @@ class LatestWinsSyncCoordinatorTest {
     val recovered = assertEvent<SyncCoordinatorEvent.Applied>(events, "recovered")
     assertEquals(SyncTrigger.MANUAL, recovered.trigger)
     assertEquals(listOf("base", "recovered"), applied)
+    coordinator.close()
+  }
+
+  @Test
+  fun `automatic candidate and read failure preserve pending trust-transition replay`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applied = mutableListOf<String>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base" && applied.isEmpty()) {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applied += candidate.value
+        },
+      )
+
+      coordinator.offer(candidate("base"))
+      firstApplyStarted.await()
+      coordinator.offer(candidate("stale-transition"), SyncTrigger.TRUST_TRANSITION)
+      coordinator.offer(candidate("newer-automatic"), SyncTrigger.AUTOMATIC)
+      coordinator.offerReadFailure(
+        cause = IllegalArgumentException("latest read failed"),
+        trigger = SyncTrigger.AUTOMATIC,
+        digestSha256 = "invalid",
+      )
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val failure = assertEvent<SyncCoordinatorEvent.Failed>(events, "invalid")
+
+      assertEquals(SyncTrigger.TRUST_TRANSITION, failure.trigger)
+      assertEquals(listOf("base"), applied)
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      val replay = assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      assertEquals(SyncTrigger.TRUST_TRANSITION, replay.trigger)
+      assertEquals(listOf("base", "base"), applied)
+      coordinator.close()
+    }
+
+  @Test
+  fun `manual intent wins when trust-transition and automatic candidates coalesce`() = runBlocking {
+    val firstApplyStarted = CompletableDeferred<Unit>()
+    val releaseFirstApply = CompletableDeferred<Unit>()
+    val applied = mutableListOf<String>()
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = { candidate ->
+        if (candidate.value == "base") {
+          firstApplyStarted.complete(Unit)
+          releaseFirstApply.await()
+        }
+        applied += candidate.value
+      },
+    )
+
+    coordinator.offer(candidate("base"))
+    firstApplyStarted.await()
+    coordinator.offer(candidate("trust-old"), SyncTrigger.TRUST_TRANSITION)
+    coordinator.offer(candidate("manual-old"), SyncTrigger.MANUAL)
+    coordinator.offer(candidate("automatic-new"), SyncTrigger.AUTOMATIC)
+    releaseFirstApply.complete(Unit)
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+    val replay = assertEvent<SyncCoordinatorEvent.Applied>(events, "automatic-new")
+
+    assertEquals(SyncTrigger.MANUAL, replay.trigger)
+    assertEquals(listOf("base", "automatic-new"), applied)
     coordinator.close()
   }
 
