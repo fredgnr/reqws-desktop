@@ -4,6 +4,7 @@ import com.intellij.ide.trustedProjects.TrustedProjects
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.reqws.goland.manifest.ManifestErrorCode
 import com.reqws.goland.manifest.ManifestReader
@@ -24,6 +25,7 @@ import java.nio.file.Path
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -368,33 +370,83 @@ class ReqwsProjectService private constructor(
     return try {
       val projectRoot = ReqwsProjectDetector.projectRoot(project)
       val observedVcsRegistrationVersion = currentStartedVcsRegistrationVersion()
+      val previous = state
       val launched = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
-        projectRoot
-          ?.let(ReqwsProjectDetector::canonicalProjectRoot)
-          ?.let(::ensureWatcher)
-        val previous = state
-        val loaded = loadWithRetry(projectRoot, previous)
-        currentCoroutineContext().ensureActive()
-        if (disposed.get()) return@launch
-        acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
+        try {
+          projectRoot
+            ?.let(ReqwsProjectDetector::canonicalProjectRoot)
+            ?.let(::ensureWatcher)
+          val loaded = loadWithRetry(projectRoot, previous)
+          currentCoroutineContext().ensureActive()
+          if (disposed.get()) return@launch
+          acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
+        } catch (failure: ProcessCanceledException) {
+          throw failure
+        } catch (failure: CancellationException) {
+          throw failure
+        } catch (failure: Exception) {
+          publishUnexpectedRefreshFailureIfLatest(request, previous)
+          throw failure
+        }
       }
       job = launched
       // The handler is installed before READING is published, so every exit after generation
       // creation—including cancellation before the coroutine body starts—releases an unaccepted
       // listener owned by the latest request. Accepted lifecycle registrations remain open.
       launched.invokeOnCompletion { cleanup() }
-      publish(
-        state.copy(
-          lifecycle = ReqwsLifecycleState.READING,
-          lastError = null,
-        ),
-      )
+      runtimeOverrides?.beforeReadingPublication?.invoke()
+      val readingPublished = try {
+        readRequests.runIfLatest(request) {
+          publish(
+            previous.copy(
+              lifecycle = ReqwsLifecycleState.READING,
+              lastError = null,
+            ),
+          )
+        }
+      } catch (failure: ProcessCanceledException) {
+        throw failure
+      } catch (failure: CancellationException) {
+        throw failure
+      } catch (failure: Exception) {
+        publishUnexpectedRefreshFailureIfLatest(request, previous)
+        throw failure
+      }
+      if (!readingPublished) {
+        launched.cancel(CancellationException("ReqWS refresh was superseded before start"))
+        return launched
+      }
       launched.start()
       launched
     } catch (failure: Throwable) {
       job?.cancel()
       cleanup()
       throw failure
+    }
+  }
+
+  private fun publishUnexpectedRefreshFailureIfLatest(
+    request: SyncReadRequest,
+    previous: ReqwsProjectState,
+  ) {
+    readRequests.runIfLatest(request) { trigger ->
+      trustMonitor.cancelPending()
+      val failedState = previous.copy(
+        lifecycle = ReqwsLifecycleState.ERROR,
+        lastError = ReqwsProjectError(
+          code = ReqwsStableErrorCode.REFRESH_FAILED,
+          digestSha256 = previous.snapshot?.digestSha256,
+        ),
+      )
+      if (
+        !coordinator.offerReadFailure(
+          cause = ReadStateFailure(failedState),
+          trigger = trigger,
+          digestSha256 = failedState.lastError?.digestSha256,
+        )
+      ) {
+        publish(failedState)
+      }
     }
   }
 
@@ -814,5 +866,6 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val trustPollWaiter: TrustPollWaiter? = null,
   val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
   val vcsInspector: ReqwsVcsInspector? = null,
+  val beforeReadingPublication: (() -> Unit)? = null,
   val beforeVcsCallbackRefresh: (() -> Unit)? = null,
 )

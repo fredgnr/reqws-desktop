@@ -2,14 +2,17 @@ package com.reqws.goland.project
 
 import com.intellij.ide.trustedProjects.TrustedProjects
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
 import com.reqws.goland.projectmodel.ReqwsProjectModelAdapter
+import kotlinx.coroutines.CancellationException
 
 internal object ReqwsStableErrorCode {
   const val PROJECT_MODEL_APPLY_FAILED = "PROJECT_MODEL_APPLY_FAILED"
+  const val REFRESH_FAILED = "REFRESH_FAILED"
   const val OWNERSHIP_CONFLICT = "OWNERSHIP_CONFLICT"
   const val SAFE_MODE_BLOCKED = "SAFE_MODE_BLOCKED"
   const val VCS_CONFIGURATION_MISMATCH = "VCS_CONFIGURATION_MISMATCH"
@@ -47,6 +50,10 @@ internal class ReqwsProjectionApplier(
 
     try {
       projectModel.apply(snapshot)
+    } catch (exception: ProcessCanceledException) {
+      throw exception
+    } catch (exception: CancellationException) {
+      throw exception
     } catch (exception: ProjectModelApplyException) {
       throw mapProjectModelFailure(exception)
     } catch (exception: Exception) {

@@ -1,6 +1,7 @@
 package com.reqws.goland.project
 
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.reqws.goland.sync.SyncCandidateApplier
@@ -22,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class ReqwsProjectServiceTest : BasePlatformTestCase() {
@@ -112,6 +114,68 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         stateHandle.close()
       }
     } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testSupersededRefreshCannotPublishReadingAfterNewerStableState() =
+    verifySupersededRefreshCannotPublishReadingAfterNewerStableState()
+
+  private fun verifySupersededRefreshCannotPublishReadingAfterNewerStableState() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val firstPublicationEntered = CountDownLatch(1)
+    val allowFirstPublication = CountDownLatch(1)
+    val publicationCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val firstReturnedJob = AtomicReference<Job?>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        beforeReadingPublication = {
+          if (publicationCount.incrementAndGet() == 1) {
+            firstPublicationEntered.countDown()
+            check(allowFirstPublication.await(5, TimeUnit.SECONDS)) {
+              "test did not release the superseded READING publication"
+            }
+          }
+        },
+      ),
+    )
+    try {
+      val firstCaller = scope.launch {
+        firstReturnedJob.set(service.refreshAutomatically())
+      }
+      check(firstPublicationEntered.await(5, TimeUnit.SECONDS)) {
+        "first refresh did not reach the READING publication boundary"
+      }
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer refresh while older publication is held",
+      )
+      awaitCondition("newer refresh stable state") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED && applyCount.get() == 1
+      }
+
+      allowFirstPublication.countDown()
+      awaitSuccessfulCompletion(firstCaller, "superseded refresh caller")
+      val superseded = requireNotNull(firstReturnedJob.get())
+      awaitCondition("superseded refresh cancellation") { superseded.isCompleted }
+
+      assertTrue(superseded.isCancelled)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertEquals(1, applyCount.get())
+    } finally {
+      allowFirstPublication.countDown()
       service.dispose()
       scope.cancel()
     }
@@ -922,6 +986,324 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     assertEquals(1, closeCount.get())
   }
 
+  fun testFirstValidRegistrarFailurePublishesStableErrorAndAllowsRegistrationRetry() =
+    verifyFirstValidRegistrarFailurePublishesStableErrorAndAllowsRegistrationRetry()
+
+  private fun verifyFirstValidRegistrarFailurePublishesStableErrorAndAllowsRegistrationRetry() {
+    writeValidManifest()
+    val expectedFailure = IllegalStateException("synthetic isolated VCS registrar failure")
+    val reportedFailure = AtomicReference<Throwable?>()
+    val exceptionHandler = CoroutineExceptionHandler { _, failure ->
+      reportedFailure.compareAndSet(null, failure)
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
+    val registrationCount = AtomicInteger(0)
+    val closeCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar {
+          if (registrationCount.incrementAndGet() == 1) throw expectedFailure
+          AutoCloseable { closeCount.incrementAndGet() }
+        },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "isolated first VCS registrar failure",
+      )
+
+      assertSame(expectedFailure, failure)
+      awaitCondition("isolated VCS registrar failure delivery") {
+        reportedFailure.get() != null && service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      assertSame(expectedFailure, reportedFailure.get())
+      assertEquals(ReqwsLifecycleState.ERROR, service.state.lifecycle)
+      assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
+      assertNull(service.state.snapshot)
+      assertNull(service.state.lastAppliedDigest)
+      assertEquals(1, registrationCount.get())
+      assertEquals(0, applyCount.get())
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "valid refresh after isolated VCS registrar failure",
+      )
+      awaitCondition("registration retry after isolated VCS registrar failure") {
+        registrationCount.get() == 2 &&
+          applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(0, closeCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+    assertEquals(1, closeCount.get())
+  }
+
+  fun testLatestUnexpectedRefreshFailurePublishesStableErrorAndPreservesLastGoodState() =
+    verifyLatestUnexpectedRefreshFailurePublishesStableErrorAndPreservesLastGoodState()
+
+  private fun verifyLatestUnexpectedRefreshFailurePublishesStableErrorAndPreservesLastGoodState() {
+    writeValidManifest()
+    val expectedFailure = IllegalStateException("synthetic refresh failure")
+    val reportedFailure = AtomicReference<Throwable?>()
+    val exceptionHandler = CoroutineExceptionHandler { _, failure ->
+      reportedFailure.compareAndSet(null, failure)
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
+    val failInspection = AtomicBoolean(false)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (failInspection.get()) throw expectedFailure
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before unexpected failure",
+      )
+      awaitCondition("initial state before unexpected refresh failure") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val previousSnapshot = requireNotNull(service.state.snapshot)
+      val previousDigest = requireNotNull(service.state.lastAppliedDigest)
+
+      failInspection.set(true)
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "latest unexpected refresh failure",
+      )
+
+      assertSame(expectedFailure, failure)
+      awaitCondition("unexpected refresh failure delivery") {
+        reportedFailure.get() != null && service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      assertSame(expectedFailure, reportedFailure.get())
+      assertEquals(ReqwsLifecycleState.ERROR, service.state.lifecycle)
+      assertSame(previousSnapshot, service.state.snapshot)
+      assertEquals(previousDigest, service.state.lastAppliedDigest)
+      assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
+      assertEquals(previousSnapshot.digestSha256, service.state.lastError?.digestSha256)
+      assertEquals(1, applyCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testLatestUnexpectedRefreshFailureWinsAfterOlderApplyCompletes() =
+    verifyLatestUnexpectedRefreshFailureWinsAfterOlderApplyCompletes()
+
+  private fun verifyLatestUnexpectedRefreshFailureWinsAfterOlderApplyCompletes() {
+    writeValidManifest()
+    val expectedFailure = IllegalStateException("synthetic refresh failure during older apply")
+    val reportedFailure = AtomicReference<Throwable?>()
+    val exceptionHandler = CoroutineExceptionHandler { _, failure ->
+      reportedFailure.compareAndSet(null, failure)
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
+    val applyStarted = CountDownLatch(1)
+    val allowApply = CountDownLatch(1)
+    val applyCount = AtomicInteger(0)
+    val failInspection = AtomicBoolean(false)
+    val postReleaseStates = CopyOnWriteArrayList<ReqwsLifecycleState>()
+    val recordPostRelease = AtomicBoolean(false)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          applyStarted.countDown()
+          check(allowApply.await(5, TimeUnit.SECONDS)) {
+            "test did not release the older candidate apply"
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (failInspection.get()) throw expectedFailure
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    val stateHandle = service.addListener { next ->
+      if (recordPostRelease.get()) postReleaseStates += next.lifecycle
+    }
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial read before held candidate apply",
+      )
+      check(applyStarted.await(5, TimeUnit.SECONDS)) {
+        "older candidate apply did not start"
+      }
+      awaitCondition("held candidate applying state") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZING
+      }
+      val previousSnapshot = requireNotNull(service.state.snapshot)
+      val previousDigest = service.state.lastAppliedDigest
+
+      failInspection.set(true)
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "latest unexpected failure during older apply",
+      )
+      assertSame(expectedFailure, failure)
+      awaitCondition("held-apply refresh failure delivery") {
+        reportedFailure.get() != null
+      }
+      assertSame(expectedFailure, reportedFailure.get())
+
+      recordPostRelease.set(true)
+      allowApply.countDown()
+      awaitCondition("older candidate completion event") {
+        ReqwsLifecycleState.SYNCHRONIZED in postReleaseStates
+      }
+      awaitCondition("queued latest refresh failure after older apply") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+
+      assertSame(previousSnapshot, service.state.snapshot)
+      assertEquals(previousDigest, service.state.lastAppliedDigest)
+      assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
+      assertEquals(previousSnapshot.digestSha256, service.state.lastError?.digestSha256)
+      assertEquals(1, applyCount.get())
+    } finally {
+      allowApply.countDown()
+      stateHandle.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testReadingListenerFailureCannotLeaveServiceReading() =
+    verifyReadingListenerFailureCannotLeaveServiceReading()
+
+  private fun verifyReadingListenerFailureCannotLeaveServiceReading() {
+    writeValidManifest()
+    val expectedFailure = IllegalStateException("synthetic READING listener failure")
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    val stateHandle = service.addListener { next ->
+      if (next.lifecycle == ReqwsLifecycleState.READING) throw expectedFailure
+    }
+    try {
+      var thrown: Throwable? = null
+      try {
+        service.refreshAutomatically()
+      } catch (failure: Throwable) {
+        thrown = failure
+      }
+
+      assertSame(expectedFailure, thrown)
+      awaitCondition("stable error after READING listener failure") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
+      assertNull(service.state.snapshot)
+      assertNull(service.state.lastAppliedDigest)
+      assertEquals(0, applyCount.get())
+    } finally {
+      stateHandle.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError() =
+    verifyLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError()
+
+  private fun verifyLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val cancelInspection = AtomicBoolean(false)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (cancelInspection.get()) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before process cancellation",
+      )
+      awaitCondition("initial state before process cancellation") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val previousSnapshot = requireNotNull(service.state.snapshot)
+      val previousDigest = requireNotNull(service.state.lastAppliedDigest)
+
+      cancelInspection.set(true)
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "latest refresh process cancellation",
+      )
+
+      assertSame(expectedCancellation, failure)
+      assertEquals(ReqwsLifecycleState.READING, service.state.lifecycle)
+      assertSame(previousSnapshot, service.state.snapshot)
+      assertEquals(previousDigest, service.state.lastAppliedDigest)
+      assertNull(service.state.lastError)
+
+      cancelInspection.set(false)
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "refresh recovery after process cancellation",
+      )
+      awaitCondition("refresh recovery after process cancellation") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(1, applyCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
   fun testCancelledPostRegistrationInspectionClosesProvisionalVcsRegistration() =
     verifyCancelledPostRegistrationInspectionClosesProvisionalVcsRegistration()
 
@@ -1003,6 +1385,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
   private fun verifyCancelledNewerReadClosesOlderProvisionalVcsRegistration() {
     writeValidManifest()
+    val expectedCancellation = CancellationException("cancel newer initial inspection")
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val inspectionCount = AtomicInteger(0)
     val registrationCount = AtomicInteger(0)
@@ -1037,7 +1420,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
                 "test did not release post-registration VCS inspection"
               }
             }
-            3 -> throw CancellationException("cancel newer initial inspection")
+            3 -> throw expectedCancellation
           }
           VcsRootInspection(emptyList(), emptyList())
         },
@@ -1054,7 +1437,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         job = requireNotNull(service.refreshAutomatically()),
         description = "cancelled newer initial inspection",
       )
-      assertTrue(failed is CancellationException)
+      assertSame(expectedCancellation, failed)
       awaitCondition("cancelled latest generation registration rollback") {
         closeCount.get() == 1
       }

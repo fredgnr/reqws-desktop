@@ -1,5 +1,8 @@
 package com.reqws.goland.projectmodel
 
+import com.reqws.goland.persistence.AtomicDirectoryOperations
+import com.reqws.goland.persistence.AtomicFileOperations
+import com.reqws.goland.persistence.NioAtomicFileOperations
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -11,6 +14,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ReqwsManagedModelFileStateTest {
   @Rule
@@ -179,6 +183,44 @@ class ReqwsManagedModelFileStateTest {
     assertFalse(Files.exists(root.resolve(".idea").resolve(REQWS_MODEL_STATE_FILE_NAME)))
   }
 
+  @Test
+  fun `parent replacement while locked cannot redirect managed state persistence`() {
+    val root = root("parent-swap")
+    val idea = root.resolve(".idea")
+    val detached = root.resolve(".idea-detached")
+    val outside = temporaryFolder.newFolder("parent-swap-outside").toPath()
+    val outsideState = outside.resolve(REQWS_MODEL_STATE_FILE_NAME)
+    val outsideLock = outside.resolve(".$REQWS_MODEL_STATE_FILE_NAME.lock")
+    val binding = managedModelStateBinding(WORKSPACE_ID, root)
+    val seeded = VerifiedManagedModelStateRepository(root).write(
+      binding,
+      null,
+      state(binding, EPOCH_A),
+    )
+    Files.writeString(outsideState, "outside-state")
+    val repository = VerifiedManagedModelStateRepository(
+      root,
+      ParentSwapOperations(idea, detached, outside),
+    )
+
+    val failure = assertThrows(ProjectModelApplyException::class.java) {
+      repository.write(
+        binding,
+        seeded.generation,
+        seeded.copy(writerJvmEpoch = EPOCH_B),
+      )
+    }
+
+    assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, failure.code)
+    assertTrue(Files.isSymbolicLink(idea))
+    assertEquals("outside-state", Files.readString(outsideState))
+    assertFalse(Files.exists(outsideLock))
+    val detachedState = Files.readString(detached.resolve(REQWS_MODEL_STATE_FILE_NAME))
+    assertTrue(detachedState.contains("\"generation\":1"))
+    assertTrue(detachedState.contains(EPOCH_B))
+    assertTrue(Files.isRegularFile(detached.resolve(".$REQWS_MODEL_STATE_FILE_NAME.lock")))
+  }
+
   private fun root(name: String): Path {
     val root = temporaryFolder.newFolder(name).toPath().toRealPath()
     Files.createDirectory(root.resolve(".idea"))
@@ -202,6 +244,29 @@ class ReqwsManagedModelFileStateTest {
     managedClaims = managedClaims,
     recoveryClaims = emptyList(),
   )
+
+  private class ParentSwapOperations(
+    private val parent: Path,
+    private val detached: Path,
+    private val outside: Path,
+  ) : AtomicFileOperations {
+    private val swapped = AtomicBoolean()
+
+    override fun openStableDirectory(path: Path): AtomicDirectoryOperations =
+      ParentSwapDirectory(NioAtomicFileOperations.openStableDirectory(path))
+
+    private inner class ParentSwapDirectory(
+      private val delegate: AtomicDirectoryOperations,
+    ) : AtomicDirectoryOperations by delegate {
+      override fun openLockFile(name: Path): FileChannel {
+        if (swapped.compareAndSet(false, true)) {
+          Files.move(parent, detached)
+          Files.createSymbolicLink(parent, outside)
+        }
+        return delegate.openLockFile(name)
+      }
+    }
+  }
 
   companion object {
     private const val WORKSPACE_ID = "ws_test"

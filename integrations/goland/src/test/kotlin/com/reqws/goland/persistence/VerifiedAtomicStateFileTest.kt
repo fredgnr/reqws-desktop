@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.atomic.AtomicBoolean
 
 class VerifiedAtomicStateFileTest {
   @Rule
@@ -112,6 +113,32 @@ class VerifiedAtomicStateFileTest {
   }
 
   @Test
+  fun `parent replacement during write cannot redirect state operations`() {
+    val parent = temporaryFolder.newFolder("parent-swap").toPath()
+    val detached = parent.resolveSibling("parent-swap-detached")
+    val outside = temporaryFolder.newFolder("parent-swap-outside").toPath()
+    val state = parent.resolve("state")
+    val outsideState = outside.resolve("state")
+    val outsideSentinel = outside.resolve("sentinel")
+    Files.writeString(state, "previous")
+    Files.writeString(outsideState, "outside")
+    Files.writeString(outsideSentinel, "untouched")
+
+    val failure = assertThrows(VerifiedAtomicStateFileException::class.java) {
+      stateFile(
+        state,
+        ParentSwapOperations(parent, detached, outside),
+      ).writeAndVerify("replacement")
+    }
+
+    assertTrue(failure.message.orEmpty().contains("identity"))
+    assertTrue(Files.isSymbolicLink(parent))
+    assertEquals("outside", Files.readString(outsideState))
+    assertEquals("untouched", Files.readString(outsideSentinel))
+    assertEquals("replacement", Files.readString(detached.resolve("state")))
+  }
+
+  @Test
   fun `rejects an oversized encoded value before creating a temporary file`() {
     val fixture = fixture()
     val operations = RecordingOperations()
@@ -187,50 +214,93 @@ class VerifiedAtomicStateFileTest {
     val completed = mutableListOf<Stage>()
     private var replaced = false
 
-    override fun requireRealDirectory(path: Path) =
-      NioAtomicFileOperations.requireRealDirectory(path)
-
-    override fun requireAbsentOrRegularFile(path: Path) =
-      NioAtomicFileOperations.requireAbsentOrRegularFile(path)
-
-    override fun readRegularFile(path: Path, maxBytes: Int): ByteArray? {
-      if (replaced) {
-        attempt(Stage.READBACK)
-        readbackOverride?.let { return it.toByteArray(StandardCharsets.UTF_8) }
-      }
-      return NioAtomicFileOperations.readRegularFile(path, maxBytes)
-    }
-
-    override fun createPrivateTempFile(parent: Path, prefix: String, suffix: String): Path =
-      NioAtomicFileOperations.createPrivateTempFile(parent, prefix, suffix)
-
-    override fun write(path: Path, bytes: ByteArray) {
-      attempt(Stage.WRITE)
-      NioAtomicFileOperations.write(path, bytes)
-    }
-
-    override fun forceFile(path: Path) {
-      attempt(Stage.FILE_FORCE)
-      NioAtomicFileOperations.forceFile(path)
-    }
-
-    override fun atomicReplace(source: Path, target: Path) {
-      attempt(Stage.MOVE)
-      NioAtomicFileOperations.atomicReplace(source, target)
-      replaced = true
-    }
-
-    override fun forceDirectory(path: Path) {
-      attempt(Stage.DIRECTORY_FORCE)
-      NioAtomicFileOperations.forceDirectory(path)
-    }
-
-    override fun deleteIfExists(path: Path) = NioAtomicFileOperations.deleteIfExists(path)
+    override fun openStableDirectory(path: Path): AtomicDirectoryOperations =
+      RecordingDirectory(NioAtomicFileOperations.openStableDirectory(path))
 
     private fun attempt(stage: Stage) {
       attempted.add(stage)
       if (failAt == stage) throw IOException("Injected $stage failure")
       completed.add(stage)
+    }
+
+    private inner class RecordingDirectory(
+      private val delegate: AtomicDirectoryOperations,
+    ) : AtomicDirectoryOperations {
+      override fun verifyCurrent() = delegate.verifyCurrent()
+
+      override fun requireAbsentOrRegularFile(name: Path) =
+        delegate.requireAbsentOrRegularFile(name)
+
+      override fun requireAtomicReplaceSupported() = delegate.requireAtomicReplaceSupported()
+
+      override fun readRegularFile(name: Path, maxBytes: Int): ByteArray? {
+        if (replaced) {
+          attempt(Stage.READBACK)
+          readbackOverride?.let { return it.toByteArray(StandardCharsets.UTF_8) }
+        }
+        return delegate.readRegularFile(name, maxBytes)
+      }
+
+      override fun createPrivateTempFile(prefix: String, suffix: String): AtomicTemporaryFile =
+        RecordingTemporaryFile(delegate.createPrivateTempFile(prefix, suffix))
+
+      override fun atomicReplace(source: Path, target: Path) {
+        attempt(Stage.MOVE)
+        delegate.atomicReplace(source, target)
+        replaced = true
+      }
+
+      override fun forceDirectory() {
+        attempt(Stage.DIRECTORY_FORCE)
+        delegate.forceDirectory()
+      }
+
+      override fun openLockFile(name: Path) = delegate.openLockFile(name)
+
+      override fun deleteIfExists(name: Path) = delegate.deleteIfExists(name)
+
+      override fun close() = delegate.close()
+    }
+
+    private inner class RecordingTemporaryFile(
+      private val delegate: AtomicTemporaryFile,
+    ) : AtomicTemporaryFile {
+      override val fileName: Path = delegate.fileName
+
+      override fun write(bytes: ByteArray) {
+        attempt(Stage.WRITE)
+        delegate.write(bytes)
+      }
+
+      override fun force() {
+        attempt(Stage.FILE_FORCE)
+        delegate.force()
+      }
+
+      override fun close() = delegate.close()
+    }
+  }
+
+  private class ParentSwapOperations(
+    private val parent: Path,
+    private val detached: Path,
+    private val outside: Path,
+  ) : AtomicFileOperations {
+    private val swapped = AtomicBoolean()
+
+    override fun openStableDirectory(path: Path): AtomicDirectoryOperations =
+      ParentSwapDirectory(NioAtomicFileOperations.openStableDirectory(path))
+
+    private inner class ParentSwapDirectory(
+      private val delegate: AtomicDirectoryOperations,
+    ) : AtomicDirectoryOperations by delegate {
+      override fun createPrivateTempFile(prefix: String, suffix: String): AtomicTemporaryFile {
+        if (swapped.compareAndSet(false, true)) {
+          Files.move(parent, detached)
+          Files.createSymbolicLink(parent, outside)
+        }
+        return delegate.createPrivateTempFile(prefix, suffix)
+      }
     }
   }
 }

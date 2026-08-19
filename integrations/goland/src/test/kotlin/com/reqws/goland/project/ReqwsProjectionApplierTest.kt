@@ -1,13 +1,17 @@
 package com.reqws.goland.project
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.manifest.RepositoryAvailability
 import com.reqws.goland.manifest.ResolvedRepository
 import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
 import java.nio.file.Path
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -77,6 +81,42 @@ class ReqwsProjectionApplierTest {
     }
 
     assertEquals(false, digestRecorded)
+  }
+
+  @Test
+  fun `propagates coroutine cancellation from the project model without recording a digest`() {
+    val cancellation = CancellationException("cancel project model apply")
+    var digestRecorded = false
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      projectModel = ProjectModelProjection { throw cancellation },
+      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+    )
+
+    val thrown = assertThrows(CancellationException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertSame(cancellation, thrown)
+    assertFalse(digestRecorded)
+  }
+
+  @Test
+  fun `propagates process cancellation from the project model without recording a digest`() {
+    val cancellation = ProcessCanceledException()
+    var digestRecorded = false
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      projectModel = ProjectModelProjection { throw cancellation },
+      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+    )
+
+    val thrown = assertThrows(ProcessCanceledException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertSame(cancellation, thrown)
+    assertFalse(digestRecorded)
   }
 
   private fun snapshot(): ManifestSnapshot {

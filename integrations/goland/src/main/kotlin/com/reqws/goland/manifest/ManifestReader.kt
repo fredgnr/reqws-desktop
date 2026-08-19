@@ -1,23 +1,33 @@
 package com.reqws.goland.manifest
 
+import com.reqws.goland.persistence.StableDirectoryHandle
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
-import java.nio.file.OpenOption
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
 class ManifestReader {
+  private val beforeManifestChannelOpen: () -> Unit
+
+  constructor() {
+    beforeManifestChannelOpen = {}
+  }
+
+  internal constructor(beforeManifestChannelOpen: () -> Unit) {
+    this.beforeManifestChannelOpen = beforeManifestChannelOpen
+  }
+
   fun read(projectRoot: Path): ManifestSnapshot {
     val absoluteProjectRoot = projectRoot.toAbsolutePath().normalize()
-    val canonicalProjectRoot = canonicalProjectRoot(absoluteProjectRoot)
+    val projectRootIdentity = canonicalProjectRoot(absoluteProjectRoot)
+    val canonicalProjectRoot = projectRootIdentity.path
     val manifestPath = absoluteProjectRoot.resolve(MANIFEST_RELATIVE_PATH).normalize()
-    val bytes = readRegularFile(manifestPath, canonicalProjectRoot)
+    val bytes = readRegularFile(projectRootIdentity)
     val digest = sha256(bytes)
     val manifest = try {
       ManifestParser.parse(bytes)
@@ -31,13 +41,19 @@ class ManifestReader {
     }
   }
 
-  private fun canonicalProjectRoot(projectRoot: Path): Path {
+  private fun canonicalProjectRoot(projectRoot: Path): DirectoryIdentity {
     return try {
       val canonical = projectRoot.toRealPath()
-      if (!Files.isDirectory(canonical)) {
+      val attributes = Files.readAttributes(
+        canonical,
+        BasicFileAttributes::class.java,
+        LinkOption.NOFOLLOW_LINKS,
+      )
+      val fileKey = attributes.fileKey()
+      if (attributes.isSymbolicLink || !attributes.isDirectory || fileKey == null) {
         throw ManifestException(ManifestErrorCode.WORKSPACE_ROOT_MISMATCH, field = "rootPath")
       }
-      canonical
+      DirectoryIdentity(path = canonical, fileKey = fileKey)
     } catch (exception: ManifestException) {
       throw exception
     } catch (_: IOException) {
@@ -45,60 +61,44 @@ class ManifestReader {
     }
   }
 
-  private fun readRegularFile(manifestPath: Path, canonicalProjectRoot: Path): ByteArray {
-    val attributes = try {
-      Files.readAttributes(
-        manifestPath,
-        BasicFileAttributes::class.java,
-        LinkOption.NOFOLLOW_LINKS,
-      )
-    } catch (_: NoSuchFileException) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_FOUND)
-    } catch (_: IOException) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
-    }
-    if (attributes.isSymbolicLink || !attributes.isRegularFile) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
-    }
-    if (attributes.size() > ManifestParser.MAX_MANIFEST_BYTES) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_TOO_LARGE)
-    }
-
-    val canonicalManifest = try {
-      // The target itself was already lstat-ed above. Follow parent links here
-      // so both macOS /var -> /private/var aliases and a malicious .reqws
-      // parent symlink are evaluated against the real project root.
-      manifestPath.toRealPath()
-    } catch (_: IOException) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
-    }
-    if (!canonicalManifest.startsWith(canonicalProjectRoot)) {
-      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
-    }
-
-    val options = setOf<OpenOption>(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+  private fun readRegularFile(projectRootIdentity: DirectoryIdentity): ByteArray {
     return try {
-      // Open the already-contained canonical path. Parent-link replacement
-      // after validation cannot redirect this read outside the project root.
-      Files.newByteChannel(canonicalManifest, options).use { channel ->
-        if (channel.size() > ManifestParser.MAX_MANIFEST_BYTES) {
-          throw ManifestException(ManifestErrorCode.MANIFEST_TOO_LARGE)
-        }
-        val output = ByteArrayOutputStream(attributes.size().toInt())
-        val buffer = ByteBuffer.allocate(16 * 1024)
-        var total = 0
-        while (true) {
-          val count = channel.read(buffer)
-          if (count < 0) break
-          if (count == 0) continue
-          total += count
-          if (total > ManifestParser.MAX_MANIFEST_BYTES) {
+      StableDirectoryHandle.open(projectRootIdentity.path).use { rootHandle ->
+        verifyProjectRootHandle(rootHandle, projectRootIdentity)
+        val bytes = rootHandle.openDirectory(".reqws").use { manifestDirectory ->
+          val metadata = manifestDirectory.readEntryAttributes("workspace.json")
+            ?: throw NoSuchFileException("workspace.json")
+          if (metadata.size > ManifestParser.MAX_MANIFEST_BYTES) {
             throw ManifestException(ManifestErrorCode.MANIFEST_TOO_LARGE)
           }
-          output.write(buffer.array(), 0, count)
-          buffer.clear()
+
+          beforeManifestChannelOpen()
+          val opened = manifestDirectory.openExistingFile("workspace.json", writable = false)
+            ?: throw NoSuchFileException("workspace.json")
+          opened.use {
+            val channel = opened.channel
+            if (channel.size() > ManifestParser.MAX_MANIFEST_BYTES) {
+              throw ManifestException(ManifestErrorCode.MANIFEST_TOO_LARGE)
+            }
+            val output = ByteArrayOutputStream(metadata.size.toInt())
+            val buffer = ByteBuffer.allocate(16 * 1024)
+            var total = 0
+            while (true) {
+              val count = channel.read(buffer)
+              if (count < 0) break
+              if (count == 0) continue
+              total += count
+              if (total > ManifestParser.MAX_MANIFEST_BYTES) {
+                throw ManifestException(ManifestErrorCode.MANIFEST_TOO_LARGE)
+              }
+              output.write(buffer.array(), 0, count)
+              buffer.clear()
+            }
+            output.toByteArray()
+          }
         }
-        output.toByteArray()
+        verifyProjectRootHandle(rootHandle, projectRootIdentity)
+        bytes
       }
     } catch (exception: ManifestException) {
       throw exception
@@ -106,6 +106,36 @@ class ManifestReader {
       throw ManifestException(ManifestErrorCode.MANIFEST_NOT_FOUND)
     } catch (_: IOException) {
       throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
+    } catch (_: UnsupportedOperationException) {
+      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
+    } catch (_: SecurityException) {
+      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
+    } catch (_: IllegalArgumentException) {
+      throw ManifestException(ManifestErrorCode.MANIFEST_NOT_REGULAR_FILE)
+    }
+  }
+
+  private fun verifyProjectRootHandle(
+    handle: StableDirectoryHandle,
+    expected: DirectoryIdentity,
+  ) {
+    val current = Files.readAttributes(
+      expected.path,
+      BasicFileAttributes::class.java,
+      LinkOption.NOFOLLOW_LINKS,
+    )
+    if (
+      !current.isDirectory ||
+      current.isSymbolicLink ||
+      current.fileKey() == null ||
+      current.fileKey() != expected.fileKey
+    ) {
+      throw ManifestException(ManifestErrorCode.WORKSPACE_ROOT_MISMATCH, field = "rootPath")
+    }
+    StableDirectoryHandle.open(expected.path).use { currentHandle ->
+      if (!handle.isSameDirectory(currentHandle)) {
+        throw ManifestException(ManifestErrorCode.WORKSPACE_ROOT_MISMATCH, field = "rootPath")
+      }
     }
   }
 
@@ -201,6 +231,11 @@ class ManifestReader {
     MessageDigest.getInstance("SHA-256")
       .digest(bytes)
       .joinToString(separator = "") { byte -> "%02x".format(byte) }
+
+  private data class DirectoryIdentity(
+    val path: Path,
+    val fileKey: Any,
+  )
 
   companion object {
     val MANIFEST_RELATIVE_PATH: Path = Path.of(".reqws", "workspace.json")

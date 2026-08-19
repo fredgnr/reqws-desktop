@@ -1,9 +1,11 @@
 package com.reqws.goland.sync
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -246,6 +248,8 @@ internal class LatestWinsSyncCoordinator<T>(
           digestSha256 = candidate.digestSha256,
         ),
       )
+    } catch (exception: ProcessCanceledException) {
+      throw exception
     } catch (exception: CancellationException) {
       throw exception
     } catch (exception: Exception) {
@@ -264,6 +268,10 @@ internal class LatestWinsSyncCoordinator<T>(
   private fun notifyObserver(event: SyncCoordinatorEvent) {
     try {
       observer.onEvent(event)
+    } catch (exception: ProcessCanceledException) {
+      throw exception
+    } catch (exception: CancellationException) {
+      throw exception
     } catch (_: Exception) {
       // Observability must never terminate the synchronization worker.
     }
@@ -279,8 +287,10 @@ internal class LatestWinsSyncCoordinator<T>(
     worker.cancel(CancellationException("ReqWS sync coordinator disposed"))
   }
 
-  internal suspend fun awaitClosed() {
-    worker.join()
+  internal suspend fun awaitClosed(): Throwable? {
+    val completion = CompletableDeferred<Throwable?>()
+    worker.invokeOnCompletion { cause -> completion.complete(cause) }
+    return completion.await()
   }
 }
 

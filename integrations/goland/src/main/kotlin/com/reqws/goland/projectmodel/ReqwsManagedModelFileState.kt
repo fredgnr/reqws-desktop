@@ -1,19 +1,18 @@
 package com.reqws.goland.projectmodel
 
+import com.reqws.goland.persistence.AtomicFileOperations
 import com.reqws.goland.persistence.AtomicStateCodec
+import com.reqws.goland.persistence.NioAtomicFileOperations
 import com.reqws.goland.persistence.VerifiedAtomicStateFile
 import com.reqws.goland.persistence.VerifiedAtomicStateFileException
 import java.lang.management.ManagementFactory
 import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
-import java.nio.file.NoSuchFileException
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
@@ -61,17 +60,19 @@ internal interface ManagedModelStateRepository {
   ): DurableManagedModelState
 }
 
-internal class VerifiedManagedModelStateRepository(
+internal class VerifiedManagedModelStateRepository @JvmOverloads constructor(
   workspaceRoot: Path,
+  operations: AtomicFileOperations = NioAtomicFileOperations,
 ) : ManagedModelStateRepository {
   private val canonicalWorkspaceRoot = workspaceRoot.toAbsolutePath().normalize()
   private val ideaDirectory = canonicalWorkspaceRoot.resolve(".idea")
-  private val lockFile = ideaDirectory.resolve(".$REQWS_MODEL_STATE_FILE_NAME.lock")
+  private val lockFileName = ideaDirectory.fileSystem.getPath(".$REQWS_MODEL_STATE_FILE_NAME.lock")
   private val stateFile = VerifiedAtomicStateFile(
     file = ideaDirectory.resolve(REQWS_MODEL_STATE_FILE_NAME),
     maxBytes = REQWS_MODEL_STATE_MAX_BYTES,
     codec = DurableManagedModelStateCodec,
     validate = ::validateDurableStateShape,
+    operations = operations,
   )
 
   override fun read(binding: ManagedModelStateBinding): DurableManagedModelState? {
@@ -91,50 +92,34 @@ internal class VerifiedManagedModelStateRepository(
     nextState: DurableManagedModelState,
   ): DurableManagedModelState {
     ensureSafeStateLocation()
-    ensureSafeLockFile()
-    try {
-      FileChannel.open(
-        lockFile,
-        StandardOpenOption.CREATE,
-        StandardOpenOption.WRITE,
-        LinkOption.NOFOLLOW_LINKS,
-      ).use { channel ->
-        val lock = try {
-          channel.tryLock()
-        } catch (exception: OverlappingFileLockException) {
-          null
-        } ?: throw stateIoFailure("Another ReqWS managed-model writer is active.")
-        lock.use {
-          val current = stateFile.read()
-          current?.let { validateDurableState(it, binding) }
-          if (current?.generation != expectedGeneration) {
-            throw stateIoFailure("The ReqWS managed-model state changed concurrently.")
+    return try {
+      stateFile.withStableParent { stable ->
+        stable.requireAbsentOrRegularFile(lockFileName)
+        stable.openLockFile(lockFileName).use { channel ->
+          val lock = try {
+            channel.tryLock()
+          } catch (exception: OverlappingFileLockException) {
+            null
+          } ?: throw stateIoFailure("Another ReqWS managed-model writer is active.")
+          lock.use {
+            val current = stable.read()
+            current?.let { validateDurableState(it, binding) }
+            if (current?.generation != expectedGeneration) {
+              throw stateIoFailure("The ReqWS managed-model state changed concurrently.")
+            }
+            if (expectedGeneration == Long.MAX_VALUE) {
+              throw stateIoFailure("The ReqWS managed-model state generation is exhausted.")
+            }
+            val persisted = nextState.copy(generation = (expectedGeneration ?: -1L) + 1L)
+            validateDurableState(persisted, binding)
+            stable.writeAndVerify(persisted)
+            persisted
           }
-          if (expectedGeneration == Long.MAX_VALUE) {
-            throw stateIoFailure("The ReqWS managed-model state generation is exhausted.")
-          }
-          val persisted = nextState.copy(generation = (expectedGeneration ?: -1L) + 1L)
-          validateDurableState(persisted, binding)
-          stateFile.writeAndVerify(persisted)
-          return persisted
         }
       }
     } catch (exception: Exception) {
       if (exception is ProjectModelApplyException) throw exception
       throw stateIoFailure("Unable to atomically persist the ReqWS managed-model state.", exception)
-    }
-  }
-
-  private fun ensureSafeLockFile() {
-    val attributes = try {
-      Files.readAttributes(lockFile, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-    } catch (_: NoSuchFileException) {
-      return
-    } catch (exception: Exception) {
-      throw stateIoFailure("Unable to verify the ReqWS managed-model lock file.", exception)
-    }
-    if (!attributes.isRegularFile || attributes.isSymbolicLink) {
-      throw stateIoFailure("The ReqWS managed-model lock must be a regular file.")
     }
   }
 

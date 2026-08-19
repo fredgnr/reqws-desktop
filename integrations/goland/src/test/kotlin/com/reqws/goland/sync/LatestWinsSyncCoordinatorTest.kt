@@ -1,15 +1,22 @@
 package com.reqws.goland.sync
 
+import com.intellij.openapi.progress.ProcessCanceledException
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -461,6 +468,38 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
+  fun `coroutine cancellation from the applier terminates the worker without a failed event`() =
+    runBlocking {
+      assertTerminalApplierCancellation(
+        cancellation = CancellationException("cancel coordinator apply"),
+      )
+    }
+
+  @Test
+  fun `process cancellation from the applier terminates the worker without a failed event`() =
+    runBlocking {
+      assertTerminalApplierCancellation(
+        cancellation = ProcessCanceledException(),
+      )
+    }
+
+  @Test
+  fun `coroutine cancellation from the observer terminates the worker before apply`() =
+    runBlocking {
+      assertTerminalObserverCancellation(
+        cancellation = CancellationException("cancel coordinator observer"),
+      )
+    }
+
+  @Test
+  fun `process cancellation from the observer terminates the worker before apply`() =
+    runBlocking {
+      assertTerminalObserverCancellation(
+        cancellation = ProcessCanceledException(),
+      )
+    }
+
+  @Test
   fun `dispose cancels an in-flight candidate and rejects future work`() = runBlocking {
     val applyStarted = CompletableDeferred<Unit>()
     val neverRelease = CompletableDeferred<Unit>()
@@ -533,6 +572,58 @@ class LatestWinsSyncCoordinatorTest {
     applier = SyncCandidateApplier(apply),
     observer = SyncCoordinatorObserver { events.trySend(it) },
   )
+
+  private suspend fun assertTerminalApplierCancellation(
+    cancellation: Throwable,
+  ) {
+    val events = CopyOnWriteArrayList<SyncCoordinatorEvent>()
+    val ownerJob = SupervisorJob()
+    val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = owner,
+      applier = SyncCandidateApplier<String> { throw cancellation },
+      observer = SyncCoordinatorObserver(events::add),
+    )
+    try {
+      assertTrue(coordinator.offer(candidate("cancelled")))
+      val completionCause = withTimeout(5_000) { coordinator.awaitClosed() }
+
+      assertSame(cancellation, completionCause)
+      assertTrue(coordinator.isClosed)
+      assertNull(coordinator.lastAppliedDigest)
+      assertFalse(events.any { event -> event is SyncCoordinatorEvent.Failed })
+      assertFalse(coordinator.offer(candidate("after-cancellation")))
+    } finally {
+      coordinator.close()
+      ownerJob.cancel()
+    }
+  }
+
+  private suspend fun assertTerminalObserverCancellation(
+    cancellation: Throwable,
+  ) {
+    val ownerJob = SupervisorJob()
+    val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = owner,
+      applier = SyncCandidateApplier<String> { applyCount.incrementAndGet() },
+      observer = SyncCoordinatorObserver { throw cancellation },
+    )
+    try {
+      assertTrue(coordinator.offer(candidate("cancelled")))
+      val completionCause = withTimeout(5_000) { coordinator.awaitClosed() }
+
+      assertSame(cancellation, completionCause)
+      assertTrue(coordinator.isClosed)
+      assertEquals(0, applyCount.get())
+      assertNull(coordinator.lastAppliedDigest)
+      assertFalse(coordinator.offer(candidate("after-cancellation")))
+    } finally {
+      coordinator.close()
+      ownerJob.cancel()
+    }
+  }
 
   private suspend inline fun <reified T : SyncCoordinatorEvent> assertEvent(
     events: Channel<SyncCoordinatorEvent>,

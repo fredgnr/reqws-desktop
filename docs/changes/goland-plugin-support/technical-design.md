@@ -337,6 +337,7 @@ ManifestReader
   ├─ 普通文件与大小门禁
   ├─ UTF-8 / JSON / schema validation
   ├─ canonical path containment
+  ├─ stable root/.reqws directory handles
   └─ SHA-256 digest
 
 ReqwsProjectService
@@ -403,6 +404,7 @@ DISPOSED
 转换原则：
 
 - invalid manifest、root mismatch 和 path escape 进入 `ERROR`，保留上次有效模型；
+- latest refresh 的非取消异常进入 `ERROR / REFRESH_FAILED`，恢复进入 `READING` 前的 snapshot 与 applied digest；更新 generation 已胜出时，旧失败不得覆盖新状态；
 - 单个活动仓库 missing 可同步其他有效仓库，整体为 `DEGRADED`；
 - project model 成功但缺失、冲突或仍有 retained Git mapping 时为 `DEGRADED`，提示用户手动配置；
 - model apply 与 VCS 快照读取完成后更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；只有没有 Project Model 或 VCS 诊断时才显示 `SYNCHRONIZED`；
@@ -421,9 +423,9 @@ DISPOSED
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
 - VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只在首个有效 manifest candidate 后 provisional 注册：latest-selection 边界内只预约 epoch，平台 registrar、等待接力和 handle close 均在 read-selection / VCS lifecycle 锁外。只有 latest valid candidate 接受后才成为 lifecycle registration；更新的 valid read 可等待并接力同一 epoch，更新的 inactive/error 在没有任何 accepted valid state 时撤销 epoch，任何 latest read 在接受 valid state 前取消或失败也通过 completion cleanup 撤销；迟到 handle 无法提交并恰好关闭一次。callback 绑定 registration epoch，并把 epoch 校验与 read generation 创建放在同一个 latest-selection 线性化边界；它只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
-- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是终止信号，VCS inspection 必须原样向上传播；只有真实的读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
+- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是终止信号，refresh、Project Model projection、coordinator apply/observer 与 VCS inspection 均必须原样向上传播；它们不得被包装成 apply/diagnostic failure。只有真实的 VCS 读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
 - trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
-- Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
+- Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`。写事务通过平台已提供的公开 JNA POSIX binding，从 `/` 开始逐级 `open/openat(O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)`，把真实 `.idea` 绑定为 stable directory descriptor；routed `Path` 在遍历前后的公开 `unix:dev,ino` 必须同时等于 descriptor 的 native `fstat` identity。lock 校验/打开、state 读取、能力探针、私有 temp 写入与 force、`renameat`、目录 `fsync` 和严格回读全部相对同一 descriptor 完成，末尾重新安全打开原路径并以 native identity 复验。普通文件先以 `O_NOFOLLOW | O_NONBLOCK` 打开并由 `fstat` 确认 regular file，再通过绕过 NIO provider 的 `java.io` fd bridge 取得 `FileChannel`。不支持 local file URI、目标 64-bit macOS/JNA/openat、无法复制 `FileChannel`、缺少稳定 identity 或未通过原子覆盖探针时一律 fail closed；生产代码不得依赖 IntelliJ internal NIO provider API。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
 - 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
 - Tool Window view model 转 Swing component 在 EDT 更新；
 - 同一项目最多一个 apply；pending 只保存最新 candidate。
@@ -514,7 +516,7 @@ ReqwsSynchronization PersistentStateComponent
 - 路径以 workspace-relative 形式保存，读取时重新 containment 校验；
 - 不保存 repository URL、remote 或 Git credential；marker token 是本地随机 ownership nonce，不来自 manifest，也不是访问凭据；
 - planner 计算 `add / keep / remove-owned / conflict`；
-- Project Model ownership 文件在 `.idea` 内使用同目录临时文件、原子替换、大小/版本/schema 校验和回读等值校验；下一份 intent 必须在对应平台 mutation 前验证。任一必需 checkpoint 失败都不得报告模型收敛或推进 digest，也不能退回只更新内存 PSC；
+- Project Model ownership 文件在 `.idea` stable handle 内使用相对 lock、同目录私有临时文件、经运行时探针确认的原子覆盖、文件/目录 force、大小/版本/schema 校验和回读等值校验；`.idea` 路径在事务中被 rename/symlink 替换时，已打开 handle 不得转向替代目录，identity 复验失败后也不得报告模型收敛或推进 digest。下一份 intent 必须在对应平台 mutation 前验证，不能退回只更新内存 PSC；
 - Project Model 每次 mutation 前写入下一份 managed + recovery claims；model transaction 后同 JVM 保留 recovery，使进程在任意终止点都留下可 cold-load 验证的 proof。只有进程重启后的 cold service 从 verified 文件和已序列化 target+marker 得出完整一致结论后才清理 recovery；legacy PSC 只迁移，不再参与写入顺序；
 - 只删除上次由插件记录并且当前不再需要的 Project Model 条目；
 - 现存等价 exclude 只借用，不变成可删除的 ReqWS-owned 条目；
@@ -569,6 +571,7 @@ W3 必须用与 Desktop `writeJsonAtomically` 等价的脚本模拟连续替换�
 插件 Kotlin parser 至少执行：
 
 - 目标存在时必须是普通文件，不跟随 manifest 自身的异常 symlink；
+- project root 与 `.reqws` 必须通过逐级 `openat(..., O_DIRECTORY | O_NOFOLLOW)` 的 stable directory descriptor 打开，`workspace.json` 的 attribute/read 都相对已绑定的 `.reqws` descriptor；属性检查后替换 `.reqws` 为外部 symlink 也不得重定向读取，缺少 native stable-handle / `FileChannel` 能力时 fail closed；
 - size 不超过 1 MiB；
 - UTF-8 JSON object；
 - `schemaVersion == 1`；
@@ -600,6 +603,7 @@ REPOSITORY_PATH_ESCAPE
 REPOSITORY_MISSING
 REPOSITORY_NOT_GIT
 PROJECT_MODEL_APPLY_FAILED
+REFRESH_FAILED
 OWNERSHIP_CONFLICT
 SAFE_MODE_BLOCKED
 VCS_CONFIGURATION_MISMATCH
@@ -778,11 +782,11 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - selected Content Root/Workspace Model strategy；
 - add/remove/re-add；
 - target/companion marker 成对增删、state reload 和独立 JPS exclude 序列化契约；真实 IDE close/reopen 仍由 GUI 覆盖；
-- `.idea/reqws-managed-project-model.json` 的 verified atomic write/readback、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
+- `.idea/reqws-managed-project-model.json` 的 single-stable-handle lock/write/readback、parent rename/symlink swap 拒绝、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
 - VCS configured/missing/wrong-VCS/retained 分类，以及无关 default/extra/custom `rootSettings` mapping 不影响 Project Model 同步；
 - present repository 的 live filesystem identity 单次捕获；目录替换或 workspace 内 symlink retarget 后不得继续使用 manifest snapshot 的旧 canonical target 判断 configured/active；
-- VCS 读取中的 `ProcessCanceledException` 与 coroutine cancellation 原样传播，不转换为普通 degraded 诊断；
+- refresh、projection、coordinator 与 VCS 读取中的 `ProcessCanceledException` / coroutine cancellation 原样传播；latest 非取消 refresh 异常发布 `REFRESH_FAILED` 并恢复旧 snapshot/digest，不停留在 `READING`；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh 与 `Sync Now` 的 ReqWS 生产调用链均没有 mapping setter、直接 `.idea/vcs.xml` 或 VCS ownership state 写入；Project Model 引发的 GoLand 原生 auto-detection 单独归因；
 - VCS 配置事件自动触发复核；同步 registration callback、并发事件、dispose 和丢事件后的 `Sync Now` 只读恢复；
 - 普通非 ReqWS project 不注册 VCS configuration listener；首个有效 candidate 注册后立即复检同一 snapshot，关闭注册前配置变化窗口；首个 valid read 在 registrar 或注册后 inspection 中被更新 inactive/error generation 淘汰时撤销 provisional epoch，迟到 handle 恰好关闭一次；被更新 valid generation 淘汰时由其在 STARTING/STARTED 两阶段接力同一 epoch且成功路径不重复注册，首个 registrar 失败时接力 generation 可重试；

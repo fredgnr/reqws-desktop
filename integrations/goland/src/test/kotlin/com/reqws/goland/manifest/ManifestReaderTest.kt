@@ -96,6 +96,30 @@ class ManifestReaderTest {
   }
 
   @Test
+  fun `parent replacement between validation and open cannot redirect the manifest read`() {
+    val root = newRoot("manifest-parent-race")
+    val outside = newRoot("outside-manifest-race")
+    val insideBytes = manifestJson(root).toByteArray(StandardCharsets.UTF_8)
+    val outsideBytes = manifestJson(root)
+      .replace("Test workspace", "Outside workspace")
+      .toByteArray(StandardCharsets.UTF_8)
+    writeManifest(root, insideBytes)
+    Files.write(outside.resolve("workspace.json"), outsideBytes)
+
+    val racedReader = ManifestReader {
+      val manifestParent = root.resolve(".reqws")
+      Files.move(manifestParent, root.resolve(".reqws-original"))
+      Files.createSymbolicLink(manifestParent, outside)
+    }
+
+    val snapshot = racedReader.read(root)
+
+    assertEquals("Test workspace", snapshot.manifest.name)
+    assertEquals(sha256(insideBytes), snapshot.digestSha256)
+    assertNotEquals(sha256(outsideBytes), snapshot.digestSha256)
+  }
+
+  @Test
   fun `rejects oversized files before parsing`() {
     val root = newRoot("oversized")
     val bytes = ByteArray(ManifestParser.MAX_MANIFEST_BYTES + 1) { ' '.code.toByte() }
