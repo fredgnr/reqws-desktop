@@ -273,7 +273,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 - 当前只支持本地 macOS GoLand，不支持 Windows、Linux、IntelliJ IDEA、Fleet 或 Remote Development。
 - 插件没有签名、Marketplace 分发、自动安装或自动更新。
-- 只读 VCS 当前源码候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；本地 ZIP SHA-256 为 `9f4cd27f6198c35c2ad765dd2266704f8f7560422b6d2ec3d739067bc178b8d5`（406,954 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
+- 只读 VCS 当前源码候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；本地 ZIP SHA-256 为 `4c01bd1af837ee450155dee0af428c4597b3e08960aaab254a9559cd57be3c20`（423,961 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
 - 同步态截图来自旧候选，只覆盖界面布局，不代表手动 Git Root 提示、深色主题、错误、降级、Safe Mode、最窄宽度或完整生命周期已验收。
 
 进一步资料：

@@ -188,7 +188,7 @@ workspace/
 - project disposed；
 - manual sync races automatic sync；
 - manual same digest 在 clean baseline 下仍重放 apply；重放失败后 baseline 保持 dirty，后续自动同 digest 可继续恢复；
-- trust-transition force reconcile 在 clean same-digest baseline 下仍重放 apply；后到 automatic candidate/read failure 不能消费该 intent，下一份有效 candidate 必须修复 Safe Mode 期间的 model drift；
+- trust-transition force reconcile 在 clean same-digest baseline 下仍重放 apply；latest blocked read 在 post-registration inspection 前 arm intent，后到 automatic candidate/read failure 不能消费它；trusted automatic refresh 抢在 poll 前完成时仍必须第二次 apply 同 digest并修复 Safe Mode 期间的 model drift，迟到 poll 不得导致第三次强制重放；
 - pending manual candidate 后到 automatic candidate 时使用最新内容并继承 manual；后到 automatic read failure 时发布最新失败但保留 intent，下一份 valid automatic candidate 必须以 manual trigger apply，不能应用旧 snapshot 或错误 no-op；
 - exception does not deadlock queue；
 - A 成功、B 部分 apply 后失败、manifest 回退 A 时必须重放 A，不能错误 no-op；
@@ -251,6 +251,7 @@ workspace/
 - service terminal dispose 与 `Project.isDisposed` 都必须贯穿 Project Model 投影、VCS 读取、refresh 与 overall digest；VCS 没有写阶段；
 - 只在 blocked 期间通过稳定 trust probe 低频检测，trust transition triggers one sync；
 - apply digest D → 进入 Safe Mode → 制造 owned Project Model drift → 恢复 trusted 时必须用独立 force intent 第二次 apply D 并修复漂移，不能走 automatic NoOp；
+- 固定 trust poll 后，让 trusted automatic refresh 先完成并取消 poll：已在 blocked 接受边界 arm 的 intent 仍必须由该 automatic candidate 继承，第二次 apply D 恰好一次；
 - repeated trust event idempotent。
 
 ### 6.4 Tool Window
@@ -279,8 +280,10 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - `shouldBeAvailable` 在 manifest absent 时初始为 false，service state controller 在内容尚未创建时也能在 EDT 完成 absent → create availability transition；
 - state listener 的 initial/publish/dispose 并发按队列顺序通知；`DISPOSED` 后 state 永不回退，晚到 publish 被拒绝；
 - VCS external listener 只能在 callback 依赖全部初始化后注册；registrar 同步触发 callback 时不得访问半初始化 service 或递归注册；
-- VCS external listener 只在首个有效 candidate 后注册，并在注册完成后立即复检同一 snapshot；普通非 ReqWS project 永不注册，手工发布 VCS event 也不触发 `READING`、manifest read 或 state churn；
-- 并发 refresh 若跨过首次 listener registration，必须通过 registration version 识别窗口并在发布前复检当前 snapshot；registration 与 dispose 交错时 late handle 恰好关闭一次，终态后不得泄漏 listener 或重新进入读取；
+- VCS external listener 只在首个有效 candidate 后 provisional 注册，并在注册完成后立即复检同一 snapshot；latest-selection 边界只预约 epoch，平台 registrar、等待接力与 handle close 在两把 lifecycle 锁外执行，只有通过最终 latest gate 的 valid generation 才接受它。普通非 ReqWS project 永不注册，手工发布 VCS event 也不触发 `READING`、manifest read 或 state churn；
+- 首个 valid read 的 registrar 或注册后 inspection 阻塞时：更新 inactive/error generation 胜出必须立即撤销 provisional epoch，迟到 handle 返回后恰好关闭一次；更新 valid generation 胜出必须在 STARTING/STARTED 阶段接力同一 epoch，成功 registrar 只调用一次，首个 registrar 失败时由接力 generation 重试；释放旧 read 后不得重复 close 或误关已接力 listener；
+- post-registration inspection 抛 cancellation/异常，或更新 generation 在进入 listener preparation 前取消/失败时，latest generation completion cleanup 必须关闭 provisional handle；后续 valid read 可用新 epoch 重新注册。旧 callback 即使已被 publisher snapshot 捕获，其 epoch 校验与 read generation 创建也必须在线性化边界内完成，关闭/重注册后不得触发刷新；
+- 并发 refresh 若跨过首次 listener registration，必须通过 registration version 识别窗口并在发布前复检当前 snapshot；registration 与 dispose 交错时不等待外部 registrar，late handle 恰好关闭一次，终态后不得泄漏 listener 或重新进入读取；
 - dispose 后 watcher、debounce、trust probe 和 coordinator 均停止。
 
 ## 7. Plugin Verifier 与构建
@@ -462,7 +465,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-2026-08-19 当前源码候选已在 JDK 21 下通过 234 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9f4cd27f6198c35c2ad765dd2266704f8f7560422b6d2ec3d739067bc178b8d5`，大小 406,954 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
+2026-08-19 当前源码候选已在 JDK 21 下通过 245 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `4c01bd1af837ee450155dee0af428c4597b3e08960aaab254a9559cd57be3c20`，大小 423,961 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
 
 dated verification 建议结构：
 

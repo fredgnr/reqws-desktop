@@ -8,6 +8,60 @@ import org.junit.Test
 
 class SyncReadRequestTrackerTest {
   @Test
+  fun `a rejected conditional begin does not supersede the current generation`() {
+    val tracker = SyncReadRequestTracker()
+    val current = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    assertEquals(
+      null,
+      tracker.beginIf(SyncTrigger.AUTOMATIC) { false },
+    )
+    assertTrue(tracker.runIfLatest(current) {})
+  }
+
+  @Test
+  fun `an accepted Safe Mode block arms the next automatic candidate`() {
+    val tracker = SyncReadRequestTracker()
+    val blocked = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    assertTrue(
+      tracker.runIfLatestAndArmReconcile(blocked, SyncTrigger.TRUST_TRANSITION) {},
+    )
+    val trustedAutomatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var offeredTrigger: SyncTrigger? = null
+    assertTrue(
+      tracker.offerCandidateIfLatest(trustedAutomatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.TRUST_TRANSITION, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `a stale Safe Mode block cannot arm a newer automatic candidate`() {
+    val tracker = SyncReadRequestTracker()
+    val staleBlocked = tracker.begin(SyncTrigger.AUTOMATIC)
+    val newerAutomatic = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    assertFalse(
+      tracker.runIfLatestAndArmReconcile(staleBlocked, SyncTrigger.TRUST_TRANSITION) {},
+    )
+    var offeredTrigger: SyncTrigger? = null
+    assertTrue(
+      tracker.offerCandidateIfLatest(newerAutomatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.AUTOMATIC, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
   fun `a newer automatic read inherits trust-transition intent from a stale generation`() {
     val tracker = SyncReadRequestTracker()
     val transition = tracker.begin(SyncTrigger.TRUST_TRANSITION)

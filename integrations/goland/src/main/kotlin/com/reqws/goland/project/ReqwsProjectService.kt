@@ -24,10 +24,14 @@ import java.nio.file.Path
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 @Service(Service.Level.PROJECT)
@@ -78,7 +82,10 @@ class ReqwsProjectService private constructor(
     scope = coroutineScope,
     probe = TrustStateProbe(trustGate::isTrusted),
     action = TrustedTransitionAction {
-      requestRefresh(SyncTrigger.TRUST_TRANSITION)
+      // SAFE_MODE_BLOCKED acceptance already arms the forced intent. The poll only wakes a read;
+      // keeping that read automatic prevents a late poll from arming a second replay after an
+      // earlier automatic read has already consumed the transition intent.
+      requestRefresh(SyncTrigger.AUTOMATIC)
     },
     pollMillis = runtimeOverrides?.trustPollMillis
       ?: TrustTransitionMonitor.DEFAULT_POLL_MILLIS,
@@ -88,7 +95,9 @@ class ReqwsProjectService private constructor(
   private val vcsChangeLifecycleLock = Any()
   private var vcsChangeMonitoringState = VcsChangeMonitoringState.NOT_STARTED
   private var vcsChangeRegistrationVersion = 0L
+  private var vcsChangeMonitoringEpoch: VcsChangeMonitoringEpoch? = null
   private var vcsChangeRegistration: AutoCloseable? = null
+  private var vcsChangeMonitoringAccepted = false
   private val vcsChangeRegistrar = runtimeOverrides?.vcsChangeRegistrar
     ?: ReqwsVcsChangeRegistrar { listener ->
       project.service<ReqwsVcsConfigurationMonitor>()
@@ -109,61 +118,213 @@ class ReqwsProjectService private constructor(
   internal fun refreshAutomatically(): Job? = requestRefresh(SyncTrigger.AUTOMATIC)
 
   /** Starts callback registration only after a current read has produced a valid snapshot. */
-  internal fun startVcsChangeMonitoring(
+  internal suspend fun startVcsChangeMonitoring(
     registrar: ReqwsVcsChangeRegistrar = vcsChangeRegistrar,
-  ): VcsChangeMonitoringStart = synchronized(vcsChangeLifecycleLock) {
-    if (disposed.get() || project.isDisposed) {
-      vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
-      val registration = vcsChangeRegistration
-      vcsChangeRegistration = null
-      closeVcsChangeRegistration(registration)
-      return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
+  ): VcsChangeMonitoringStart {
+    val preparation = reserveVcsChangeMonitoringPreparation()
+      ?: return VcsChangeMonitoringStart.UNAVAILABLE
+    val start = startReservedVcsChangeMonitoring(preparation, registrar)
+    if (
+      start == VcsChangeMonitoringStart.UNAVAILABLE ||
+      !completeVcsChangeMonitoringPreparation(preparation, accepted = true)
+    ) {
+      return VcsChangeMonitoringStart.UNAVAILABLE
     }
-    when (vcsChangeMonitoringState) {
-      VcsChangeMonitoringState.STARTED -> {
-        return@synchronized VcsChangeMonitoringStart.ALREADY_STARTED
-      }
-      VcsChangeMonitoringState.DISPOSED -> {
-        return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
-      }
-      // Only a same-thread registrar re-entry can observe STARTING because other callers wait.
-      VcsChangeMonitoringState.STARTING -> {
-        return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
-      }
-      VcsChangeMonitoringState.NOT_STARTED -> Unit
-    }
-
-    vcsChangeMonitoringState = VcsChangeMonitoringState.STARTING
-    val registration = try {
-      registrar.addExternalChangeListener(::handleExternalVcsConfigurationChange)
-    } catch (failure: Throwable) {
-      vcsChangeMonitoringState = if (disposed.get() || project.isDisposed) {
-        VcsChangeMonitoringState.DISPOSED
-      } else {
-        VcsChangeMonitoringState.NOT_STARTED
-      }
-      throw failure
-    }
-
-    // Publish the handle before the terminal recheck. If dispose won while registration was in
-    // progress, this branch owns closing it; otherwise a later dispose takes it under the same lock.
-    vcsChangeRegistration = registration
-    if (disposed.get() || project.isDisposed) {
-      vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
-      vcsChangeRegistration = null
-      closeVcsChangeRegistration(registration)
-      return@synchronized VcsChangeMonitoringStart.UNAVAILABLE
-    }
-
-    vcsChangeMonitoringState = VcsChangeMonitoringState.STARTED
-    vcsChangeRegistrationVersion += 1
-    VcsChangeMonitoringStart.STARTED_NOW
+    return start
   }
 
-  private fun handleExternalVcsConfigurationChange(): Job? {
+  /**
+   * Reserves a registration epoch without invoking the platform registrar. Callers perform this
+   * small state transition at the latest-read boundary, then install or join the listener outside
+   * the read-selection lock. A newer valid read adopts the epoch; a newer invalid read revokes it.
+   */
+  private fun reserveVcsChangeMonitoringPreparation(): VcsChangeMonitoringPreparation? =
+    synchronized(vcsChangeLifecycleLock) {
+      if (disposed.get() || project.isDisposed) return@synchronized null
+      when (vcsChangeMonitoringState) {
+        VcsChangeMonitoringState.DISPOSED -> {
+          return@synchronized null
+        }
+        VcsChangeMonitoringState.NOT_STARTED -> {
+          vcsChangeRegistrationVersion += 1
+          vcsChangeMonitoringEpoch = VcsChangeMonitoringEpoch(
+            registrationVersion = vcsChangeRegistrationVersion,
+          )
+          vcsChangeMonitoringState = VcsChangeMonitoringState.RESERVED
+          vcsChangeMonitoringAccepted = false
+        }
+        VcsChangeMonitoringState.RESERVED,
+        VcsChangeMonitoringState.STARTING,
+        -> {
+          // A newer valid read joins the provisional epoch and can complete its installation.
+        }
+        VcsChangeMonitoringState.STARTED -> Unit
+      }
+
+      VcsChangeMonitoringPreparation(
+        epoch = requireNotNull(vcsChangeMonitoringEpoch),
+      )
+    }
+
+  private suspend fun startReservedVcsChangeMonitoring(
+    preparation: VcsChangeMonitoringPreparation,
+    registrar: ReqwsVcsChangeRegistrar = vcsChangeRegistrar,
+  ): VcsChangeMonitoringStart {
+    val epoch = preparation.epoch
+    while (true) {
+      var attempt: CompletableDeferred<Boolean>? = null
+      val shouldRegister = synchronized(vcsChangeLifecycleLock) {
+        if (
+          disposed.get() ||
+          project.isDisposed ||
+          vcsChangeMonitoringEpoch !== epoch
+        ) {
+          return@synchronized null
+        }
+        when (vcsChangeMonitoringState) {
+          VcsChangeMonitoringState.STARTED -> return VcsChangeMonitoringStart.ALREADY_STARTED
+          VcsChangeMonitoringState.RESERVED -> {
+            vcsChangeMonitoringState = VcsChangeMonitoringState.STARTING
+            attempt = epoch.startAttempt
+            true
+          }
+          VcsChangeMonitoringState.STARTING -> {
+            attempt = epoch.startAttempt
+            false
+          }
+          VcsChangeMonitoringState.NOT_STARTED,
+          VcsChangeMonitoringState.DISPOSED,
+          -> null
+        }
+      }
+      if (shouldRegister == null) return VcsChangeMonitoringStart.UNAVAILABLE
+      val currentAttempt = requireNotNull(attempt)
+      if (!shouldRegister) {
+        if (!currentAttempt.await()) continue
+        return synchronized(vcsChangeLifecycleLock) {
+          if (
+            vcsChangeMonitoringEpoch === epoch &&
+            vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED
+          ) {
+            VcsChangeMonitoringStart.ALREADY_STARTED
+          } else {
+            VcsChangeMonitoringStart.UNAVAILABLE
+          }
+        }
+      }
+
+      val registration = try {
+        registrar.addExternalChangeListener {
+          handleExternalVcsConfigurationChange(epoch.registrationVersion)
+        }
+      } catch (failure: Throwable) {
+        synchronized(vcsChangeLifecycleLock) {
+          if (
+            vcsChangeMonitoringEpoch === epoch &&
+            vcsChangeMonitoringState == VcsChangeMonitoringState.STARTING &&
+            epoch.startAttempt === currentAttempt
+          ) {
+            vcsChangeMonitoringState = VcsChangeMonitoringState.RESERVED
+            epoch.startAttempt = CompletableDeferred()
+            vcsChangeMonitoringAccepted = false
+          }
+        }
+        currentAttempt.complete(false)
+        throw failure
+      }
+
+      val committed = synchronized(vcsChangeLifecycleLock) {
+        if (
+          disposed.get() ||
+          project.isDisposed ||
+          vcsChangeMonitoringEpoch !== epoch ||
+          vcsChangeMonitoringState != VcsChangeMonitoringState.STARTING ||
+          epoch.startAttempt !== currentAttempt
+        ) {
+          false
+        } else {
+          vcsChangeRegistration = registration
+          vcsChangeMonitoringState = VcsChangeMonitoringState.STARTED
+          vcsChangeMonitoringAccepted = false
+          true
+        }
+      }
+      currentAttempt.complete(committed)
+      if (!committed) {
+        closeVcsChangeRegistration(registration)
+        return VcsChangeMonitoringStart.UNAVAILABLE
+      }
+      return VcsChangeMonitoringStart.STARTED_NOW
+    }
+  }
+
+  /**
+   * Keeps a provisional registration alive while a valid read crosses its post-registration
+   * inspection and latest-generation gate. A newer valid read can adopt the same registration;
+   * a newer inactive/error read can revoke an as-yet unaccepted registration immediately.
+   */
+  private fun completeVcsChangeMonitoringPreparation(
+    preparation: VcsChangeMonitoringPreparation,
+    accepted: Boolean,
+  ): Boolean {
+    if (!preparation.completed.compareAndSet(false, true)) return false
+    val acceptedCurrentRegistration = synchronized(vcsChangeLifecycleLock) {
+      if (
+        vcsChangeMonitoringState != VcsChangeMonitoringState.STARTED ||
+        vcsChangeMonitoringEpoch !== preparation.epoch
+      ) {
+        false
+      } else {
+        if (accepted) {
+          vcsChangeMonitoringAccepted = true
+          true
+        } else {
+          false
+        }
+      }
+    }
+    return acceptedCurrentRegistration
+  }
+
+  /** Detaches only a provisional listener; external completion and close run outside both locks. */
+  private fun revokeUnacceptedVcsChangeMonitoring(): VcsChangeMonitoringRevocation? =
+    synchronized(vcsChangeLifecycleLock) {
+      if (
+        vcsChangeMonitoringState in setOf(
+          VcsChangeMonitoringState.RESERVED,
+          VcsChangeMonitoringState.STARTING,
+          VcsChangeMonitoringState.STARTED,
+        ) &&
+        !vcsChangeMonitoringAccepted
+      ) {
+        val currentEpoch = requireNotNull(vcsChangeMonitoringEpoch)
+        val revocation = VcsChangeMonitoringRevocation(
+          startAttempt = currentEpoch.startAttempt,
+          registration = vcsChangeRegistration,
+        )
+        vcsChangeMonitoringState = VcsChangeMonitoringState.NOT_STARTED
+        vcsChangeMonitoringEpoch = null
+        vcsChangeRegistration = null
+        vcsChangeMonitoringAccepted = false
+        revocation
+      } else {
+        null
+      }
+    }
+
+  private fun finishVcsChangeMonitoringRevocation(
+    revocation: VcsChangeMonitoringRevocation?,
+  ) {
+    revocation ?: return
+    revocation.startAttempt.complete(false)
+    closeVcsChangeRegistration(revocation.registration)
+  }
+
+  private fun handleExternalVcsConfigurationChange(registrationVersion: Long): Job? {
     if (disposed.get() || project.isDisposed) return null
     val started = synchronized(vcsChangeLifecycleLock) {
-      vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED
+      vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED &&
+        vcsChangeRegistrationVersion == registrationVersion
     }
     // A registrar may invoke its callback synchronously. The mandatory post-registration
     // inspection covers every change before STARTED, without recursively starting a newer
@@ -173,29 +334,67 @@ class ReqwsProjectService private constructor(
     // model baseline NoOps after publishing fresh diagnostics, while an already-dirty baseline
     // can converge through the normal coordinator.
     return coroutineScope.launch(Dispatchers.IO) {
-      requestRefresh(SyncTrigger.AUTOMATIC)?.join()
+      runtimeOverrides?.beforeVcsCallbackRefresh?.invoke()
+      requestRefresh(
+        trigger = SyncTrigger.AUTOMATIC,
+        requiredVcsRegistrationVersion = registrationVersion,
+      )?.join()
     }
   }
 
-  private fun requestRefresh(trigger: SyncTrigger): Job? {
+  private fun requestRefresh(
+    trigger: SyncTrigger,
+    requiredVcsRegistrationVersion: Long? = null,
+  ): Job? {
     if (disposed.get() || project.isDisposed) return null
-    val projectRoot = ReqwsProjectDetector.projectRoot(project)
-    val request = readRequests.begin(trigger)
-    val observedVcsRegistrationVersion = currentVcsRegistrationVersion()
-    publish(
-      state.copy(
-        lifecycle = ReqwsLifecycleState.READING,
-        lastError = null,
-      ),
-    )
-    return coroutineScope.launch(Dispatchers.IO) {
-      projectRoot
-        ?.let(ReqwsProjectDetector::canonicalProjectRoot)
-        ?.let(::ensureWatcher)
-      val previous = state
-      val loaded = loadWithRetry(projectRoot, previous)
-      if (disposed.get()) return@launch
-      acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
+    val request = if (requiredVcsRegistrationVersion == null) {
+      readRequests.begin(trigger)
+    } else {
+      readRequests.beginIf(trigger) {
+        synchronized(vcsChangeLifecycleLock) {
+          vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED &&
+            vcsChangeRegistrationVersion == requiredVcsRegistrationVersion
+        }
+      } ?: return null
+    }
+    var job: Job? = null
+    val cleanup = {
+      var revocation: VcsChangeMonitoringRevocation? = null
+      readRequests.runIfLatest(request) {
+        revocation = revokeUnacceptedVcsChangeMonitoring()
+      }
+      finishVcsChangeMonitoringRevocation(revocation)
+    }
+    return try {
+      val projectRoot = ReqwsProjectDetector.projectRoot(project)
+      val observedVcsRegistrationVersion = currentStartedVcsRegistrationVersion()
+      val launched = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        projectRoot
+          ?.let(ReqwsProjectDetector::canonicalProjectRoot)
+          ?.let(::ensureWatcher)
+        val previous = state
+        val loaded = loadWithRetry(projectRoot, previous)
+        currentCoroutineContext().ensureActive()
+        if (disposed.get()) return@launch
+        acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
+      }
+      job = launched
+      // The handler is installed before READING is published, so every exit after generation
+      // creation—including cancellation before the coroutine body starts—releases an unaccepted
+      // listener owned by the latest request. Accepted lifecycle registrations remain open.
+      launched.invokeOnCompletion { cleanup() }
+      publish(
+        state.copy(
+          lifecycle = ReqwsLifecycleState.READING,
+          lastError = null,
+        ),
+      )
+      launched.start()
+      launched
+    } catch (failure: Throwable) {
+      job?.cancel()
+      cleanup()
+      throw failure
     }
   }
 
@@ -214,46 +413,98 @@ class ReqwsProjectService private constructor(
     return loaded.withPersistedDigest().withVcsInspection()
   }
 
-  private fun acceptLoadedState(
+  private suspend fun acceptLoadedState(
     loaded: ReqwsProjectState,
     request: SyncReadRequest,
-    observedVcsRegistrationVersion: Long,
+    observedVcsRegistrationVersion: Long?,
   ) {
     when (loaded.lifecycle) {
       ReqwsLifecycleState.INACTIVE -> {
-        readRequests.runIfLatest(request) {
-          trustMonitor.cancelPending()
-          publish(loaded)
+        var revocation: VcsChangeMonitoringRevocation? = null
+        try {
+          readRequests.runIfLatest(request) {
+            trustMonitor.cancelPending()
+            revocation = revokeUnacceptedVcsChangeMonitoring()
+            publish(loaded)
+          }
+        } finally {
+          finishVcsChangeMonitoringRevocation(revocation)
         }
       }
       ReqwsLifecycleState.SAFE_MODE_BLOCKED -> {
-        if (!readRequests.isLatest(request)) return
-        val monitored = prepareValidState(loaded, observedVcsRegistrationVersion) ?: return
-        readRequests.runIfLatest(request) {
-          publish(monitored)
-          trustMonitor.awaitTrusted()
+        var monitoring: VcsChangeMonitoringPreparation? = null
+        if (
+          !readRequests.runIfLatestAndArmReconcile(
+            request = request,
+            trigger = SyncTrigger.TRUST_TRANSITION,
+          ) {
+            monitoring = reserveVcsChangeMonitoringPreparation()
+          }
+        ) {
+          return
+        }
+        val reservedMonitoring = monitoring ?: return
+        val prepared = prepareValidState(
+          loaded = loaded,
+          monitoring = reservedMonitoring,
+          observedVcsRegistrationVersion = observedVcsRegistrationVersion,
+        ) ?: return
+        currentCoroutineContext().ensureActive()
+        val accepted = readRequests.runIfLatest(request) {
+          if (completeVcsChangeMonitoringPreparation(prepared.monitoring, accepted = true)) {
+            publish(prepared.state)
+            trustMonitor.awaitTrusted()
+          }
+        }
+        if (!accepted) {
+          completeVcsChangeMonitoringPreparation(prepared.monitoring, accepted = false)
         }
       }
       ReqwsLifecycleState.ERROR -> {
-        readRequests.runIfLatest(request) { trigger ->
-          trustMonitor.cancelPending()
-          coordinator.offerReadFailure(
-            cause = ReadStateFailure(loaded),
-            trigger = trigger,
-            digestSha256 = loaded.lastError?.digestSha256,
-          )
+        var revocation: VcsChangeMonitoringRevocation? = null
+        try {
+          readRequests.runIfLatest(request) { trigger ->
+            trustMonitor.cancelPending()
+            revocation = revokeUnacceptedVcsChangeMonitoring()
+            coordinator.offerReadFailure(
+              cause = ReadStateFailure(loaded),
+              trigger = trigger,
+              digestSha256 = loaded.lastError?.digestSha256,
+            )
+          }
+        } finally {
+          finishVcsChangeMonitoringRevocation(revocation)
         }
       }
       ReqwsLifecycleState.SYNCHRONIZED,
       ReqwsLifecycleState.DEGRADED,
       -> {
         val snapshot = requireNotNull(loaded.snapshot)
-        if (!readRequests.isLatest(request)) return
-        val monitored = prepareValidState(loaded, observedVcsRegistrationVersion) ?: return
-        readRequests.offerCandidateIfLatest(request) { trigger ->
+        var monitoring: VcsChangeMonitoringPreparation? = null
+        val reserved = readRequests.runIfLatest(request) {
+          monitoring = reserveVcsChangeMonitoringPreparation()
+        }
+        if (!reserved) {
+          return
+        }
+        val reservedMonitoring = monitoring ?: return
+        val prepared = prepareValidState(
+          loaded = loaded,
+          monitoring = reservedMonitoring,
+          observedVcsRegistrationVersion = observedVcsRegistrationVersion,
+        ) ?: return
+        currentCoroutineContext().ensureActive()
+        val accepted = readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
-          rememberCandidate(snapshot.digestSha256, monitored)
-          coordinator.offer(SyncCandidate(snapshot.digestSha256, snapshot), trigger)
+          rememberCandidate(snapshot.digestSha256, prepared.state)
+          val offered = coordinator.offer(SyncCandidate(snapshot.digestSha256, snapshot), trigger)
+          offered && completeVcsChangeMonitoringPreparation(
+            prepared.monitoring,
+            accepted = true,
+          )
+        }
+        if (!accepted) {
+          completeVcsChangeMonitoringPreparation(prepared.monitoring, accepted = false)
         }
       }
       ReqwsLifecycleState.READING,
@@ -349,32 +600,51 @@ class ReqwsProjectService private constructor(
    * Arms the VCS observer only for a valid manifest state. The first registration is followed by
    * a second inspection of these exact snapshot bytes: changes before listener installation are
    * therefore observed by the second read, and later changes are covered by the listener. The
-   * caller performs both latest-read gates; registration and inspection stay outside that lock so
-   * an EDT Sync Now request never waits for VCS IO.
+   * caller performs both latest-read gates. Only the registration epoch is reserved at the first
+   * gate; platform registration and inspection stay outside that lock so an EDT Sync Now request
+   * never waits for VCS IO.
    */
-  private fun prepareValidState(
+  private suspend fun prepareValidState(
     loaded: ReqwsProjectState,
-    observedVcsRegistrationVersion: Long,
-  ): ReqwsProjectState? {
+    monitoring: VcsChangeMonitoringPreparation,
+    observedVcsRegistrationVersion: Long?,
+  ): PreparedValidState? {
     val snapshot = requireNotNull(loaded.snapshot) {
       "VCS monitoring requires a valid manifest snapshot"
     }
-    val start = startVcsChangeMonitoring()
-    if (start == VcsChangeMonitoringStart.UNAVAILABLE) return null
-    val registeredAfterReadStarted =
-      observedVcsRegistrationVersion != currentVcsRegistrationVersion()
-    return if (start == VcsChangeMonitoringStart.STARTED_NOW || registeredAfterReadStarted) {
-      loaded.copy(
-        vcsInspection = vcsInspector.inspect(snapshot),
+    return try {
+      val start = startReservedVcsChangeMonitoring(monitoring)
+      if (start == VcsChangeMonitoringStart.UNAVAILABLE) {
+        completeVcsChangeMonitoringPreparation(monitoring, accepted = false)
+        return null
+      }
+      val registeredAfterReadStarted =
+        observedVcsRegistrationVersion != monitoring.epoch.registrationVersion
+      PreparedValidState(
+        state = if (
+          start == VcsChangeMonitoringStart.STARTED_NOW ||
+          registeredAfterReadStarted
+        ) {
+          loaded.copy(
+            vcsInspection = vcsInspector.inspect(snapshot),
+          )
+        } else {
+          loaded
+        },
+        monitoring = monitoring,
       )
-    } else {
-      loaded
+    } catch (failure: Throwable) {
+      completeVcsChangeMonitoringPreparation(monitoring, accepted = false)
+      throw failure
     }
   }
 
-  private fun currentVcsRegistrationVersion(): Long = synchronized(vcsChangeLifecycleLock) {
-    vcsChangeRegistrationVersion
-  }
+  private fun currentStartedVcsRegistrationVersion(): Long? =
+    synchronized(vcsChangeLifecycleLock) {
+      vcsChangeRegistrationVersion.takeIf {
+        vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED
+      }
+    }
 
   private fun ReqwsProjectState.isRetryableManifestGap(): Boolean =
     lifecycle == ReqwsLifecycleState.ERROR &&
@@ -442,12 +712,21 @@ class ReqwsProjectService private constructor(
     try {
       statePublisher.publish(ReqwsProjectState.DISPOSED)
     } finally {
-      synchronized(vcsChangeLifecycleLock) {
+      val revocation = synchronized(vcsChangeLifecycleLock) {
         vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
-        val registration = vcsChangeRegistration
+        val currentEpoch = vcsChangeMonitoringEpoch
+        val currentRegistration = vcsChangeRegistration
+        vcsChangeMonitoringEpoch = null
         vcsChangeRegistration = null
-        closeVcsChangeRegistration(registration)
+        vcsChangeMonitoringAccepted = false
+        currentEpoch?.let {
+          VcsChangeMonitoringRevocation(
+            startAttempt = it.startAttempt,
+            registration = currentRegistration,
+          )
+        }
       }
+      finishVcsChangeMonitoringRevocation(revocation)
       readRequests.invalidate()
       trustMonitor.close()
       watcherRef.getAndSet(null)?.dispose()
@@ -462,8 +741,30 @@ class ReqwsProjectService private constructor(
     val state: ReqwsProjectState,
   )
 
+  private data class PreparedValidState(
+    val state: ReqwsProjectState,
+    val monitoring: VcsChangeMonitoringPreparation,
+  )
+
+  private data class VcsChangeMonitoringPreparation(
+    val epoch: VcsChangeMonitoringEpoch,
+    val completed: AtomicBoolean = AtomicBoolean(false),
+  )
+
+  private class VcsChangeMonitoringEpoch(
+    val registrationVersion: Long,
+  ) {
+    var startAttempt: CompletableDeferred<Boolean> = CompletableDeferred()
+  }
+
+  private data class VcsChangeMonitoringRevocation(
+    val startAttempt: CompletableDeferred<Boolean>,
+    val registration: AutoCloseable?,
+  )
+
   private enum class VcsChangeMonitoringState {
     NOT_STARTED,
+    RESERVED,
     STARTING,
     STARTED,
     DISPOSED,
@@ -513,4 +814,5 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val trustPollWaiter: TrustPollWaiter? = null,
   val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
   val vcsInspector: ReqwsVcsInspector? = null,
+  val beforeVcsCallbackRefresh: (() -> Unit)? = null,
 )

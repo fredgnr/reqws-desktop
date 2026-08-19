@@ -378,7 +378,7 @@ ReqwsToolWindowFactory
 
 1. 每个有 file-based root 的 project opened 后启动轻量项目服务，并在后台 canonicalize root；
 2. watcher 在第一次读取前安装，因此固定 manifest 尚不存在时也能接收后续 create；项目状态保持 inactive，Tool Window 不显示；
-3. manifest 存在：后台读取、digest 和校验；首个有效 candidate 形成后才注册 VCS configuration listener，并在注册完成后对同一 snapshot 立即再做一次只读 inspection，关闭“读取完成但尚未监听”的窗口；
+3. manifest 存在：后台读取、digest 和校验；首个有效 candidate 形成后才注册 VCS configuration listener，并在注册完成后对同一 snapshot 立即再做一次只读 inspection，关闭“读取完成但尚未监听”的窗口。latest-generation gate 内只预约单调 registration epoch，平台 registrar 与 inspection 均在 read-selection / VCS lifecycle 锁外执行。该 registration 在 latest gate 接受 valid candidate 前保持 provisional；更新的 valid read 可等待并承接同一 epoch，首个 registrar 失败时由仍有效的接力 read 重试；更新的 inactive/error read 若此前从未接受 valid candidate则立即撤销 epoch，仍在运行的 registrar 返回后自行关闭迟到 handle；当前 latest read 的注册后 inspection 取消或失败时同样关闭 provisional handle；
 4. Safe Mode：保存只读 snapshot 和 VCS 检查结果，但不执行 Project Model apply；
 5. trusted：提交首次 Project Model 同步与 VCS 只读检查；
 6. project-level VFS listener 只关注 manifest exact path 及直接父目录；
@@ -408,7 +408,7 @@ DISPOSED
 - model apply 与 VCS 快照读取完成后更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；只有没有 Project Model 或 VCS 诊断时才显示 `SYNCHRONIZED`；
 - 相同 digest 只在同一个 coordinator 生命周期、内存 baseline 仍为 clean 且触发源不是手动 `Sync Now` 时 no-op；
 - 手动 `Sync Now` 始终进入 Project Model reconcile 并重新读取 VCS；它不会 add/remove mapping。若项目模型重放失败，内存 baseline 保持 dirty，使后续自动或手动同 digest 请求继续尝试恢复；
-- `SAFE_MODE_BLOCKED → trusted` 使用独立的 trust-transition force-reconcile intent；即使同一 digest 已有 clean baseline，也必须重放一次 Project Model。该 intent 与手动 intent 一样跨后到的 automatic read/candidate/read failure 保留到最新有效 candidate 真正开始 apply，但不会把 startup、VFS 或 VCS 配置事件误标为强制同步；
+- `SAFE_MODE_BLOCKED → trusted` 使用独立的 trust-transition force-reconcile intent；即使同一 digest 已有 clean baseline，也必须重放一次 Project Model。latest blocked read 在任何可能阻塞的注册后 VCS inspection 前就 arm 该 intent，因此随后抢在 trust poll 前完成的 automatic read 也会继承它；低频 poll 只提交 automatic wake-up，不再次 arm。该 intent 与手动 intent 一样跨后到的 automatic read/candidate/read failure 保留到最新有效 candidate 真正开始 apply，但不会把 startup、VFS 或 VCS 配置事件误标为强制同步；
 - 手动 reconcile intent 跨 manifest read generation 与 pending coalescing 保留：后到的自动 candidate 仍以最新内容为准但继承 manual trigger；后到的 read failure 仍作为最新失败发布，同时 intent 保留到下一份 valid candidate 真正开始 apply，不能通过应用旧 snapshot 隐藏读取错误；
 - 开始应用不同 digest 时先使内存 no-op baseline 失效；若后层失败，回退到先前 digest 也必须重放，不能把部分提交状态误判为 no-op；
 - 文件恢复后自动重新进入 `READING`。
@@ -420,7 +420,7 @@ DISPOSED
 - VFS listener callback 不做阻塞 IO；
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
-- VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只在首个有效 manifest candidate 后注册，只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
+- VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只在首个有效 manifest candidate 后 provisional 注册：latest-selection 边界内只预约 epoch，平台 registrar、等待接力和 handle close 均在 read-selection / VCS lifecycle 锁外。只有 latest valid candidate 接受后才成为 lifecycle registration；更新的 valid read 可等待并接力同一 epoch，更新的 inactive/error 在没有任何 accepted valid state 时撤销 epoch，任何 latest read 在接受 valid state 前取消或失败也通过 completion cleanup 撤销；迟到 handle 无法提交并恰好关闭一次。callback 绑定 registration epoch，并把 epoch 校验与 read generation 创建放在同一个 latest-selection 线性化边界；它只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
 - IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是终止信号，VCS inspection 必须原样向上传播；只有真实的读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
 - trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
 - Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`，通过同目录临时文件、原子替换和回读校验形成 verified atomic 持久化边界。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
@@ -560,7 +560,7 @@ Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target de
 - invalid candidate 保留上次有效模型；
 - manifest 恢复后自动清除可恢复错误；
 - “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 Project Model candidate、重新读取 VCS 与文件系统状态；VCS 阶段始终只读。
-- VCS configuration listener 只能在 callback 所需依赖全部初始化、且首个有效 manifest candidate 已确认后注册；注册完成后立即对该 snapshot 再做一次只读 inspection。普通非 ReqWS project 永不订阅该 listener，配置事件也不会触发 `READING` 或 manifest IO；有效项目中的配置事件不在 callback 读取 manifest 或 mapping，只提交一次后台复核。dispose 后不再接收或提交刷新。
+- VCS configuration listener 只能在 callback 所需依赖全部初始化、且首个有效 manifest candidate 已确认后 provisional 注册；注册完成后立即对该 snapshot 再做一次只读 inspection。第一个 latest gate 只在 `read-selection → VCS-lifecycle` 锁序下预约单调 epoch，随后在两把锁外调用或等待平台 registrar。只有通过最终 latest gate 的 valid candidate 才接受 registration；若该 read 被更新的 valid generation 淘汰，更新 generation 等待并接力同一 epoch，registrar 失败时仍有效的接力 read 可在该 epoch 重试；若被 inactive/error generation 淘汰且此前没有 accepted valid state，则在线性化接受更新状态时撤销 epoch，正在运行的 registrar 返回后拒绝提交并在锁外恰好关闭一次迟到 handle。任何 latest read 在进入/完成 acceptance 前取消或异常结束，也由 generation completion hook 撤销未接受 epoch/handle。callback 的 registration epoch 校验与 read generation 创建使用同一锁序线性化，旧 publisher snapshot 即使已通过前置检查，在关闭或重新注册后也不能唤醒读取。普通非 ReqWS project 永不订阅该 listener，配置事件也不会触发 `READING` 或 manifest IO；有效项目中的配置事件不在 callback 读取 manifest 或 mapping，只提交一次后台复核。dispose 后不再接收或提交刷新。
 
 W3 必须用与 Desktop `writeJsonAtomically` 等价的脚本模拟连续替换、无效 JSON 恢复、100 次快速变化和 project dispose。
 
@@ -666,7 +666,7 @@ Safe Mode 下禁止：
 - 自动执行 repository 内任何代码或构建工具；
 - 以插件代码把项目直接标记为 trusted。
 
-261 的 trust listener 带 `@Experimental`，生产实现不订阅它。插件只使用稳定的 `TrustedProjects.isProjectTrusted(project)`：有效 ReqWS project 在 `SAFE_MODE_BLOCKED` 期间以 1 秒间隔低频检查，观察到用户通过 JetBrains 原生流程完成信任后停止检查，并只向同一串行 coordinator 提交一次 trust-transition force reconcile；该请求不能被 automatic same-digest no-op 跳过。项目 trusted、inactive 或 dispose 后没有常驻轮询；插件不会自行修改 trust。
+261 的 trust listener 带 `@Experimental`，生产实现不订阅它。插件只使用稳定的 `TrustedProjects.isProjectTrusted(project)`：latest valid read 接受 `SAFE_MODE_BLOCKED` 时、且在注册后 VCS inspection 前就 arm 一次 sticky trust-transition force intent；项目 blocked 期间以 1 秒间隔低频检查，poll 观察到用户通过 JetBrains 原生流程完成信任后只提交 automatic wake-up。无论 poll 还是其他 automatic refresh 先读到 trusted，下一份 valid candidate 都继承同一 intent并强制 reconcile；先到的 automatic 会取消 poll，迟到 poll 最多产生 ordinary same-digest no-op，不会再次强制重放。项目 trusted、inactive 或 dispose 后没有常驻轮询；插件不会自行修改 trust。
 
 VCS Directory Mappings 在所有信任状态下都只读；trusted 只决定能否修改 ReqWS-owned Project Model 条目，不会为插件授予任何 VCS 写权限。
 
@@ -785,8 +785,8 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - VCS 读取中的 `ProcessCanceledException` 与 coroutine cancellation 原样传播，不转换为普通 degraded 诊断；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh 与 `Sync Now` 的 ReqWS 生产调用链均没有 mapping setter、直接 `.idea/vcs.xml` 或 VCS ownership state 写入；Project Model 引发的 GoLand 原生 auto-detection 单独归因；
 - VCS 配置事件自动触发复核；同步 registration callback、并发事件、dispose 和丢事件后的 `Sync Now` 只读恢复；
-- 普通非 ReqWS project 不注册 VCS configuration listener；首个有效 candidate 注册后立即复检同一 snapshot，关闭注册前配置变化窗口；
-- Safe Mode 前已应用 digest、blocked 期间出现 model drift、随后恢复 trusted 时，trust-transition force reconcile 必须第二次运行 Project Model 并修复漂移；
+- 普通非 ReqWS project 不注册 VCS configuration listener；首个有效 candidate 注册后立即复检同一 snapshot，关闭注册前配置变化窗口；首个 valid read 在 registrar 或注册后 inspection 中被更新 inactive/error generation 淘汰时撤销 provisional epoch，迟到 handle 恰好关闭一次；被更新 valid generation 淘汰时由其在 STARTING/STARTED 两阶段接力同一 epoch且成功路径不重复注册，首个 registrar 失败时接力 generation 可重试；
+- Safe Mode 前已应用 digest、blocked 期间出现 model drift、随后恢复 trusted 时，trust-transition force reconcile 必须第二次运行 Project Model 并修复漂移；automatic refresh 先于 blocked poll 观察到 trusted 时也必须继承已 arm intent，且 poll/automatic 交错不得导致重复强制重放；
 - 用户 Settings writer、`ModuleVcsDetector` 或其他插件并发改变 mappings 时，ReqWS 只更新诊断，不覆盖 mapping 或 `rootSettings`；
 - 旧 `.idea/reqws-vcs-ownership.json` 与 lock 保持 inert、不读取、不迁移、不自动删除；
 - user module/root preservation 与全部 VCS mapping preservation；
