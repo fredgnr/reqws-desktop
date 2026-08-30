@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：实现与验证中
-- 更新日期：2026-08-19
+- 更新日期：2026-08-30
 - 实施分支：`feat/goland-plugin-support`
 
 ## 文档
@@ -47,6 +47,15 @@
 - 交付记录：不创建。本轮没有发布、安装迁移、回滚或对外交付里程碑。
 - 按次验证报告：已创建。[2026-08-17 GUI 验收报告](testing/verification-2026-08-17.md)记录真实日常 GoLand 结果，并因 project-dispose 异常、Project View 刷新缺口、矩阵未完成和缺少 exact commit 判定为 `NO-GO`。
 
+## 2026-08-30 并发与取消修复的文档分类结论
+
+- 需求说明：更新。补充 stable `.idea` directory-inode writer lock、latest read cancellation 状态恢复和单次 apply cancellation 后同 service 可重试的验收语义。
+- 技术方案与实施计划：更新。记录 native directory `flock`、非业务 cancellation event、稳定状态回滚和 newer-state gate；lock 子文件不再是互斥权威。
+- 测试方案：更新。增加 lock 子文件替换后的第二 repository 同代写入、公开 `Sync Now` 恢复 read cancellation，以及首次 apply PCE 后下一 refresh 成功的确定性回归。
+- 开发指南：更新。维护上述持久化和 lifecycle 不变量，避免后续实现重新引入 replaceable child lock 或一次性 coordinator。
+- 用户指南：仅更新当前自动化验证摘要。Tool Window 操作与错误恢复步骤没有变化，本轮修复既有 `Sync Now` 的可达性。
+- 交付记录和新的按次报告：不创建。本轮没有发布、安装迁移、回滚或新的真实 GUI 执行；自动化结果在当前需求包和测试索引中更新，历史 GUI 报告保持原样。
+
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 已确定新的产品边界：Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。这一取舍从产品路径移除了 whole-list writer 覆盖用户配置的风险。2026-08-19 当前源码候选进一步确保 Safe Mode blocked 边界预先 arm 同 digest 强制重放、automatic refresh 抢在 trust poll 前也不丢 intent，VCS listener 仅在有效 manifest 后以 two-phase epoch provisional 注册并在 latest valid 接受、更新 valid 接力、更新 inactive/error 或 post-registration inspection 失败时安全撤销；manifest 与 Project Model ownership 的文件访问通过 public JNA `openat`/`fstat` 绑定稳定目录 descriptor，父目录 rename/symlink replacement 不能把读取、lock、temp、replace 或 readback 重定向到外部路径；latest 非取消 refresh 异常恢复 last-good snapshot/digest 并最终发布 `REFRESH_FAILED`，projection/coordinator/VCS 中的取消信号原样传播。该候选已在 JDK 21 下通过 260 项插件测试、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `04ef2026309846eaeb108f3911f63503928ce99483b8fee5f92718b4f76f4cc5`，大小 461,713 bytes。Desktop `npm run check` 同时通过 31 个测试文件、335 项测试。真实 GoLand 的手动 Directory Mappings、平台原生 auto-detection 归因、Project/Search/Go 功能、reopen、规模与 GUI 状态矩阵仍待绑定推送后 exact commit 验收，不能据自动化结果给出 `GO`。[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为旧候选的界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。
+功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 已确定新的产品边界：Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。这一取舍从产品路径移除了 whole-list writer 覆盖用户配置的风险。2026-08-30 当前源码候选继续保留 Safe Mode sticky reconcile 和 two-phase VCS listener，并把 Project Model writer 的跨 JVM 互斥绑定到 stable `.idea` directory inode；lock 子文件替换不能绕过 generation fence。service state publisher 原子维护 current/stable/version，latest read 与单次 applier cancellation 仅能 CAS 回滚自己的 `READING`/`SYNCHRONIZING` publication，已胜出的 read/apply/dispose 不会被旧取消覆盖；取消不伪装成业务 failure，公开 `Sync Now` 可在同一 service 恢复。该候选已在 JDK 21 下通过 269 项插件测试、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`，大小 475,296 bytes。Desktop `npm run check` 同时通过 31 个测试文件、335 项测试。真实 GoLand 的手动 Directory Mappings、平台原生 auto-detection 归因、Project/Search/Go 功能、reopen、规模与 GUI 状态矩阵仍待绑定推送后 exact commit 验收，不能据自动化结果给出 `GO`。[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为旧候选的界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。

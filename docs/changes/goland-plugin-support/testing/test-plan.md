@@ -2,7 +2,7 @@
 title: GoLand 插件支持测试方案
 type: test-plan
 status: active
-updated: 2026-08-19
+updated: 2026-08-30
 ---
 
 # GoLand 插件支持测试方案
@@ -192,7 +192,7 @@ workspace/
 - trust-transition force reconcile 在 clean same-digest baseline 下仍重放 apply；latest blocked read 在 post-registration inspection 前 arm intent，后到 automatic candidate/read failure 不能消费它；trusted automatic refresh 抢在 poll 前完成时仍必须第二次 apply 同 digest并修复 Safe Mode 期间的 model drift，迟到 poll 不得导致第三次强制重放；
 - pending manual candidate 后到 automatic candidate 时使用最新内容并继承 manual；后到 automatic read failure 时发布最新失败但保留 intent，下一份 valid automatic candidate 必须以 manual trigger apply，不能应用旧 snapshot 或错误 no-op；
 - exception does not deadlock queue；
-- applier 或 observer 抛出的 `ProcessCanceledException` / coroutine `CancellationException` 以同一实例结束 worker，不发布普通 `Failed` event、不继续接受 candidate；普通 observer exception 仍不能终止同步；
+- applier 抛出的 `ProcessCanceledException` / coroutine `CancellationException` 以同一实例形成非业务 cancellation event，不发布普通 `Failed`、不恢复 clean baseline；owner scope 仍 active 时同一 worker 必须接受并成功 apply 下一 candidate，真正的 scope cancellation/dispose 才关闭 coordinator；普通 observer exception 仍不能终止同步；
 - A 成功、B 部分 apply 后失败、manifest 回退 A 时必须重放 A，不能错误 no-op；
 - 新 coordinator/service 即使读到相同持久摘要也必须重新 apply/reconcile。
 
@@ -207,7 +207,8 @@ workspace/
 - remove retained；
 - re-add；
 - target/companion marker 同事务成对增删；
-- `.idea/reqws-managed-project-model.json` 在单一 verified `.idea` handle 内完成 lock/state 读取、atomic-replace 能力探针、私有 temp write/force、move、directory force 与回读；temp/write/move/readback 任一失败时不得进入 Workspace Model mutation；
+- `.idea/reqws-managed-project-model.json` 在单一 verified `.idea` handle 上先取得绑定 directory inode 的非阻塞跨 JVM exclusive lock，再完成 state 读取、atomic-replace 能力探针、私有 temp write/force、move、directory force 与回读；temp/write/move/readback 任一失败时不得进入 Workspace Model mutation；
+- repository A 持有稳定 `.idea` directory lock 后，rename/unlink 并重建同名 legacy lock 子文件；repository B 用同一 expected generation 写入必须立即失败，A 释放后 B 的旧 generation 仍被拒绝，证明目录项替换不能产生第二把锁或覆盖已撤销 claim；
 - 在 verified `.idea` descriptor 已打开、但 lock 尚未打开前，把 `.idea` rename 并以外部 symlink 替换原路径：事务最终必须以 `INVALID_OWNERSHIP_STATE` 失败，随后 lock 打开、state 读取、temp 创建、move 与回读仍全部留在 detached 原目录，外部 state 不变且不创建外部 lock；独立 atomic-file 用例在真实 temp 创建前执行同类替换；
 - 每次模型变更前 verified 落盘下一份 managed + recovery claims；model commit 失败或 post-commit trust/dispose gate 失败后，同 JVM state 与磁盘都保留 recovery，不得提前清理；
 - 进程重启后的 cold service 从 verified atomic state + 独立最小 `.idea`/`.iml` fixture 的 target/marker proof 收敛：pair 仍完整时保留 recovery 并完成精确删除，target 与 marker 都不存在时才压缩，partial proof 必须冲突；平台测试的 in-memory project 不冒充真实 close/reopen，真实 reopen 仍由 GUI 验收；
@@ -282,7 +283,8 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - Tool Window 对 file-based project 可动态激活，但 ordinary project 不闪现 UI；
 - `shouldBeAvailable` 在 manifest absent 时初始为 false，service state controller 在内容尚未创建时也能在 EDT 完成 absent → create availability transition；
 - state listener 的 initial/publish/dispose 并发按队列顺序通知；`DISPOSED` 后 state 永不回退，晚到 publish 被拒绝；
-- latest refresh 的 registrar/inspection 等非取消异常必须发布 `ERROR / REFRESH_FAILED`，首读失败不伪造 snapshot/digest且允许下一次重新注册；已有 good state 时保留进入 `READING` 前的 snapshot/digest。PCE/coroutine cancellation 原样结束并由后续 refresh 恢复，不发布普通错误；
+- latest refresh 的 registrar/inspection 等非取消异常必须发布 `ERROR / REFRESH_FAILED`，首读失败不伪造 snapshot/digest且允许下一次重新注册；已有 good state 时保留进入 `READING` 前的 snapshot/digest。PCE/coroutine cancellation 以同一实例结束当前 read、不发布普通错误，并在仍为 latest 且 service/project 存活时恢复最近稳定状态；回归必须通过公开 `refresh()`/Tool Window `Sync Now` 路径证明后续成功，不能直接调用内部 automatic refresh；
+- applier 首次抛 PCE/coroutine cancellation 时不发布业务 `Failed`、不永久保留 `SYNCHRONIZING`，同一 service/coordinator 的下一次公开 `refresh()` 必须成功 apply；若取消发生后更新 read 已发布 `READING`，旧 cancellation rollback 不得覆盖更新 generation；
 - VCS external listener 只能在 callback 依赖全部初始化后注册；registrar 同步触发 callback 时不得访问半初始化 service 或递归注册；
 - VCS external listener 只在首个有效 candidate 后 provisional 注册，并在注册完成后立即复检同一 snapshot；latest-selection 边界只预约 epoch，平台 registrar、等待接力与 handle close 在两把 lifecycle 锁外执行，只有通过最终 latest gate 的 valid generation 才接受它。普通非 ReqWS project 永不注册，手工发布 VCS event 也不触发 `READING`、manifest read 或 state churn；
 - 首个 valid read 的 registrar 或注册后 inspection 阻塞时：更新 inactive/error generation 胜出必须立即撤销 provisional epoch，迟到 handle 返回后恰好关闭一次；更新 valid generation 胜出必须在 STARTING/STARTED 阶段接力同一 epoch，成功 registrar 只调用一次，首个 registrar 失败时由接力 generation 重试；释放旧 read 后不得重复 close 或误关已接力 listener；
@@ -418,6 +420,7 @@ W0 固定的阻塞矩阵是：
 | S-11 | Project Model state tamper | 保守恢复，不删除 unknown entries。 |
 | S-12 | real workspace deletion request | 插件没有该能力。 |
 | S-13 | old VCS ownership/lock tamper | 文件保持 inert，不影响诊断、不触发迁移/清理或 mapping 写入。 |
+| S-14 | managed-model lock 子文件在持锁后被替换 | 第二 repository 仍被 stable directory inode lock 拒绝，不能并发提交同一 generation。 |
 
 ## 10. 规模与性能
 
@@ -469,7 +472,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-2026-08-19 当前源码候选已在 JDK 21 下通过 260 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `04ef2026309846eaeb108f3911f63503928ce99483b8fee5f92718b4f76f4cc5`，大小 461,713 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
+2026-08-30 当前源码候选已在 JDK 21 下通过 269 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`，大小 475,296 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。完整插件验证使用一次性 Gradle daemon 强制重跑 `test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin`；31 个 XML suites 均为零 skipped/failure/error。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
 
 dated verification 建议结构：
 

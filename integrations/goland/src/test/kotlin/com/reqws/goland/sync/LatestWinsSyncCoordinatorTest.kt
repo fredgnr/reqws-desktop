@@ -468,17 +468,17 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
-  fun `coroutine cancellation from the applier terminates the worker without a failed event`() =
+  fun `coroutine cancellation from the applier cancels only that submission`() =
     runBlocking {
-      assertTerminalApplierCancellation(
+      assertRecoverableApplierCancellation(
         cancellation = CancellationException("cancel coordinator apply"),
       )
     }
 
   @Test
-  fun `process cancellation from the applier terminates the worker without a failed event`() =
+  fun `process cancellation from the applier cancels only that submission`() =
     runBlocking {
-      assertTerminalApplierCancellation(
+      assertRecoverableApplierCancellation(
         cancellation = ProcessCanceledException(),
       )
     }
@@ -573,26 +573,41 @@ class LatestWinsSyncCoordinatorTest {
     observer = SyncCoordinatorObserver { events.trySend(it) },
   )
 
-  private suspend fun assertTerminalApplierCancellation(
+  private suspend fun assertRecoverableApplierCancellation(
     cancellation: Throwable,
   ) {
     val events = CopyOnWriteArrayList<SyncCoordinatorEvent>()
+    val eventSignal = eventChannel()
+    val attempts = CopyOnWriteArrayList<String>()
     val ownerJob = SupervisorJob()
     val owner = CoroutineScope(ownerJob + Dispatchers.Default)
     val coordinator = LatestWinsSyncCoordinator(
       scope = owner,
-      applier = SyncCandidateApplier<String> { throw cancellation },
-      observer = SyncCoordinatorObserver(events::add),
+      applier = SyncCandidateApplier<String> { candidate ->
+        attempts += candidate.value
+        if (candidate.value == "cancelled") throw cancellation
+      },
+      observer = SyncCoordinatorObserver { event ->
+        events += event
+        eventSignal.trySend(event)
+      },
     )
     try {
       assertTrue(coordinator.offer(candidate("cancelled")))
-      val completionCause = withTimeout(5_000) { coordinator.awaitClosed() }
+      val cancelled = withTimeout(5_000) {
+        assertEvent<SyncCoordinatorEvent.Cancelled>(eventSignal, "cancelled")
+      }
 
-      assertSame(cancellation, completionCause)
-      assertTrue(coordinator.isClosed)
+      assertSame(cancellation, cancelled.cause)
+      assertFalse(coordinator.isClosed)
       assertNull(coordinator.lastAppliedDigest)
       assertFalse(events.any { event -> event is SyncCoordinatorEvent.Failed })
-      assertFalse(coordinator.offer(candidate("after-cancellation")))
+      assertTrue(coordinator.offer(candidate("after-cancellation")))
+      assertEvent<SyncCoordinatorEvent.Applied>(eventSignal, "after-cancellation")
+
+      assertEquals(listOf("cancelled", "after-cancellation"), attempts)
+      assertEquals("after-cancellation", coordinator.lastAppliedDigest)
+      assertFalse(events.any { event -> event is SyncCoordinatorEvent.Failed })
     } finally {
       coordinator.close()
       ownerJob.cancel()

@@ -2,6 +2,7 @@ package com.reqws.goland.projectmodel
 
 import com.reqws.goland.persistence.AtomicDirectoryOperations
 import com.reqws.goland.persistence.AtomicFileOperations
+import com.reqws.goland.persistence.AtomicTemporaryFile
 import com.reqws.goland.persistence.NioAtomicFileOperations
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,6 +15,9 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ReqwsManagedModelFileStateTest {
@@ -184,6 +188,74 @@ class ReqwsManagedModelFileStateTest {
   }
 
   @Test
+  fun `replacing the child lock cannot bypass the stable directory writer lock`() {
+    val root = root("replaced-child-lock")
+    val binding = managedModelStateBinding(WORKSPACE_ID, root)
+    val seeded = VerifiedManagedModelStateRepository(root).write(
+      binding,
+      null,
+      state(binding, EPOCH_A),
+    )
+    val firstWriterHoldingLocks = CountDownLatch(1)
+    val releaseFirstWriter = CountDownLatch(1)
+    val firstRepository = VerifiedManagedModelStateRepository(
+      root,
+      HeldWriterOperations(firstWriterHoldingLocks, releaseFirstWriter),
+    )
+    val executor = Executors.newSingleThreadExecutor()
+
+    try {
+      val firstWrite = executor.submit<DurableManagedModelState> {
+        firstRepository.write(
+          binding,
+          seeded.generation,
+          seeded.copy(writerJvmEpoch = EPOCH_B),
+        )
+      }
+      assertTrue(firstWriterHoldingLocks.await(10, TimeUnit.SECONDS))
+
+      val lock = lockFile(root)
+      val detachedLock = lock.resolveSibling("${lock.fileName}.detached")
+      Files.move(lock, detachedLock)
+      Files.createFile(lock)
+      FileChannel.open(lock, StandardOpenOption.WRITE).use { replacementChannel ->
+        replacementChannel.tryLock().use { replacementLock ->
+          assertTrue("The replacement child inode must be independently lockable", replacementLock != null)
+        }
+      }
+
+      val failure = assertThrows(ProjectModelApplyException::class.java) {
+        VerifiedManagedModelStateRepository(root).write(
+          binding,
+          seeded.generation,
+          seeded.copy(writerJvmEpoch = EPOCH_A),
+        )
+      }
+      assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, failure.code)
+      assertEquals(seeded, VerifiedManagedModelStateRepository(root).read(binding))
+
+      releaseFirstWriter.countDown()
+      val persisted = firstWrite.get(10, TimeUnit.SECONDS)
+      assertEquals(seeded.generation + 1L, persisted.generation)
+      assertEquals(EPOCH_B, persisted.writerJvmEpoch)
+      assertEquals(persisted, VerifiedManagedModelStateRepository(root).read(binding))
+
+      val staleFailure = assertThrows(ProjectModelApplyException::class.java) {
+        VerifiedManagedModelStateRepository(root).write(
+          binding,
+          seeded.generation,
+          seeded.copy(writerJvmEpoch = EPOCH_A),
+        )
+      }
+      assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, staleFailure.code)
+      assertEquals(persisted, VerifiedManagedModelStateRepository(root).read(binding))
+    } finally {
+      releaseFirstWriter.countDown()
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
   fun `parent replacement while locked cannot redirect managed state persistence`() {
     val root = root("parent-swap")
     val idea = root.resolve(".idea")
@@ -264,6 +336,30 @@ class ReqwsManagedModelFileStateTest {
           Files.createSymbolicLink(parent, outside)
         }
         return delegate.openLockFile(name)
+      }
+    }
+  }
+
+  private class HeldWriterOperations(
+    private val firstWriterHoldingLocks: CountDownLatch,
+    private val releaseFirstWriter: CountDownLatch,
+  ) : AtomicFileOperations {
+    private val blocked = AtomicBoolean()
+
+    override fun openStableDirectory(path: Path): AtomicDirectoryOperations =
+      HeldWriterDirectory(NioAtomicFileOperations.openStableDirectory(path))
+
+    private inner class HeldWriterDirectory(
+      private val delegate: AtomicDirectoryOperations,
+    ) : AtomicDirectoryOperations by delegate {
+      override fun createPrivateTempFile(prefix: String, suffix: String): AtomicTemporaryFile {
+        if (blocked.compareAndSet(false, true)) {
+          firstWriterHoldingLocks.countDown()
+          if (!releaseFirstWriter.await(10, TimeUnit.SECONDS)) {
+            throw IllegalStateException("Timed out waiting to release the first writer")
+          }
+        }
+        return delegate.createPrivateTempFile(prefix, suffix)
       }
     }
   }

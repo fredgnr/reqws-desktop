@@ -255,6 +255,9 @@ class VerifiedAtomicStateFileTest {
         delegate.forceDirectory()
       }
 
+      override fun tryAcquireExclusiveLock(): AutoCloseable? =
+        delegate.tryAcquireExclusiveLock()
+
       override fun openLockFile(name: Path) = delegate.openLockFile(name)
 
       override fun deleteIfExists(name: Path) = delegate.deleteIfExists(name)

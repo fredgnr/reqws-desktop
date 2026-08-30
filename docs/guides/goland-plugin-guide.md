@@ -2,7 +2,7 @@
 title: ReqWS GoLand 插件使用指南
 type: guide
 status: active
-updated: 2026-08-19
+updated: 2026-08-30
 ---
 
 # ReqWS GoLand 插件使用指南
@@ -274,7 +274,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 - 当前只支持本地 macOS GoLand，不支持 Windows、Linux、IntelliJ IDEA、Fleet 或 Remote Development。
 - 插件没有签名、Marketplace 分发、自动安装或自动更新。
-- 只读 VCS 当前源码候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；本地 ZIP SHA-256 为 `04ef2026309846eaeb108f3911f63503928ce99483b8fee5f92718b4f76f4cc5`（461,713 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
+- 只读 VCS 当前源码候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；269 项插件测试通过，本地 ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`（475,296 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
 - 同步态截图来自旧候选，只覆盖界面布局，不代表手动 Git Root 提示、深色主题、错误、降级、Safe Mode、最窄宽度或完整生命周期已验收。
 
 进一步资料：

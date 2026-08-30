@@ -73,6 +73,13 @@ internal sealed interface SyncCoordinatorEvent {
     override val digestSha256: String,
   ) : SyncCoordinatorEvent
 
+  data class Cancelled(
+    override val requestId: Long,
+    override val trigger: SyncTrigger,
+    override val digestSha256: String,
+    val cause: Throwable,
+  ) : SyncCoordinatorEvent
+
   data class Failed(
     override val requestId: Long,
     override val trigger: SyncTrigger,
@@ -249,9 +256,9 @@ internal class LatestWinsSyncCoordinator<T>(
         ),
       )
     } catch (exception: ProcessCanceledException) {
-      throw exception
+      notifySubmissionCancelled(submission, exception)
     } catch (exception: CancellationException) {
-      throw exception
+      notifySubmissionCancelled(submission, exception)
     } catch (exception: Exception) {
       notifyObserver(
         SyncCoordinatorEvent.Failed(
@@ -263,6 +270,27 @@ internal class LatestWinsSyncCoordinator<T>(
         ),
       )
     }
+  }
+
+  /**
+   * Keeps a platform cancellation scoped to the candidate that observed it. A lifecycle-owned
+   * cancellation makes the worker context inactive and must still close the coordinator; a
+   * cancellation thrown by an otherwise-active applier leaves the dirty digest baseline in place
+   * and lets the next submission reconcile again.
+   */
+  private suspend fun notifySubmissionCancelled(
+    submission: CandidateSubmission<T>,
+    cause: Throwable,
+  ) {
+    currentCoroutineContext().ensureActive()
+    notifyObserver(
+      SyncCoordinatorEvent.Cancelled(
+        requestId = submission.requestId,
+        trigger = submission.trigger,
+        digestSha256 = submission.candidate.digestSha256,
+        cause = cause,
+      ),
+    )
   }
 
   private fun notifyObserver(event: SyncCoordinatorEvent) {

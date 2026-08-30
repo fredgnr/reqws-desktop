@@ -94,26 +94,32 @@ internal class VerifiedManagedModelStateRepository @JvmOverloads constructor(
     ensureSafeStateLocation()
     return try {
       stateFile.withStableParent { stable ->
-        stable.requireAbsentOrRegularFile(lockFileName)
-        stable.openLockFile(lockFileName).use { channel ->
-          val lock = try {
-            channel.tryLock()
-          } catch (exception: OverlappingFileLockException) {
-            null
-          } ?: throw stateIoFailure("Another ReqWS managed-model writer is active.")
-          lock.use {
-            val current = stable.read()
-            current?.let { validateDurableState(it, binding) }
-            if (current?.generation != expectedGeneration) {
-              throw stateIoFailure("The ReqWS managed-model state changed concurrently.")
+        val directoryLock = stable.tryAcquireExclusiveDirectoryLock()
+          ?: throw stateIoFailure("Another ReqWS managed-model writer is active.")
+        directoryLock.use {
+          // Keep the child-file lock for mutual exclusion with older plugin versions. The stable
+          // directory-inode lock above is authoritative because this child can be replaced.
+          stable.requireAbsentOrRegularFile(lockFileName)
+          stable.openLockFile(lockFileName).use { channel ->
+            val lock = try {
+              channel.tryLock()
+            } catch (exception: OverlappingFileLockException) {
+              null
+            } ?: throw stateIoFailure("Another ReqWS managed-model writer is active.")
+            lock.use {
+              val current = stable.read()
+              current?.let { validateDurableState(it, binding) }
+              if (current?.generation != expectedGeneration) {
+                throw stateIoFailure("The ReqWS managed-model state changed concurrently.")
+              }
+              if (expectedGeneration == Long.MAX_VALUE) {
+                throw stateIoFailure("The ReqWS managed-model state generation is exhausted.")
+              }
+              val persisted = nextState.copy(generation = (expectedGeneration ?: -1L) + 1L)
+              validateDurableState(persisted, binding)
+              stable.writeAndVerify(persisted)
+              persisted
             }
-            if (expectedGeneration == Long.MAX_VALUE) {
-              throw stateIoFailure("The ReqWS managed-model state generation is exhausted.")
-            }
-            val persisted = nextState.copy(generation = (expectedGeneration ?: -1L) + 1L)
-            validateDurableState(persisted, binding)
-            stable.writeAndVerify(persisted)
-            persisted
           }
         }
       }

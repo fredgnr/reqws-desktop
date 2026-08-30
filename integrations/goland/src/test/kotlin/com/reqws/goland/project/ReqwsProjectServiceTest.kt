@@ -5,6 +5,7 @@ import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.reqws.goland.sync.SyncCandidateApplier
+import com.reqws.goland.ui.ReqwsToolWindowViewModel
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.VcsRootInspection
 import java.nio.file.Files
@@ -1243,12 +1244,23 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError() =
-    verifyLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError()
+  fun testLatestRefreshPropagatesProcessCancellationAndRestoresManualSync() =
+    verifyLatestRefreshCancellationRestoresManualSync(
+      expectedCancellation = ProcessCanceledException(),
+      cancellationDescription = "process cancellation",
+    )
 
-  private fun verifyLatestRefreshPropagatesProcessCancellationWithoutPublishingAnError() {
+  fun testLatestRefreshPropagatesCoroutineCancellationAndRestoresManualSync() =
+    verifyLatestRefreshCancellationRestoresManualSync(
+      expectedCancellation = CancellationException("synthetic coroutine cancellation"),
+      cancellationDescription = "coroutine cancellation",
+    )
+
+  private fun verifyLatestRefreshCancellationRestoresManualSync(
+    expectedCancellation: Throwable,
+    cancellationDescription: String,
+  ) {
     writeValidManifest()
-    val expectedCancellation = ProcessCanceledException()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val cancelInspection = AtomicBoolean(false)
     val applyCount = AtomicInteger(0)
@@ -1268,9 +1280,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     try {
       awaitSuccessfulCompletion(
         job = requireNotNull(service.refreshAutomatically()),
-        description = "initial refresh before process cancellation",
+        description = "initial refresh before $cancellationDescription",
       )
-      awaitCondition("initial state before process cancellation") {
+      awaitCondition("initial state before $cancellationDescription") {
         applyCount.get() == 1 &&
           service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
@@ -1280,25 +1292,433 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       cancelInspection.set(true)
       val failure = awaitFailedCompletion(
         job = requireNotNull(service.refreshAutomatically()),
-        description = "latest refresh process cancellation",
+        description = "latest refresh $cancellationDescription",
       )
 
       assertSame(expectedCancellation, failure)
-      assertEquals(ReqwsLifecycleState.READING, service.state.lifecycle)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
       assertSame(previousSnapshot, service.state.snapshot)
       assertEquals(previousDigest, service.state.lastAppliedDigest)
       assertNull(service.state.lastError)
+      val restoredView = ReqwsToolWindowViewModel.from(service.state)
+      assertTrue(restoredView.visible)
+      assertTrue("Sync Now stayed disabled after $cancellationDescription", restoredView.syncEnabled)
 
       cancelInspection.set(false)
       awaitSuccessfulCompletion(
-        job = requireNotNull(service.refreshAutomatically()),
-        description = "refresh recovery after process cancellation",
+        job = requireNotNull(service.refresh()),
+        description = "Tool Window manual sync after $cancellationDescription",
       )
-      awaitCondition("refresh recovery after process cancellation") {
-        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      awaitCondition("manual sync recovery after $cancellationDescription") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
+          applyCount.get() == 2
       }
-      assertEquals(1, applyCount.get())
+      assertNull(service.state.lastError)
     } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testApplierProcessCancellationAllowsTheNextRefreshToSynchronize() =
+    verifyApplierProcessCancellationAllowsTheNextRefreshToSynchronize()
+
+  private fun verifyApplierProcessCancellationAllowsTheNextRefreshToSynchronize() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 1) throw expectedCancellation
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial read before applier process cancellation",
+      )
+      awaitCondition("applier process cancellation rollback") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.INACTIVE
+      }
+      assertNull(service.state.lastError)
+      assertNull(service.state.lastAppliedDigest)
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "public refresh after applier process cancellation",
+      )
+      awaitCondition("successful apply after applier process cancellation") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertNull(service.state.lastError)
+      assertNotNull(service.state.lastAppliedDigest)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testRefreshCancellationDuringOlderApplyRestoresStateBeforeSynchronizing() =
+    verifyRefreshCancellationDuringOlderApplyRestoresStateBeforeSynchronizing()
+
+  private fun verifyRefreshCancellationDuringOlderApplyRestoresStateBeforeSynchronizing() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val cancelInspection = AtomicBoolean(false)
+    val secondApplyStarted = CountDownLatch(1)
+    val allowSecondApply = CountDownLatch(1)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 2) {
+            secondApplyStarted.countDown()
+            check(allowSecondApply.await(5, TimeUnit.SECONDS)) {
+              "test did not release the older manual apply"
+            }
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (cancelInspection.get()) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before held manual apply",
+      )
+      awaitCondition("initial stable state before held manual apply") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val stableSnapshot = requireNotNull(service.state.snapshot)
+      val stableDigest = requireNotNull(service.state.lastAppliedDigest)
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "manual read before held apply",
+      )
+      assertTrue(
+        "older manual apply did not start",
+        secondApplyStarted.await(5, TimeUnit.SECONDS),
+      )
+      awaitCondition("older manual apply entered synchronizing") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZING
+      }
+
+      cancelInspection.set(true)
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "latest refresh cancellation during older apply",
+      )
+
+      assertSame(expectedCancellation, failure)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertSame(stableSnapshot, service.state.snapshot)
+      assertEquals(stableDigest, service.state.lastAppliedDigest)
+      assertNull(service.state.lastError)
+      assertTrue(ReqwsToolWindowViewModel.from(service.state).syncEnabled)
+
+      allowSecondApply.countDown()
+      awaitCondition("older manual apply completed after cancellation rollback") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertNull(service.state.lastError)
+    } finally {
+      allowSecondApply.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testSupersededRefreshCancellationCannotRollBackNewerManualSync() =
+    verifySupersededRefreshCancellationCannotRollBackNewerManualSync()
+
+  private fun verifySupersededRefreshCancellationCannotRollBackNewerManualSync() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val blockNextInspection = AtomicBoolean(false)
+    val cancelledInspectionEntered = CountDownLatch(1)
+    val allowCancelledInspection = CountDownLatch(1)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (blockNextInspection.compareAndSet(true, false)) {
+            cancelledInspectionEntered.countDown()
+            check(allowCancelledInspection.await(5, TimeUnit.SECONDS)) {
+              "test did not release the superseded cancelled inspection"
+            }
+            throw expectedCancellation
+          }
+          VcsRootInspection(emptyList(), emptyList())
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before superseded cancellation",
+      )
+      awaitCondition("initial stable state before superseded cancellation") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val stableDigest = requireNotNull(service.state.lastAppliedDigest)
+
+      blockNextInspection.set(true)
+      val superseded = requireNotNull(service.refreshAutomatically())
+      assertTrue(
+        "cancelled inspection did not start",
+        cancelledInspectionEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "newer manual sync while older inspection is blocked",
+      )
+      awaitCondition("newer manual sync stable state") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val newerSnapshot = requireNotNull(service.state.snapshot)
+
+      allowCancelledInspection.countDown()
+      val failure = awaitFailedCompletion(
+        job = superseded,
+        description = "superseded refresh cancellation",
+      )
+
+      assertSame(expectedCancellation, failure)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertSame(newerSnapshot, service.state.snapshot)
+      assertEquals(stableDigest, service.state.lastAppliedDigest)
+      assertNull(service.state.lastError)
+      assertEquals(2, applyCount.get())
+    } finally {
+      allowCancelledInspection.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline() =
+    verifyAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline()
+
+  private fun verifyAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val cancelInspection = AtomicBoolean(false)
+    val secondApplyStarted = CountDownLatch(1)
+    val allowSecondApply = CountDownLatch(1)
+    val thirdReadingBoundary = CountDownLatch(1)
+    val allowThirdReadingPublication = CountDownLatch(1)
+    val readingBoundaryCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val returnedRead = AtomicReference<Job?>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 2) {
+            secondApplyStarted.countDown()
+            check(allowSecondApply.await(5, TimeUnit.SECONDS)) {
+              "test did not release the apply before the READING publication"
+            }
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (cancelInspection.get()) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        beforeReadingPublication = {
+          if (readingBoundaryCount.incrementAndGet() == 3) {
+            thirdReadingBoundary.countDown()
+            check(allowThirdReadingPublication.await(5, TimeUnit.SECONDS)) {
+              "test did not release the third READING publication"
+            }
+          }
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before publication-boundary race",
+      )
+      awaitCondition("initial stable state before publication-boundary race") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val initialSnapshot = requireNotNull(service.state.snapshot)
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "manual read before publication-boundary race",
+      )
+      assertTrue(
+        "second apply did not start",
+        secondApplyStarted.await(5, TimeUnit.SECONDS),
+      )
+      awaitCondition("second apply entered synchronizing") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZING
+      }
+
+      cancelInspection.set(true)
+      val readCaller = scope.launch {
+        returnedRead.set(service.refreshAutomatically())
+      }
+      assertTrue(
+        "third read did not reach its publication boundary",
+        thirdReadingBoundary.await(5, TimeUnit.SECONDS),
+      )
+
+      allowSecondApply.countDown()
+      awaitCondition("older apply published its terminal state first") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
+          service.state.snapshot !== initialSnapshot
+      }
+      val appliedSnapshot = requireNotNull(service.state.snapshot)
+
+      allowThirdReadingPublication.countDown()
+      awaitSuccessfulCompletion(readCaller, "third refresh caller")
+      val failure = awaitFailedCompletion(
+        job = requireNotNull(returnedRead.get()),
+        description = "third refresh cancellation after applied state",
+      )
+
+      assertSame(expectedCancellation, failure)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertSame(appliedSnapshot, service.state.snapshot)
+      assertNull(service.state.lastError)
+    } finally {
+      allowSecondApply.countDown()
+      allowThirdReadingPublication.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testAppliedStateWinningCancellationRollbackCasCannotBeOverwritten() =
+    verifyAppliedStateWinningCancellationRollbackCasCannotBeOverwritten()
+
+  private fun verifyAppliedStateWinningCancellationRollbackCasCannotBeOverwritten() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val cancelInspection = AtomicBoolean(false)
+    val secondApplyStarted = CountDownLatch(1)
+    val allowSecondApply = CountDownLatch(1)
+    val cancellationRollbackEntered = CountDownLatch(1)
+    val allowCancellationRollback = CountDownLatch(1)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 2) {
+            secondApplyStarted.countDown()
+            check(allowSecondApply.await(5, TimeUnit.SECONDS)) {
+              "test did not release the apply before cancellation rollback"
+            }
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (cancelInspection.get()) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        beforeCancellationRollback = {
+          cancellationRollbackEntered.countDown()
+          check(allowCancellationRollback.await(5, TimeUnit.SECONDS)) {
+            "test did not release cancellation rollback"
+          }
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial refresh before cancellation-rollback race",
+      )
+      awaitCondition("initial stable state before cancellation-rollback race") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "manual read before cancellation-rollback race",
+      )
+      assertTrue(
+        "second apply did not start",
+        secondApplyStarted.await(5, TimeUnit.SECONDS),
+      )
+      awaitCondition("second apply entered synchronizing before cancellation rollback") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZING
+      }
+
+      cancelInspection.set(true)
+      val cancelledRead = requireNotNull(service.refreshAutomatically())
+      assertTrue(
+        "cancelled read did not reach its rollback boundary",
+        cancellationRollbackEntered.await(5, TimeUnit.SECONDS),
+      )
+      assertEquals(ReqwsLifecycleState.READING, service.state.lifecycle)
+
+      allowSecondApply.countDown()
+      awaitCondition("older apply won before cancellation rollback CAS") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val appliedSnapshot = requireNotNull(service.state.snapshot)
+
+      allowCancellationRollback.countDown()
+      val failure = awaitFailedCompletion(
+        job = cancelledRead,
+        description = "cancelled read after applied state won",
+      )
+
+      assertSame(expectedCancellation, failure)
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertSame(appliedSnapshot, service.state.snapshot)
+      assertNull(service.state.lastError)
+    } finally {
+      allowSecondApply.countDown()
+      allowCancellationRollback.countDown()
       service.dispose()
       scope.cancel()
     }

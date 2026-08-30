@@ -2,7 +2,7 @@
 title: GoLand 插件支持需求说明
 type: requirements
 status: active
-updated: 2026-08-19
+updated: 2026-08-30
 ---
 
 # GoLand 插件支持需求说明
@@ -236,6 +236,9 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - invalid manifest 保留上次有效状态，并在文件恢复后自动重试；
 - 项目重启不依赖内存状态即可恢复；持久化最近摘要只用于 UI/诊断，新 service 必须重新读取并收敛，不能据此跳过 apply；
 - 单个活动目录缺失时不得创建目录，可同步其他有效活动仓库并把整体状态标记为 degraded。
+- Project Model authoritative state 的跨 JVM writer 必须互斥在已经验证并打开的稳定 `.idea` directory inode 上；替换、删除或重建任何 lock 子文件都不得产生第二把独立锁，也不得绕过 generation fence。
+- latest manifest/VCS read 收到 `ProcessCanceledException` 或 coroutine cancellation 时，仍必须原样结束该 read；若 request 仍为 latest 且 project/service 存活，UI 必须恢复进入 `READING` 前最近的稳定状态，不写业务 `lastError`，并保留用户可达的 `Sync Now` 恢复入口。
+- 单次 Project Model applier 收到平台或 coroutine cancellation 时不得发布普通 `Failed`、不得仅因该 submission 把 coordinator 永久关闭，也不得保留 `SYNCHRONIZING`；该 submission 保持 dirty 并以同一终止信号结束，owner scope 仍 active 时后续 refresh 必须能在同一 service/coordinator 生命周期重新 apply。owner scope 取消或 service dispose 仍永久停止 coordinator；observer 自身抛出的终止信号继续按既有 raw-propagation 边界结束 worker。
 
 ### 7.3 性能与体验
 
@@ -248,7 +251,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - 以 50 个活动仓库和 20 个保留仓库作为规模回归；
 - 不允许持续 CPU、无限 indexing、明显 UI freeze 或与事件数量等量的重复 apply；
 - 插件错误不能阻止普通 GoLand 项目打开或使用不相关功能。
-- IntelliJ `ProcessCanceledException` 与 coroutine cancellation 必须原样传播，不得被包装成普通 VCS degraded 诊断后继续发布过期状态。
+- IntelliJ `ProcessCanceledException` 与 coroutine cancellation 必须以原实例传播到当前 read/apply 边界，不得被包装成普通 VCS degraded 或 Project Model failure；瞬时 submission 取消完成状态回滚后不得使仍存活的 service 失去后续同步能力。
 
 ### 7.4 兼容性
 
@@ -287,7 +290,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 | GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入项目内容；缺失 Git Root 显示待用户配置且插件零 VCS 写入。 |
 | GL-06 | 逻辑移除 | 磁盘目录保留并退出受管项目内容与默认搜索；原 Git mapping 原样保留，直到用户按提示在 Directory Mappings 中手动决定是否移除。 |
 | GL-07 | 重新添加 | 同一目录的项目内容恢复；插件重新检查现有 mapping，不创建重复 root/module 或任何 mapping。 |
-| GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环。 |
+| GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环；瞬时 read/apply 取消不留下 `READING`/`SYNCHRONIZING`，下一次 `Sync Now` 可在同一 service 中恢复。 |
 | GL-09 | manifest 损坏或临时缺失 | 保留上次有效模型，不应用部分数据，并提供稳定诊断和恢复入口。 |
 | GL-10 | 路径攻击 | root mismatch、绝对 relativePath、`..` 或 symlink escape 被拒绝。 |
 | GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新和外部进程动作禁用；恢复 trusted 后即使 digest 未变也强制重放一次 Project Model，修复 blocked 期间的 live drift。 |

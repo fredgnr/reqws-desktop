@@ -2,7 +2,7 @@
 title: GoLand 插件支持探索与实施计划
 type: technical-design
 status: active
-updated: 2026-08-19
+updated: 2026-08-30
 ---
 
 # GoLand 插件支持探索与实施计划
@@ -180,9 +180,9 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 | W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；只读 VCS 当前源码候选已通过 GO-261.25134.147 / GO-262.8665.270 Verifier。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
 | W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
-| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、自动触发的同生命周期 clean digest no-op、在 accepted Safe Mode blocked 边界预先 arm 且跨 read failure 保留的手动与 trust-transition 强制 reconcile、部分失败回退重放与 reopen 强制收敛已实现，并纳入本轮 260 项插件测试。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、sticky reconcile、versioned current/stable publication 与 read/apply cancellation CAS recovery 已实现，并纳入本轮 269 项插件测试。 |
 | W4 | 完成 VCS 与 Desktop 启动 | 产品边界已改为生产零 VCS mutation：插件只读 mappings、显示手动 Directory Mappings 步骤并监听配置事件复核；旧 VCS ownership/lock inert，不自动迁移或清理。实现、项目/结构检查与 261/262 Verifier 已通过，真实 GoLand 手动配置路径待验收。 |
-| W5 | 完成功能、规模和安全验证 | 2026-08-19 当前源码候选的 Desktop `npm run check`、260 项插件测试、结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
+| W5 | 完成功能、规模和安全验证 | 2026-08-30 当前源码候选的 Desktop `npm run check`、269 项插件测试、结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -293,7 +293,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - `add / keep / remove-owned / conflict` planner；
 - write transaction；
 - `.idea/reqws-managed-project-model.json` verified atomic store；
-- `.idea` stable directory handle：同一 handle 内完成 state/lock 校验与打开、atomic replace 能力探针、temp write/force、move、directory force 和 readback，末尾复验路径 identity；
+- `.idea` stable directory handle：直接在已打开的 directory descriptor 上取得非阻塞跨 JVM exclusive lock，同一 handle 内完成 state 读取、atomic replace 能力探针、temp write/force、move、directory force 和 readback，末尾复验路径 identity；lock 子文件不是互斥权威，其 rename/unlink/recreate 不得绕过 generation fence；
 - legacy PSC migration、atomic state reload、独立 JPS serialization contract 与 reopen recovery；
 - pre-mutation managed/recovery 落盘、同 JVM recovery 保留、post-commit trust/dispose 与 remove/re-add new-token recovery；
 - user-owned entries preservation；
@@ -304,7 +304,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 选择符合 active 技术方案所有权/API 门禁并最终通过完整验收矩阵的策略；
 - 形成唯一 production `ProjectModelAdapter`；
 - 未选 spike 代码、依赖和配置已删除；
-- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、verified atomic 发布/回读失败、`.idea` 在持锁事务中的 rename + symlink replacement、legacy PSC migration、同 JVM recovery 保留、cold state reload 与 JPS serialization；目录替换不得让 lock/state/temp/readback 转向外部目录，真实 GoLand reopen 由 GUI 补足；
+- model-level tests 覆盖 initial/add/remove/re-add、marker tamper、verified atomic 发布/回读失败、稳定目录锁持有期间替换同名 lock 子文件仍拒绝第二 repository 同代写入、`.idea` 在持锁事务中的 rename + symlink replacement、legacy PSC migration、同 JVM recovery 保留、cold state reload 与 JPS serialization；目录或 lock 子文件替换不得产生第二 writer，也不得让 state/temp/readback 转向外部目录，真实 GoLand reopen 由 GUI 补足；
 - 用户无关 module/root 不丢失；
 - retained repo 不进入默认项目内容；
 - Plugin Verifier 无禁止 API；
@@ -328,7 +328,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - Safe Mode 的 latest blocked read 在注册后 VCS inspection 前 arm 独立 force-reconcile intent；trust poll 只提交 automatic wake-up，因此先到的 automatic trusted read继承 intent，迟到 poll 不会再制造第二次强制重放；该 intent 和手动 intent 一样跨 automatic read/candidate/read failure 保留，不能被 same-digest baseline 跳过；
 - temporary missing 的有限 retry；
 - invalid candidate 保留 last good model；
-- latest refresh 的非取消异常发布稳定 `ERROR / REFRESH_FAILED`，恢复进入 `READING` 前的 snapshot/digest；PCE/coroutine cancellation 原样结束，不伪装成普通错误；
+- latest refresh 的非取消异常发布稳定 `ERROR / REFRESH_FAILED`，恢复进入 `READING` 前的 snapshot/digest；PCE/coroutine cancellation 以同一实例结束当前 read，不伪装成普通错误，并在 request 仍为 latest、service/project 存活时恢复最近稳定状态以保留 UI `Sync Now` 入口；
+- 单次 coordinator apply 的 PCE/coroutine cancellation 作为非业务取消完成当前 submission，保持 baseline dirty、回滚 `SYNCHRONIZING`，worker 在 owner scope 仍 active 时继续接受后续 submission；
 - project dispose cancellation；
 - manual sync 复用同一 coordinator；
 - lifecycle states 和错误去重。
@@ -350,7 +351,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 同一 coordinator 生命周期内自动触发的 clean digest 不重复 apply；手动 same-digest 必须重放，且手动或部分 apply 失败后 baseline 保持 dirty；
 - invalid/temporary missing 不清空 last good roots；
 - 单项目最多一个 apply；
-- coordinator exception 不死锁；apply/observer 的 PCE/coroutine cancellation 原样终止 worker，普通 observer exception 仍隔离；
+- coordinator exception 不死锁；apply 的 PCE/coroutine cancellation 保留同一实例且不发布普通 `Failed`，当前 submission 结束后同一 worker 可处理下一候选；owner scope cancellation/dispose 仍终止 worker，普通 observer exception 继续隔离；
 - 无持续 indexing loop 或 VFS event storm；
 - 自动测试覆盖 debounce、latest-wins、dispose 和恢复。
 
@@ -417,7 +418,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 普通非 ReqWS project 不注册 VCS listener或因 VCS event 进入 `READING`；首个有效 candidate 的注册后复检能观察注册窗口内的最新 mappings；registrar 阻塞时更新 inactive/error 可先完成并撤销 epoch，迟到 handle 恰好关闭一次；post-registration inspection 取消/失败同样清理；更新 valid candidate 可在 STARTING/STARTED 阶段接力同一 epoch，成功路径不重复注册，首个 registrar 失败时可由接力 generation 重试；
 - Safe Mode 恢复 trusted 后，即使 manifest digest 未变，也会强制重放 Project Model 并修复 blocked 期间的 live drift；automatic refresh 先于 trust poll 完成时同样强制一次，poll/automatic 交错不重复强制重放；
 - manifest attribute 检查后把 `.reqws` 替换为外部 symlink 不会重定向读取；`.idea` 在 state transaction 中替换也不会让 lock/state/temp/readback 转向外部目录；目录替换/symlink retarget 不会把 snapshot 旧 canonical target 与 live identity 混合成 configured；
-- latest 非取消 refresh 异常离开 `READING` 并保留 last-good snapshot/digest；projection/coordinator/VCS 中的 PCE 与 coroutine cancellation 不被包装或降级吞掉；
+- latest 非取消 refresh 异常离开 `READING` 并保留 last-good snapshot/digest；projection/coordinator/VCS 中的 PCE 与 coroutine cancellation 不被包装成业务失败，latest read/apply 取消后恢复最近稳定状态且同一 service 可由下一次用户 `Sync Now` 成功收敛；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh、manual sync 与 restart 的 ReqWS 调用链均没有 VCS mutation API；
 - 用户 mapping、顺序、VCS 类型与 `rootSettings` 不被 ReqWS writer 覆盖；Project Model 触发的 GoLand 原生 auto-detection 另行记录和归因；
 - 生产源码不引用 mapping setter 或 VCS ownership writer；旧 ownership/lock 文件保持 inert 且不自动清理；
@@ -461,6 +462,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - malformed → valid manifest；
 - manifest temporary missing；
 - manual sync；
+- latest read 瞬时 PCE 后通过 Tool Window `Sync Now` 恢复，不依赖内部 automatic refresh；
+- 首次 apply 瞬时 PCE 后同一 service/coordinator 的下一次 refresh 成功 apply；
 - plugin disable/enable；
 - plugin ZIP reinstall；
 - sleep/wake。

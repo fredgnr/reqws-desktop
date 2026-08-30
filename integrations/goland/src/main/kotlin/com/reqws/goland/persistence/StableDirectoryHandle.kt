@@ -139,6 +139,43 @@ internal class StableDirectoryHandle private constructor(
     checkedResult(POSIX.fsync(descriptor.fd), "fsync directory")
   }
 
+  /**
+   * Tries to lock this directory's native inode, rather than any replaceable child entry.
+   *
+   * A fresh descriptor is opened for the same directory so the returned lock owns its complete
+   * lifetime. Closing the lock descriptor releases the native `flock` without affecting the
+   * descriptor used for the stable relative operations.
+   */
+  fun tryAcquireExclusiveLock(): StableDirectoryLock? {
+    val lockFd = checkedDescriptor(
+      POSIX.openat(descriptor.fd, CURRENT_DIRECTORY, POSIX_FLAGS.directoryOpen),
+      operation = "openat directory lock",
+    )
+    val lockIdentity = try {
+      readDescriptorIdentity(lockFd)
+    } catch (failure: Throwable) {
+      closeDescriptorAfterFailure(lockFd, failure)
+      throw failure
+    }
+    if (lockIdentity != nativeIdentity) {
+      val failure = IOException("The directory lock descriptor changed identity")
+      closeDescriptorAfterFailure(lockFd, failure)
+      throw failure
+    }
+
+    val result = POSIX.flock(lockFd, LOCK_EXCLUSIVE or LOCK_NON_BLOCKING)
+    if (result == 0) return StableDirectoryLock(PosixDescriptor(lockFd))
+
+    val error = Native.getLastError()
+    if (isLockUnavailable(error)) {
+      closeDescriptor(lockFd)
+      return null
+    }
+    val failure = nativeFailure("lock directory", null, error)
+    closeDescriptorAfterFailure(lockFd, failure)
+    throw failure
+  }
+
   fun isSameDirectory(other: StableDirectoryHandle): Boolean =
     nativeIdentity == other.nativeIdentity
 
@@ -192,6 +229,12 @@ internal class StableDirectoryHandle private constructor(
       }
     }
   }
+}
+
+internal class StableDirectoryLock internal constructor(
+  private val descriptor: PosixDescriptor,
+) : AutoCloseable {
+  override fun close() = descriptor.close()
 }
 
 internal class StableFileHandle internal constructor(
@@ -403,6 +446,12 @@ private fun nativeFailure(
   else -> IOException("$operation failed (errno=$error)")
 }
 
+private fun isLockUnavailable(error: Int): Boolean = when {
+  Platform.isMac() -> error == MAC_ERRNO_WOULD_BLOCK
+  Platform.isLinux() -> error == LINUX_ERRNO_WOULD_BLOCK
+  else -> false
+}
+
 private fun closeDescriptor(fd: Int) {
   if (POSIX.close(fd) != 0) {
     throw nativeFailure("close descriptor", null, Native.getLastError())
@@ -429,6 +478,8 @@ private interface PosixLibC : Library {
   fun fstat(fd: Int, stat: Memory): Int
 
   fun fsync(fd: Int): Int
+
+  fun flock(fd: Int, operation: Int): Int
 
   fun renameat(sourceDirectoryFd: Int, source: String, targetDirectoryFd: Int, target: String): Int
 
@@ -482,9 +533,14 @@ private val POSIX_FLAGS: PosixFlags by lazy {
 }
 
 private const val UNIX_ROOT = "/"
+private const val CURRENT_DIRECTORY = "."
 private const val PRIVATE_FILE_MODE = 0x180 // 0600
 private const val ERRNO_NO_ENTRY = 2
 private const val ERRNO_EXISTS = 17
+private const val MAC_ERRNO_WOULD_BLOCK = 35
+private const val LINUX_ERRNO_WOULD_BLOCK = 11
+private const val LOCK_EXCLUSIVE = 0x02
+private const val LOCK_NON_BLOCKING = 0x04
 private const val INVALID_DESCRIPTOR = -1
 private const val NATIVE_STAT_BUFFER_BYTES = 512L
 private const val MAC_STAT_DEVICE_OFFSET = 0L

@@ -10,10 +10,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class TerminalStatePublisher<T>(
   initialState: T,
+  private val isStable: (T) -> Boolean = { true },
   private val isTerminal: (T) -> Boolean,
 ) {
   @Volatile
   private var currentState = initialState
+  private var currentStableState = initialState
+  private var currentVersion = 0L
   private val lock = Any()
   private val listeners = LinkedHashSet<Registration<T>>()
   private val pending = ArrayDeque<Notification<T>>()
@@ -21,6 +24,10 @@ internal class TerminalStatePublisher<T>(
 
   val state: T
     get() = currentState
+
+  fun snapshot(): VersionedState<T> = synchronized(lock) {
+    snapshotLocked()
+  }
 
   fun addListener(listener: (T) -> Unit): AutoCloseable {
     val registration = Registration(listener)
@@ -36,16 +43,64 @@ internal class TerminalStatePublisher<T>(
   }
 
   fun publish(next: T): Boolean {
-    val shouldDrain = synchronized(lock) {
-      if (isTerminal(currentState)) return false
-      currentState = next
-      val recipients = listeners.toList()
-      if (isTerminal(next)) listeners.clear()
-      enqueue(Notification(recipients, next))
-    }
-    if (shouldDrain) drain()
+    val publication = preparePublish(next) ?: return false
+    publication.deliver()
     return true
   }
+
+  /**
+   * Commits a versioned transition without invoking listeners. The caller must invoke
+   * [StatePublication.deliver] outside any service/coordinator lock, even when later work fails.
+   */
+  fun preparePublish(next: T): StatePublication<T>? = synchronized(lock) {
+    preparePublishLocked(next)
+  }
+
+  /** Commits [next] only while [expectedVersion] is still current; listeners remain deferred. */
+  fun prepareCompareAndPublish(
+    expectedVersion: Long,
+    next: T,
+  ): StatePublication<T>? = synchronized(lock) {
+    if (currentVersion != expectedVersion) return@synchronized null
+    preparePublishLocked(next)
+  }
+
+  /**
+   * Derives and commits the next state from the exact current state under the publisher lock.
+   * [next] must be a small, non-blocking state transformation and must not invoke listeners.
+   */
+  fun prepareUpdate(
+    next: (VersionedState<T>) -> T,
+  ): StatePublication<T>? = synchronized(lock) {
+    if (isTerminal(currentState)) return@synchronized null
+    val before = snapshotLocked()
+    preparePublishLocked(next(before), before)
+  }
+
+  private fun preparePublishLocked(
+    next: T,
+    before: VersionedState<T> = snapshotLocked(),
+  ): StatePublication<T>? {
+    if (isTerminal(currentState)) return null
+    currentVersion += 1
+    currentState = next
+    if (isStable(next)) currentStableState = next
+    val after = snapshotLocked()
+    val recipients = listeners.toList()
+    if (isTerminal(next)) listeners.clear()
+    val shouldDrain = enqueue(Notification(recipients, next))
+    return StatePublication(
+      before = before,
+      after = after,
+      delivery = if (shouldDrain) ::drain else null,
+    )
+  }
+
+  private fun snapshotLocked(): VersionedState<T> = VersionedState(
+    state = currentState,
+    stableState = currentStableState,
+    version = currentVersion,
+  )
 
   private fun enqueue(notification: Notification<T>): Boolean {
     pending.addLast(notification)
@@ -96,5 +151,23 @@ internal class TerminalStatePublisher<T>(
     fun close() {
       active.set(false)
     }
+  }
+}
+
+internal data class VersionedState<T>(
+  val state: T,
+  val stableState: T,
+  val version: Long,
+)
+
+internal class StatePublication<T> internal constructor(
+  val before: VersionedState<T>,
+  val after: VersionedState<T>,
+  private val delivery: (() -> Unit)?,
+) {
+  private val delivered = AtomicBoolean(false)
+
+  fun deliver() {
+    if (delivered.compareAndSet(false, true)) delivery?.invoke()
   }
 }

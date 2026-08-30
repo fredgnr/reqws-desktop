@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：验证中
-- 更新日期：2026-08-19
+- 更新日期：2026-08-30
 
 ## 文档
 
@@ -15,4 +15,4 @@
 
 [2026-08-17 报告](verification-2026-08-17.md)绑定旧候选 ZIP（SHA-256 `c1cd6966869bae86d72b998e401d3a9a470e19f6811f51248b3cb763988d9609`）及当时的 164 项测试证据，并因可复现的 project-dispose 异常、Project View 刷新缺口、矩阵未完成和缺少 exact commit 判定为 `NO-GO`。
 
-当前产品契约已改为自动同步 Project Model、只读诊断 VCS，并由用户在 GoLand Directory Mappings 中手动维护 Git Roots。插件不调用 mapping mutation API、不直接写 `.idea/vcs.xml`；GoLand 原生 auto-detection 仍由 IDE/用户设置控制并需单独归因。旧 `.idea/reqws-vcs-ownership.json` 与 lock 为 inert 文件，不读取、不迁移、不自动清理。2026-08-19 当前源码候选补齐 accepted Safe Mode blocked 边界的 sticky trust-transition force reconcile、automatic-before-poll 继承、valid-manifest 后 two-phase provisional VCS listener 的接受/接力/撤销与 callback epoch、manifest/ownership 父目录替换时的 stable native descriptor、latest refresh 异常稳定错误和 projection/coordinator/VCS cancellation propagation 回归，并已在 JDK 21 下通过 260 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `04ef2026309846eaeb108f3911f63503928ce99483b8fee5f92718b4f76f4cc5`，大小 461,713 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。真实 GUI 仍须覆盖生产无 VCS writer、手动配置步骤、配置事件自动复核、`Sync Now` 只读检查、用户 mapping/`rootSettings`、纯 inspection 的 `.idea/vcs.xml` 保持、平台原生变化归因，以及 old ownership/lock inert，并绑定推送后的 exact commit；在此之前不形成 `GO`。[按原型收口后的同步态实现截图](../ui/tool-window-implementation-2026-08-17.png)仍只用于旧候选界面参考；[2026-08-17 报告](verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。
+当前产品契约是自动同步 Project Model、只读诊断 VCS，并由用户在 GoLand Directory Mappings 中手动维护 Git Roots。插件不调用 mapping mutation API、不直接写 `.idea/vcs.xml`；GoLand 原生 auto-detection 仍由 IDE/用户设置控制并需单独归因。旧 `.idea/reqws-vcs-ownership.json` 与 lock 为 inert 文件，不读取、不迁移、不自动清理。2026-08-30 当前源码候选在既有 sticky reconcile、two-phase VCS listener、stable native descriptor 和 cancellation propagation 基础上，增加 stable `.idea` directory-inode writer `flock`、lock 子文件替换竞态、versioned current/stable state publisher、exact-publication cancellation CAS、公开 `Sync Now` 恢复及同 coordinator 下一次 apply 回归。JDK 21 完整命令通过 269 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 fresh Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`，大小 475,296 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。真实 GUI 仍须覆盖生产无 VCS writer、手动配置步骤、配置事件自动复核、`Sync Now` 只读检查、用户 mapping/`rootSettings`、纯 inspection 的 `.idea/vcs.xml` 保持、平台原生变化归因，以及 old ownership/lock inert，并绑定推送后的 exact commit；在此之前不形成 `GO`。[按原型收口后的同步态实现截图](../ui/tool-window-implementation-2026-08-17.png)仍只用于旧候选界面参考；[2026-08-17 报告](verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。

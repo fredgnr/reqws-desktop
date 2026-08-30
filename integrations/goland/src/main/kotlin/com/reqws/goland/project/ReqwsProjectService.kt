@@ -53,9 +53,14 @@ class ReqwsProjectService private constructor(
   private val statePublisher = TerminalStatePublisher(
     initialState = ReqwsProjectState.INACTIVE,
     isTerminal = { state -> state.lifecycle == ReqwsLifecycleState.DISPOSED },
+    isStable = { state ->
+      state.lifecycle != ReqwsLifecycleState.READING &&
+        state.lifecycle != ReqwsLifecycleState.SYNCHRONIZING &&
+        state.lifecycle != ReqwsLifecycleState.DISPOSED
+    },
   )
   private val watcherRef = AtomicReference<ManifestVfsWatcher?>()
-  private val applyingState = AtomicReference<CandidateState?>()
+  private val applyingState = AtomicReference<ApplyingState?>()
   private val candidateLock = Any()
   private val candidateStates = LinkedHashMap<String, ReqwsProjectState>()
   private val persistence: ReqwsSyncPersistence
@@ -360,6 +365,7 @@ class ReqwsProjectService private constructor(
       } ?: return null
     }
     var job: Job? = null
+    val readingPublicationRef = AtomicReference<StatePublication<ReqwsProjectState>?>()
     val cleanup = {
       var revocation: VcsChangeMonitoringRevocation? = null
       readRequests.runIfLatest(request) {
@@ -370,8 +376,17 @@ class ReqwsProjectService private constructor(
     return try {
       val projectRoot = ReqwsProjectDetector.projectRoot(project)
       val observedVcsRegistrationVersion = currentStartedVcsRegistrationVersion()
-      val previous = state
       val launched = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        val readingPublication = requireNotNull(readingPublicationRef.get()) {
+          "ReqWS refresh started without a READING publication"
+        }
+        val previous = readingPublication.before.state.let { stateBeforeReading ->
+          if (stateBeforeReading.lifecycle == ReqwsLifecycleState.READING) {
+            readingPublication.before.stableState
+          } else {
+            stateBeforeReading
+          }
+        }
         try {
           projectRoot
             ?.let(ReqwsProjectDetector::canonicalProjectRoot)
@@ -381,8 +396,10 @@ class ReqwsProjectService private constructor(
           if (disposed.get()) return@launch
           acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
         } catch (failure: ProcessCanceledException) {
+          restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure)
           throw failure
         } catch (failure: CancellationException) {
+          restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure)
           throw failure
         } catch (failure: Exception) {
           publishUnexpectedRefreshFailureIfLatest(request, previous)
@@ -395,26 +412,39 @@ class ReqwsProjectService private constructor(
       // listener owned by the latest request. Accepted lifecycle registrations remain open.
       launched.invokeOnCompletion { cleanup() }
       runtimeOverrides?.beforeReadingPublication?.invoke()
-      val readingPublished = try {
-        readRequests.runIfLatest(request) {
-          publish(
-            previous.copy(
-              lifecycle = ReqwsLifecycleState.READING,
-              lastError = null,
-            ),
+      var readingPublication: StatePublication<ReqwsProjectState>? = null
+      val readingPrepared = readRequests.runIfLatest(request) {
+        readingPublication = statePublisher.prepareUpdate { current ->
+          current.state.copy(
+            lifecycle = ReqwsLifecycleState.READING,
+            lastError = null,
           )
         }
+      }
+      val publication = readingPublication
+      if (!readingPrepared || publication == null) {
+        launched.cancel(CancellationException("ReqWS refresh was superseded before start"))
+        return launched
+      }
+      readingPublicationRef.set(publication)
+      val previous = publication.before.state.let { stateBeforeReading ->
+        if (stateBeforeReading.lifecycle == ReqwsLifecycleState.READING) {
+          publication.before.stableState
+        } else {
+          stateBeforeReading
+        }
+      }
+      try {
+        publication.deliver()
       } catch (failure: ProcessCanceledException) {
+        restoreStableStateAfterCancellationIfLatest(request, publication, failure)
         throw failure
       } catch (failure: CancellationException) {
+        restoreStableStateAfterCancellationIfLatest(request, publication, failure)
         throw failure
       } catch (failure: Exception) {
         publishUnexpectedRefreshFailureIfLatest(request, previous)
         throw failure
-      }
-      if (!readingPublished) {
-        launched.cancel(CancellationException("ReqWS refresh was superseded before start"))
-        return launched
       }
       launched.start()
       launched
@@ -422,6 +452,33 @@ class ReqwsProjectService private constructor(
       job?.cancel()
       cleanup()
       throw failure
+    }
+  }
+
+  private fun restoreStableStateAfterCancellationIfLatest(
+    request: SyncReadRequest,
+    readingPublication: StatePublication<ReqwsProjectState>,
+    cancellation: Throwable,
+  ) {
+    if (disposed.get() || project.isDisposed) return
+    try {
+      runtimeOverrides?.beforeCancellationRollback?.invoke()
+      var rollback: StatePublication<ReqwsProjectState>? = null
+      readRequests.runIfLatest(request) {
+        if (
+          !disposed.get() &&
+          !project.isDisposed
+        ) {
+          rollback = statePublisher.prepareCompareAndPublish(
+            expectedVersion = readingPublication.after.version,
+            next = readingPublication.after.stableState,
+          )
+        }
+      }
+      rollback?.deliver()
+    } catch (restoreFailure: Throwable) {
+      // State publication listeners must not replace a platform/coroutine termination signal.
+      if (restoreFailure !== cancellation) cancellation.addSuppressed(restoreFailure)
     }
   }
 
@@ -571,13 +628,22 @@ class ReqwsProjectService private constructor(
     when (event) {
       is SyncCoordinatorEvent.Applying -> {
         val candidate = takeCandidate(event.digestSha256)
-        applyingState.set(candidate)
-        publish(
-          (candidate?.state ?: state).copy(
+        val publication = statePublisher.prepareUpdate { current ->
+          (candidate?.state ?: current.state).copy(
             lifecycle = ReqwsLifecycleState.SYNCHRONIZING,
             lastError = null,
-          ),
-        )
+          )
+        }
+        if (publication != null) {
+          applyingState.set(
+            ApplyingState(
+              digestSha256 = event.digestSha256,
+              candidate = candidate,
+              publication = publication,
+            ),
+          )
+          publication.deliver()
+        }
       }
       is SyncCoordinatorEvent.Applied -> {
         val candidate = takeApplying(event.digestSha256)
@@ -595,6 +661,16 @@ class ReqwsProjectService private constructor(
             persistence.lastAppliedDigest() ?: event.digestSha256,
           ),
         )
+      }
+      is SyncCoordinatorEvent.Cancelled -> {
+        val cancelled = takeApplyingState(event.digestSha256)
+        val rollback = cancelled?.publication?.let { publication ->
+          statePublisher.prepareCompareAndPublish(
+            expectedVersion = publication.after.version,
+            next = publication.after.stableState,
+          )
+        }
+        rollback?.deliver()
       }
       is SyncCoordinatorEvent.Failed -> handleCoordinatorFailure(event)
     }
@@ -730,7 +806,7 @@ class ReqwsProjectService private constructor(
     candidateStates.remove(digest)?.let { CandidateState(digest, it) }
   }
 
-  private fun takeApplying(digest: String): CandidateState? {
+  private fun takeApplyingState(digest: String): ApplyingState? {
     val active = applyingState.get()
     return if (active?.digestSha256 == digest && applyingState.compareAndSet(active, null)) {
       active
@@ -738,6 +814,9 @@ class ReqwsProjectService private constructor(
       null
     }
   }
+
+  private fun takeApplying(digest: String): CandidateState? =
+    takeApplyingState(digest)?.candidate
 
   fun addListener(listener: (ReqwsProjectState) -> Unit): AutoCloseable {
     if (disposed.get()) {
@@ -791,6 +870,12 @@ class ReqwsProjectService private constructor(
   private data class CandidateState(
     val digestSha256: String,
     val state: ReqwsProjectState,
+  )
+
+  private data class ApplyingState(
+    val digestSha256: String,
+    val candidate: CandidateState?,
+    val publication: StatePublication<ReqwsProjectState>,
   )
 
   private data class PreparedValidState(
@@ -867,5 +952,6 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
   val vcsInspector: ReqwsVcsInspector? = null,
   val beforeReadingPublication: (() -> Unit)? = null,
+  val beforeCancellationRollback: (() -> Unit)? = null,
   val beforeVcsCallbackRefresh: (() -> Unit)? = null,
 )

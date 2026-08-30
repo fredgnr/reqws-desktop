@@ -86,6 +86,14 @@ internal class VerifiedAtomicStateFile<T>(
       throw VerifiedAtomicStateFileException("Unable to open the atomic sibling lock.", exception)
     }
 
+    fun tryAcquireExclusiveDirectoryLock(): AutoCloseable? = try {
+      directory.tryAcquireExclusiveLock()
+    } catch (exception: VerifiedAtomicStateFileException) {
+      throw exception
+    } catch (exception: Exception) {
+      throw VerifiedAtomicStateFileException("Unable to lock the atomic state parent.", exception)
+    }
+
     fun read(): T? {
       val bytes = try {
         directory.readRegularFile(fileName, maxBytes)
@@ -207,6 +215,8 @@ internal interface AtomicDirectoryOperations : AutoCloseable {
   fun atomicReplace(source: Path, target: Path)
 
   fun forceDirectory()
+
+  fun tryAcquireExclusiveLock(): AutoCloseable?
 
   fun openLockFile(name: Path): FileChannel
 
@@ -359,6 +369,8 @@ private class NioAtomicDirectoryOperations(
   }
 
   override fun forceDirectory() = stable.force()
+
+  override fun tryAcquireExclusiveLock(): AutoCloseable? = stable.tryAcquireExclusiveLock()
 
   override fun openLockFile(name: Path): FileChannel {
     requireAbsentOrRegularFile(name)
