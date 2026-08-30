@@ -788,7 +788,7 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
 - VCS configured/missing/wrong-VCS/retained 分类，以及无关 default/extra/custom `rootSettings` mapping 不影响 Project Model 同步；
 - present repository 的 live filesystem identity 单次捕获；目录替换或 workspace 内 symlink retarget 后不得继续使用 manifest snapshot 的旧 canonical target 判断 configured/active；
-- refresh、projection、coordinator 与 VCS 读取中的 `ProcessCanceledException` / coroutine cancellation 保留同一实例且不发布业务 failure；latest read 恢复最近稳定状态，单次 apply 恢复稳定状态并允许同一 coordinator 接受下一次 refresh。latest 非取消 refresh 异常发布 `REFRESH_FAILED` 并恢复旧 snapshot/digest；任何瞬时取消都不得停留在 `READING`/`SYNCHRONIZING`；
+- refresh、projection、coordinator 与 VCS 读取中的 `ProcessCanceledException` / coroutine cancellation 保留同一实例且不发布业务 failure；latest read 恢复最近稳定状态，单次 apply 恢复稳定状态并允许同一 coordinator 接受下一次 refresh。latest 非取消 refresh 异常发布 `REFRESH_FAILED` 并恢复旧 snapshot/digest；latest read 或 applier 的瞬时取消不得停留在 `READING`/`SYNCHRONIZING`，observer cancellation 仍按既有契约原样终止 worker；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh 与 `Sync Now` 的 ReqWS 生产调用链均没有 mapping setter、直接 `.idea/vcs.xml` 或 VCS ownership state 写入；Project Model 引发的 GoLand 原生 auto-detection 单独归因；
 - VCS 配置事件自动触发复核；同步 registration callback、并发事件、dispose 和丢事件后的 `Sync Now` 只读恢复；
 - 普通非 ReqWS project 不注册 VCS configuration listener；首个有效 candidate 注册后立即复检同一 snapshot，关闭注册前配置变化窗口；首个 valid read 在 registrar 或注册后 inspection 中被更新 inactive/error generation 淘汰时撤销 provisional epoch，迟到 handle 恰好关闭一次；被更新 valid generation 淘汰时由其在 STARTING/STARTED 两阶段接力同一 epoch且成功路径不重复注册，首个 registrar 失败时接力 generation 可重试；
