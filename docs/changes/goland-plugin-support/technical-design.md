@@ -382,9 +382,10 @@ ReqwsToolWindowFactory
 3. manifest 存在：后台读取、digest 和校验；首个有效 candidate 形成后才注册 VCS configuration listener，并在注册完成后对同一 snapshot 立即再做一次只读 inspection，关闭“读取完成但尚未监听”的窗口。latest-generation gate 内只预约单调 registration epoch，平台 registrar 与 inspection 均在 read-selection / VCS lifecycle 锁外执行。该 registration 在 latest gate 接受 valid candidate 前保持 provisional；更新的 valid read 可等待并承接同一 epoch，首个 registrar 失败时由仍有效的接力 read 重试；更新的 inactive/error read 若此前从未接受 valid candidate则立即撤销 epoch，仍在运行的 registrar 返回后自行关闭迟到 handle；当前 latest read 的注册后 inspection 取消或失败时同样关闭 provisional handle；
 4. Safe Mode：保存只读 snapshot 和 VCS 检查结果，但不执行 Project Model apply；
 5. trusted：提交首次 Project Model 同步与 VCS 只读检查；
-6. project-level VFS listener 只关注 manifest exact path 及直接父目录；
-7. project close/dispose：取消 debounce、IO 和 pending sync；
-8. reopen：不使用持久摘要作 skip，从 manifest、当前模型、Project Model ownership state 和当前 VCS 配置重新收敛/复核。
+6. 首次 valid read 或首次 Project Model apply 若收到一次瞬时 PCE/coroutine cancellation，exact rollback 完成和 provisional VCS cleanup 之后，由 project service 的 sibling coroutine 延迟提交一次 automatic successor；它不依赖 startup activity 再次执行、manifest 变化或 Tool Window 操作；
+7. project-level VFS listener 只关注 manifest exact path 及直接父目录；
+8. project close/dispose：取消 debounce、初始 cancellation retry、IO 和 pending sync；
+9. reopen：不使用持久摘要作 skip，从 manifest、当前模型、Project Model ownership state 和当前 VCS 配置重新收敛/复核。
 
 ### 7.3 状态机
 
@@ -405,7 +406,7 @@ DISPOSED
 
 - invalid manifest、root mismatch 和 path escape 进入 `ERROR`，保留上次有效模型；
 - latest refresh 的非取消异常进入 `ERROR / REFRESH_FAILED`，恢复进入 `READING` 前的 snapshot 与 applied digest；更新 generation 已胜出时，旧失败不得覆盖新状态；
-- latest refresh 的 PCE/coroutine cancellation 以同一实例结束当前 read；若该 generation 仍为 latest 且 service/project 存活，则恢复进入 `READING` 前最近发布的稳定状态且不设置 `lastError`。更新 read、apply 终态或 dispose 已胜出时不得由旧取消覆盖；因此 Tool Window 不会永久禁用 `Sync Now`；
+- latest refresh 的 PCE/coroutine cancellation 以同一实例结束当前 read；若该 generation 仍为 latest 且 service/project 存活，则恢复进入 `READING` 前最近发布的稳定状态且不设置 `lastError`。已有 snapshot/可见稳定态时 Tool Window 保留 `Sync Now`；首次读取的稳定基线仍是 blank `INACTIVE` 时，completion cleanup 后在 service scope 延迟提交一次 automatic successor。successor 同时绑定 predecessor generation、rollback 后 exact state version 和固定 manifest entry；更新 read、apply 终态、manifest 移除或 dispose 已胜出时不得由旧 timer 覆盖；
 - 单个活动仓库 missing 可同步其他有效仓库，整体为 `DEGRADED`；
 - project model 成功但缺失、冲突或仍有 retained Git mapping 时为 `DEGRADED`，提示用户手动配置；
 - model apply 与 VCS 快照读取完成后更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline；只有没有 Project Model 或 VCS 诊断时才显示 `SYNCHRONIZED`；
@@ -415,7 +416,7 @@ DISPOSED
 - 手动 reconcile intent 跨 manifest read generation 与 pending coalescing 保留：后到的自动 candidate 仍以最新内容为准但继承 manual trigger；后到的 read failure 仍作为最新失败发布，同时 intent 保留到下一份 valid candidate 真正开始 apply，不能通过应用旧 snapshot 隐藏读取错误；
 - 开始应用不同 digest 时先使内存 no-op baseline 失效；若后层失败，回退到先前 digest 也必须重放，不能把部分提交状态误判为 no-op；
 - 文件恢复后自动重新进入 `READING`。
-- 单次 applier 的 PCE/coroutine cancellation 不发布业务 `Failed`，清空该次 applying state 并保持 no-op baseline dirty；没有更新 read/apply 已胜出时恢复最近稳定状态。owner scope 仍 active 时 coordinator worker 继续处理下一份 submission；owner scope 取消或 service dispose 仍进入永久 closed，observer 自身抛出的终止信号继续原样结束 worker；
+- 单次 applier 的 PCE/coroutine cancellation 不发布业务 `Failed`，清空该次 applying state 并保持 no-op baseline dirty；没有更新 read/apply 已胜出时恢复最近稳定状态。首次 apply 回滚到 blank `INACTIVE` 时复用同一个初始 cancellation recovery slot；source read generation 防止旧 apply timer 反超更新 candidate。初始请求最多自动追加一个 successor，successor 再次取消不续订，从而避免 PCE/CE 热循环；owner scope 仍 active 时 coordinator worker 继续处理下一份 submission，owner scope 取消或 service dispose 仍进入永久 closed，observer 自身抛出的终止信号继续原样结束 worker；
 - service state 通过锁内排队、锁外串行通知的 terminal publisher 发布；`DISPOSED` 一旦进入队列即成为永久终态，随后到达的 read/apply 回调不能覆盖终态或产生晚到的非终态通知；listener 注册与 dispose 使用同一线性化边界。
 
 ### 7.4 线程与事务
@@ -425,7 +426,7 @@ DISPOSED
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
 - VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只在首个有效 manifest candidate 后 provisional 注册：latest-selection 边界内只预约 epoch，平台 registrar、等待接力和 handle close 均在 read-selection / VCS lifecycle 锁外。只有 latest valid candidate 接受后才成为 lifecycle registration；更新的 valid read 可等待并接力同一 epoch，更新的 inactive/error 在没有任何 accepted valid state 时撤销 epoch，任何 latest read 在接受 valid state 前取消或失败也通过 completion cleanup 撤销；迟到 handle 无法提交并恰好关闭一次。callback 绑定 registration epoch，并把 epoch 校验与 read generation 创建放在同一个 latest-selection 线性化边界；它只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
-- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是当前操作的终止信号，refresh、Project Model projection、coordinator apply/observer 与 VCS inspection 均不得包装或替换其实例。latest read 在恢复稳定状态后原样结束；coordinator 把 apply cancellation 作为非业务 cancellation event 交还 service、保持 baseline dirty 并继续 worker。owner scope 已取消时下一轮 activity check 仍会终止 worker；只有真实的 VCS 读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
+- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是当前操作的终止信号，refresh、Project Model projection、coordinator apply/observer 与 VCS inspection 均不得包装或替换其实例。latest read 在恢复稳定状态后原样结束；初始自动恢复在该 read completion/provisional-listener cleanup 之后使用同一 project-service supervisor scope 的 sibling job，不持有 cancellation cause，也不改变原 job 的终止结果。coordinator 把 apply cancellation 作为非业务 cancellation event 交还 service、保持 baseline dirty 并继续 worker。retry waiter 前后都检查 owner/service/project activity，dispose 显式取消 pending slot；只有真实的 VCS 读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
 - trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
 - Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`。写事务通过平台已提供的公开 JNA POSIX binding，从 `/` 开始逐级 `open/openat(O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)`，把真实 `.idea` 绑定为 stable directory descriptor；routed `Path` 在遍历前后的公开 `unix:dev,ino` 必须同时等于 descriptor 的 native `fstat` identity。跨 JVM writer 使用该已打开 descriptor 上的非阻塞 exclusive advisory lock，锁与目录 inode 同生命周期；任何同名 lock 子文件都不是互斥权威，rename/unlink/recreate 不能产生第二个可并发提交 generation 的 writer。state 读取、能力探针、私有 temp 写入与 force、`renameat`、目录 `fsync` 和严格回读全部相对同一 descriptor 完成，末尾重新安全打开原路径并以 native identity 复验。普通文件先以 `O_NOFOLLOW | O_NONBLOCK` 打开并由 `fstat` 确认 regular file，再通过绕过 NIO provider 的 `java.io` fd bridge 取得 `FileChannel`。不支持 local file URI、目标 64-bit macOS/JNA/openat、稳定 directory lock、缺少稳定 identity 或未通过原子覆盖探针时一律 fail closed；生产代码不得依赖 IntelliJ internal NIO provider API。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
 - 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
@@ -564,6 +565,7 @@ Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target de
 - invalid candidate 保留上次有效模型；
 - manifest 恢复后自动清除可恢复错误；
 - “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 Project Model candidate、重新读取 VCS 与文件系统状态；VCS 阶段始终只读。
+- 已有 manifest 的首次 read/apply cancellation recovery 不等待新的 VFS event：只有 exact rollback 到 blank `INACTIVE`、source generation 仍 latest、rollback state version 未变化且 fixed manifest entry 仍存在时，才延迟执行一次 automatic reread；新的 VFS/manual/VCS read、owner cancellation 或 dispose 使旧 retry 失效。
 - VCS configuration listener 只能在 callback 所需依赖全部初始化、且首个有效 manifest candidate 已确认后 provisional 注册；注册完成后立即对该 snapshot 再做一次只读 inspection。第一个 latest gate 只在 `read-selection → VCS-lifecycle` 锁序下预约单调 epoch，随后在两把锁外调用或等待平台 registrar。只有通过最终 latest gate 的 valid candidate 才接受 registration；若该 read 被更新的 valid generation 淘汰，更新 generation 等待并接力同一 epoch，registrar 失败时仍有效的接力 read 可在该 epoch 重试；若被 inactive/error generation 淘汰且此前没有 accepted valid state，则在线性化接受更新状态时撤销 epoch，正在运行的 registrar 返回后拒绝提交并在锁外恰好关闭一次迟到 handle。任何 latest read 在进入/完成 acceptance 前取消或异常结束，也由 generation completion hook 撤销未接受 epoch/handle。callback 的 registration epoch 校验与 read generation 创建使用同一锁序线性化，旧 publisher snapshot 即使已通过前置检查，在关闭或重新注册后也不能唤醒读取。普通非 ReqWS project 永不订阅该 listener，配置事件也不会触发 `READING` 或 manifest IO；有效项目中的配置事件不在 callback 读取 manifest 或 mapping，只提交一次后台复核。dispose 后不再接收或提交刷新。
 
 W3 必须用与 Desktop `writeJsonAtomically` 等价的脚本模拟连续替换、无效 JSON 恢复、100 次快速变化和 project dispose。
@@ -641,6 +643,7 @@ Last applied: a1b2c3d4e5f6
 规则：
 
 - 非 ReqWS project 隐藏或保持不可用；
+- 初始 `INACTIVE`/`READING` 保持隐藏，因此首次 valid read/apply 的一次瞬时 cancellation 必须由 service-owned 有界 retry 自动恢复，不能把不可见 Tool Window 当作用户重试入口；
 - factory 以固定 manifest entry 决定初始 `shouldBeAvailable`；所有 file-based project 的轻量 startup controller 监听 service state，并在 EDT 动态切换 availability，因此普通项目不会先闪现 stripe，而 absent → create 可在内容尚未实例化时激活 Tool Window；
 - Safe Mode 显示“信任项目后同步”，不自行修改 trust；
 - invalid manifest 显示稳定错误码、文件位置和保留上次有效状态的说明；
@@ -788,7 +791,7 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
 - VCS configured/missing/wrong-VCS/retained 分类，以及无关 default/extra/custom `rootSettings` mapping 不影响 Project Model 同步；
 - present repository 的 live filesystem identity 单次捕获；目录替换或 workspace 内 symlink retarget 后不得继续使用 manifest snapshot 的旧 canonical target 判断 configured/active；
-- refresh、projection、coordinator 与 VCS 读取中的 `ProcessCanceledException` / coroutine cancellation 保留同一实例且不发布业务 failure；latest read 恢复最近稳定状态，单次 apply 恢复稳定状态并允许同一 coordinator 接受下一次 refresh。latest 非取消 refresh 异常发布 `REFRESH_FAILED` 并恢复旧 snapshot/digest；latest read 或 applier 的瞬时取消不得停留在 `READING`/`SYNCHRONIZING`，observer cancellation 仍按既有契约原样终止 worker；
+- refresh、projection、coordinator 与 VCS 读取中的 `ProcessCanceledException` / coroutine cancellation 保留同一实例且不发布业务 failure；latest read 恢复最近稳定状态，单次 apply 恢复稳定状态并允许同一 coordinator 接受下一次 refresh。首次 read/apply 的 PCE 与 coroutine cancellation 四种路径必须从一次 `ReqwsStartupActivity.execute` 自动进入同一个有界 retry 并最终同步，不允许测试直接调用 service refresh 代替生产恢复；另覆盖 retry 次数上限、dispose/owner cancellation、newer generation/state version 胜出和 provisional listener cleanup。latest 非取消 refresh 异常发布 `REFRESH_FAILED` 并恢复旧 snapshot/digest；observer cancellation 仍按既有契约原样终止 worker；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh 与 `Sync Now` 的 ReqWS 生产调用链均没有 mapping setter、直接 `.idea/vcs.xml` 或 VCS ownership state 写入；Project Model 引发的 GoLand 原生 auto-detection 单独归因；
 - VCS 配置事件自动触发复核；同步 registration callback、并发事件、dispose 和丢事件后的 `Sync Now` 只读恢复；
 - 普通非 ReqWS project 不注册 VCS configuration listener；首个有效 candidate 注册后立即复检同一 snapshot，关闭注册前配置变化窗口；首个 valid read 在 registrar 或注册后 inspection 中被更新 inactive/error generation 淘汰时撤销 provisional epoch，迟到 handle 恰好关闭一次；被更新 valid generation 淘汰时由其在 STARTING/STARTED 两阶段接力同一 epoch且成功路径不重复注册，首个 registrar 失败时接力 generation 可重试；
@@ -856,8 +859,8 @@ Desktop 继续使用现有 `ReqwsError` payload；GoLand 启动失败只增加�
 | root mismatch / path escape | 全量拒绝本次 candidate。 |
 | 单个活动目录缺失 | 不创建目录；同步其他有效仓库并标记 degraded。 |
 | 项目模型更新失败 | 使用平台事务保证不提交部分 model 变更，记录 error。 |
-| latest read 瞬时取消 | 原样结束该 read；仍为 latest 且 service 存活时恢复最近稳定状态，不写业务错误，`Sync Now` 仍可用。 |
-| 单次 apply 瞬时取消 | 不发布业务 failure，保持 baseline dirty并恢复稳定状态；同一 coordinator 接受下一份 submission。 |
+| latest read 瞬时取消 | 原样结束该 read；仍为 latest 且 service 存活时恢复最近稳定状态，不写业务错误。已有可见稳定态时 `Sync Now` 仍可用；首次 blank `INACTIVE` 自动延迟重试一次。 |
+| 单次 apply 瞬时取消 | 不发布业务 failure，保持 baseline dirty并恢复稳定状态；首次 blank `INACTIVE` 复用一次性 automatic retry，同一 coordinator 接受下一份 submission。 |
 | VCS 读取失败 | 保留成功项目内容与用户配置，状态 degraded；配置事件或 Sync Now 重新读取。 |
 | VFS 丢事件 / Mac sleep | 手动 Sync Now；reopen 自动恢复。 |
 | Project Model ownership state 损坏 | 从 manifest 与当前 model 进入保守恢复，不批量删除 unknown entries。 |

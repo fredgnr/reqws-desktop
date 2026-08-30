@@ -100,6 +100,8 @@ npm run package:goland
 
 通过 GoLand 原生流程信任项目后，插件会停止信任检查并向同一个串行同步流程提交一次同步。
 
+若启动期首次读取或首次项目模型同步只发生一次瞬时平台/coroutine cancellation，仍存活的 project service 会在短暂延迟后自动重试一次；不需要改动 manifest、等待新的文件事件或重开项目。为避免持续取消造成忙循环，自动恢复次数固定有界。
+
 ## 7. Tool Window 界面导览
 
 ![ReqWS Tool Window 同步态实现候选](../changes/goland-plugin-support/ui/tool-window-implementation-2026-08-17.png)
@@ -192,7 +194,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 | 状态 | 含义 | 恢复建议 |
 |---|---|---|
-| `Reading… / 正在读取…` | 正在初次读取或重新读取 manifest。首次尚未确认 manifest 时 Tool Window 通常不显示。 | 等待读取完成；持续停留时检查固定 manifest 是否可访问。 |
+| `Reading… / 正在读取…` | 正在初次读取或重新读取 manifest。首次尚未确认 manifest 时 Tool Window 通常不显示；单次瞬时取消会由 service 自动重试一次。 | 等待读取完成；持续停留时检查固定 manifest 是否可访问。 |
 | `Safe Mode / 安全模式` | manifest 可读，但项目未被 GoLand 信任；插件保持只读。 | 仅在确认项目来源后，通过 GoLand 原生流程信任项目。 |
 | `Syncing… / 正在同步…` | 正在收敛项目模型并读取当前 VCS 配置。 | 等待完成，不要用重复点击制造无意义重试。 |
 | `Synced / 已同步` | 项目模型已同步，当前只读检查未发现 Git Root 差异，摘要已推进。 | 无需操作。 |
@@ -274,7 +276,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 - 当前只支持本地 macOS GoLand，不支持 Windows、Linux、IntelliJ IDEA、Fleet 或 Remote Development。
 - 插件没有签名、Marketplace 分发、自动安装或自动更新。
-- 只读 VCS 当前源码候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；269 项插件测试通过，本地 ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`（475,296 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
+- 当前 exact-source 候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；281 项插件测试通过，本地 ZIP SHA-256 为 `9746925dad410016187d1f9859829dfa77ca020d167f4a87f9261afbac6e2fc8`（484,669 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
 - 同步态截图来自旧候选，只覆盖界面布局，不代表手动 Git Root 提示、深色主题、错误、降级、Safe Mode、最窄宽度或完整生命周期已验收。
 
 进一步资料：

@@ -34,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Service(Service.Level.PROJECT)
@@ -60,9 +61,10 @@ class ReqwsProjectService private constructor(
     },
   )
   private val watcherRef = AtomicReference<ManifestVfsWatcher?>()
+  private val initialCancellationRetryRef = AtomicReference<Job?>()
   private val applyingState = AtomicReference<ApplyingState?>()
   private val candidateLock = Any()
-  private val candidateStates = LinkedHashMap<String, ReqwsProjectState>()
+  private val candidateStates = LinkedHashMap<String, CandidateState>()
   private val persistence: ReqwsSyncPersistence
     get() = project.service()
   private val trustGate = runtimeOverrides?.trustGate
@@ -114,6 +116,9 @@ class ReqwsProjectService private constructor(
     ?: ReqwsVcsInspector { snapshot ->
       project.service<ReqwsVcsDiagnosticsService>().inspect(snapshot)
     }
+  private val initialCancellationRetryWaiter =
+    runtimeOverrides?.initialCancellationRetryWaiter
+      ?: InitialCancellationRetryWaiter { delay(it) }
 
   val state: ReqwsProjectState
     get() = statePublisher.state
@@ -352,20 +357,32 @@ class ReqwsProjectService private constructor(
   private fun requestRefresh(
     trigger: SyncTrigger,
     requiredVcsRegistrationVersion: Long? = null,
+    cancellationRecovery: InitialCancellationRecovery? = null,
   ): Job? {
     if (disposed.get() || project.isDisposed) return null
-    val request = if (requiredVcsRegistrationVersion == null) {
-      readRequests.begin(trigger)
-    } else {
-      readRequests.beginIf(trigger) {
+    val request = when {
+      cancellationRecovery != null -> {
+        readRequests.beginCancellationRecoveryIf(cancellationRecovery.predecessor) {
+          val current = statePublisher.snapshot()
+          current.version == cancellationRecovery.expectedStateVersion &&
+            current.state.lifecycle == ReqwsLifecycleState.INACTIVE &&
+            current.state.snapshot == null
+        } ?: return null
+      }
+      requiredVcsRegistrationVersion == null -> readRequests.begin(trigger)
+      else -> readRequests.beginIf(trigger) {
         synchronized(vcsChangeLifecycleLock) {
           vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED &&
             vcsChangeRegistrationVersion == requiredVcsRegistrationVersion
         }
       } ?: return null
     }
+    // A rejected conditional VCS callback must not consume the only startup recovery. Cancel the
+    // pending timer only after this normal request has actually become the latest generation.
+    if (cancellationRecovery == null) cancelPendingInitialCancellationRetry()
     var job: Job? = null
     val readingPublicationRef = AtomicReference<StatePublication<ReqwsProjectState>?>()
+    val cancellationRecoveryRef = AtomicReference<InitialCancellationRecovery?>()
     val cleanup = {
       var revocation: VcsChangeMonitoringRevocation? = null
       readRequests.runIfLatest(request) {
@@ -396,10 +413,14 @@ class ReqwsProjectService private constructor(
           if (disposed.get()) return@launch
           acceptLoadedState(loaded, request, observedVcsRegistrationVersion)
         } catch (failure: ProcessCanceledException) {
-          restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure)
+          cancellationRecoveryRef.set(
+            restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure),
+          )
           throw failure
         } catch (failure: CancellationException) {
-          restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure)
+          cancellationRecoveryRef.set(
+            restoreStableStateAfterCancellationIfLatest(request, readingPublication, failure),
+          )
           throw failure
         } catch (failure: Exception) {
           publishUnexpectedRefreshFailureIfLatest(request, previous)
@@ -410,15 +431,33 @@ class ReqwsProjectService private constructor(
       // The handler is installed before READING is published, so every exit after generation
       // creation—including cancellation before the coroutine body starts—releases an unaccepted
       // listener owned by the latest request. Accepted lifecycle registrations remain open.
-      launched.invokeOnCompletion { cleanup() }
+      launched.invokeOnCompletion {
+        cleanup()
+        cancellationRecoveryRef.getAndSet(null)?.let(::scheduleInitialCancellationRetry)
+      }
       runtimeOverrides?.beforeReadingPublication?.invoke()
       var readingPublication: StatePublication<ReqwsProjectState>? = null
       val readingPrepared = readRequests.runIfLatest(request) {
-        readingPublication = statePublisher.prepareUpdate { current ->
-          current.state.copy(
-            lifecycle = ReqwsLifecycleState.READING,
-            lastError = null,
-          )
+        readingPublication = if (cancellationRecovery == null) {
+          statePublisher.prepareUpdate { current ->
+            current.state.copy(
+              lifecycle = ReqwsLifecycleState.READING,
+              lastError = null,
+            )
+          }
+        } else {
+          val current = statePublisher.snapshot()
+          if (current.version != cancellationRecovery.expectedStateVersion) {
+            null
+          } else {
+            statePublisher.prepareCompareAndPublish(
+              expectedVersion = cancellationRecovery.expectedStateVersion,
+              next = current.state.copy(
+                lifecycle = ReqwsLifecycleState.READING,
+                lastError = null,
+              ),
+            )
+          }
         }
       }
       val publication = readingPublication
@@ -437,10 +476,14 @@ class ReqwsProjectService private constructor(
       try {
         publication.deliver()
       } catch (failure: ProcessCanceledException) {
-        restoreStableStateAfterCancellationIfLatest(request, publication, failure)
+        cancellationRecoveryRef.set(
+          restoreStableStateAfterCancellationIfLatest(request, publication, failure),
+        )
         throw failure
       } catch (failure: CancellationException) {
-        restoreStableStateAfterCancellationIfLatest(request, publication, failure)
+        cancellationRecoveryRef.set(
+          restoreStableStateAfterCancellationIfLatest(request, publication, failure),
+        )
         throw failure
       } catch (failure: Exception) {
         publishUnexpectedRefreshFailureIfLatest(request, previous)
@@ -459,11 +502,11 @@ class ReqwsProjectService private constructor(
     request: SyncReadRequest,
     readingPublication: StatePublication<ReqwsProjectState>,
     cancellation: Throwable,
-  ) {
-    if (disposed.get() || project.isDisposed) return
+  ): InitialCancellationRecovery? {
+    if (disposed.get() || project.isDisposed) return null
+    var rollback: StatePublication<ReqwsProjectState>? = null
     try {
       runtimeOverrides?.beforeCancellationRollback?.invoke()
-      var rollback: StatePublication<ReqwsProjectState>? = null
       readRequests.runIfLatest(request) {
         if (
           !disposed.get() &&
@@ -480,6 +523,74 @@ class ReqwsProjectService private constructor(
       // State publication listeners must not replace a platform/coroutine termination signal.
       if (restoreFailure !== cancellation) cancellation.addSuppressed(restoreFailure)
     }
+    return rollback?.toInitialCancellationRecovery(request)
+  }
+
+  /**
+   * A first read/apply has no visible stable Tool Window state to fall back to. Give that exact
+   * latest cancellation one delayed automatic successor in the lifecycle-owned scope. The
+   * predecessor generation and rollback state version are rechecked before the retry can publish
+   * READING, so a newer read/apply/dispose always wins and a second cancellation cannot loop.
+   */
+  private fun scheduleInitialCancellationRetry(recovery: InitialCancellationRecovery) {
+    if (
+      recovery.predecessor.cancellationRecoveryAttempt >=
+      MAX_INITIAL_CANCELLATION_RETRY_ATTEMPTS ||
+      disposed.get() ||
+      project.isDisposed ||
+      !coroutineScope.isActive
+    ) {
+      return
+    }
+    val retry = coroutineScope.launch(
+      context = Dispatchers.IO,
+      start = CoroutineStart.LAZY,
+    ) {
+      initialCancellationRetryWaiter.wait(INITIAL_CANCELLATION_RETRY_DELAY_MILLIS)
+      currentCoroutineContext().ensureActive()
+      if (
+        disposed.get() ||
+        project.isDisposed ||
+        ReqwsProjectDetector.detect(project) == null
+      ) {
+        return@launch
+      }
+      requestRefresh(
+        trigger = SyncTrigger.AUTOMATIC,
+        cancellationRecovery = recovery,
+      )
+    }
+    val previous = initialCancellationRetryRef.getAndSet(retry)
+    previous?.cancel(CancellationException("ReqWS initial cancellation retry was replaced"))
+    retry.invokeOnCompletion { initialCancellationRetryRef.compareAndSet(retry, null) }
+    if (
+      disposed.get() ||
+      project.isDisposed ||
+      !coroutineScope.isActive ||
+      initialCancellationRetryRef.get() !== retry
+    ) {
+      initialCancellationRetryRef.compareAndSet(retry, null)
+      retry.cancel(CancellationException("ReqWS initial cancellation retry is no longer active"))
+      return
+    }
+    retry.start()
+  }
+
+  private fun cancelPendingInitialCancellationRetry() {
+    initialCancellationRetryRef.getAndSet(null)?.cancel(
+      CancellationException("ReqWS initial cancellation retry was superseded"),
+    )
+  }
+
+  private fun StatePublication<ReqwsProjectState>.toInitialCancellationRecovery(
+    predecessor: SyncReadRequest,
+  ): InitialCancellationRecovery? = after.state.takeIf { state ->
+    state.lifecycle == ReqwsLifecycleState.INACTIVE && state.snapshot == null
+  }?.let {
+    InitialCancellationRecovery(
+      predecessor = predecessor,
+      expectedStateVersion = after.version,
+    )
   }
 
   private fun publishUnexpectedRefreshFailureIfLatest(
@@ -605,7 +716,7 @@ class ReqwsProjectService private constructor(
         currentCoroutineContext().ensureActive()
         val accepted = readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
-          rememberCandidate(snapshot.digestSha256, prepared.state)
+          rememberCandidate(snapshot.digestSha256, prepared.state, request)
           val offered = coordinator.offer(SyncCandidate(snapshot.digestSha256, snapshot), trigger)
           offered && completeVcsChangeMonitoringPreparation(
             prepared.monitoring,
@@ -670,7 +781,25 @@ class ReqwsProjectService private constructor(
             next = publication.after.stableState,
           )
         }
-        rollback?.deliver()
+        val sourceRequest = cancelled?.candidate?.sourceRequest
+        val recovery = if (sourceRequest != null && rollback != null) {
+          rollback.toInitialCancellationRecovery(sourceRequest)
+        } else {
+          null
+        }
+        try {
+          rollback?.deliver()
+        } catch (failure: ProcessCanceledException) {
+          // Observer cancellation retains its existing raw-termination boundary.
+          throw failure
+        } catch (failure: CancellationException) {
+          throw failure
+        } catch (failure: Exception) {
+          // Ordinary observer failures remain isolated, but cannot suppress startup recovery.
+          recovery?.let(::scheduleInitialCancellationRetry)
+          throw failure
+        }
+        recovery?.let(::scheduleInitialCancellationRetry)
       }
       is SyncCoordinatorEvent.Failed -> handleCoordinatorFailure(event)
     }
@@ -792,9 +921,17 @@ class ReqwsProjectService private constructor(
     if (!watcherRef.compareAndSet(null, watcher)) watcher.dispose()
   }
 
-  private fun rememberCandidate(digest: String, loaded: ReqwsProjectState) {
+  private fun rememberCandidate(
+    digest: String,
+    loaded: ReqwsProjectState,
+    sourceRequest: SyncReadRequest,
+  ) {
     synchronized(candidateLock) {
-      candidateStates[digest] = loaded
+      candidateStates[digest] = CandidateState(
+        digestSha256 = digest,
+        state = loaded,
+        sourceRequest = sourceRequest,
+      )
       while (candidateStates.size > MAX_PENDING_CANDIDATES) {
         val eldest = candidateStates.entries.firstOrNull() ?: break
         candidateStates.remove(eldest.key)
@@ -803,7 +940,7 @@ class ReqwsProjectService private constructor(
   }
 
   private fun takeCandidate(digest: String): CandidateState? = synchronized(candidateLock) {
-    candidateStates.remove(digest)?.let { CandidateState(digest, it) }
+    candidateStates.remove(digest)
   }
 
   private fun takeApplyingState(digest: String): ApplyingState? {
@@ -859,6 +996,7 @@ class ReqwsProjectService private constructor(
       }
       finishVcsChangeMonitoringRevocation(revocation)
       readRequests.invalidate()
+      cancelPendingInitialCancellationRetry()
       trustMonitor.close()
       watcherRef.getAndSet(null)?.dispose()
       coordinator.close()
@@ -870,12 +1008,18 @@ class ReqwsProjectService private constructor(
   private data class CandidateState(
     val digestSha256: String,
     val state: ReqwsProjectState,
+    val sourceRequest: SyncReadRequest,
   )
 
   private data class ApplyingState(
     val digestSha256: String,
     val candidate: CandidateState?,
     val publication: StatePublication<ReqwsProjectState>,
+  )
+
+  private data class InitialCancellationRecovery(
+    val predecessor: SyncReadRequest,
+    val expectedStateVersion: Long,
   )
 
   private data class PreparedValidState(
@@ -917,6 +1061,8 @@ class ReqwsProjectService private constructor(
     private const val MANIFEST_RETRY_COUNT = 3
     private const val MANIFEST_RETRY_DELAY_MILLIS = 100L
     private const val MAX_PENDING_CANDIDATES = 8
+    private const val MAX_INITIAL_CANCELLATION_RETRY_ATTEMPTS = 1
+    private const val INITIAL_CANCELLATION_RETRY_DELAY_MILLIS = 250L
 
     internal fun createForTest(
       project: Project,
@@ -944,6 +1090,10 @@ internal fun interface ReqwsVcsChangeRegistrar {
   fun addExternalChangeListener(listener: () -> Job?): AutoCloseable
 }
 
+internal fun interface InitialCancellationRetryWaiter {
+  suspend fun wait(delayMillis: Long)
+}
+
 internal data class ReqwsProjectServiceRuntimeOverrides(
   val trustGate: ReqwsTrustGate? = null,
   val candidateApplier: SyncCandidateApplier<ManifestSnapshot>? = null,
@@ -954,4 +1104,5 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val beforeReadingPublication: (() -> Unit)? = null,
   val beforeCancellationRollback: (() -> Unit)? = null,
   val beforeVcsCallbackRefresh: (() -> Unit)? = null,
+  val initialCancellationRetryWaiter: InitialCancellationRetryWaiter? = null,
 )

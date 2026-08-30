@@ -8,6 +8,32 @@ import org.junit.Test
 
 class SyncReadRequestTrackerTest {
   @Test
+  fun `a cancellation recovery is an automatic successor with an incremented attempt`() {
+    val tracker = SyncReadRequestTracker()
+    val initial = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    val recovery = tracker.beginCancellationRecoveryIf(initial) { true }
+
+    requireNotNull(recovery)
+    assertEquals(SyncTrigger.AUTOMATIC, recovery.requestedTrigger)
+    assertEquals(1, recovery.cancellationRecoveryAttempt)
+    assertTrue(tracker.runIfLatest(recovery) {})
+  }
+
+  @Test
+  fun `a stale cancellation timer cannot supersede a newer read`() {
+    val tracker = SyncReadRequestTracker()
+    val cancelled = tracker.begin(SyncTrigger.AUTOMATIC)
+    val newer = tracker.begin(SyncTrigger.MANUAL)
+
+    assertEquals(
+      null,
+      tracker.beginCancellationRecoveryIf(cancelled) { true },
+    )
+    assertTrue(tracker.runIfLatest(newer) {})
+  }
+
+  @Test
   fun `a rejected conditional begin does not supersede the current generation`() {
     val tracker = SyncReadRequestTracker()
     val current = tracker.begin(SyncTrigger.AUTOMATIC)

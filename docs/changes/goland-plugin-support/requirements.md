@@ -100,6 +100,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 监听 manifest 的 create、move、replace 和 content change，并对原子写入事件做防抖；
 - 同步串行、幂等、latest-wins，重复同一内容不重复刷新项目模型；
 - 项目重启后从 manifest 冷恢复，不依赖 Desktop 正在运行；
+- 首次启动的有效 manifest read 或首次 Project Model apply 收到一次瞬时平台/coroutine cancellation 时，由仍存活的 project service 自动安排一次有界重试；恢复不依赖 manifest 再次变化、VFS 事件、Tool Window 可见性或用户直接调用 service API；
 - 提供 ReqWS Tool Window，至少展示 workspace、feature branch、活动仓库、项目模型同步状态、Git Root 配置诊断、最近错误和“立即同步”；
 - Tool Window 必须与 GoLand 原生主题和控件密度一致，清晰区分状态、工作区摘要、仓库列表、诊断摘要和操作区；状态不能只靠颜色表达，常用窄宽度下不得出现仓库行异常拉伸、控件裁切或不可达操作；
 - 只删除插件明确拥有且当前不再需要的项目模型条目；VCS Directory Mappings 完全由用户与 GoLand 所有；
@@ -142,6 +143,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - 插件检测固定 manifest 路径；
 - manifest 有效且项目 trusted 时执行首次项目模型同步和 VCS 只读检查；
+- 若首次 read/apply 被一次瞬时取消，启动流程自身在 owner/service 仍存活且该取消仍为 latest 时自动重试并最终收敛，不要求用户修改 manifest 或重新打开项目；
 - Safe Mode 时只读显示 workspace、当前 VCS 配置诊断和信任提示，不修改 Project Model 或 VCS；
 - manifest 无效时不修改已有项目模型，并在 Tool Window 给出错误码和恢复动作。
 
@@ -169,6 +171,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - 重新添加保留仓库时，插件恢复同一路径的受管项目模型条目并重新检查 Git mapping；
 - 文件监听丢失、Mac 休眠恢复或同步失败后，用户可执行“立即同步”；该动作只重放项目模型同步并重新读取 VCS，不修改 Directory Mappings；
 - GoLand 重启后重新读取 manifest；
+- 首次 read/apply 的一次瞬时取消由 service-scope 有界自动重试恢复；重复取消不会形成无限重试或持续 CPU；
 - 重复同步不产生重复条目；
 - manifest 临时缺失或损坏时保留上次有效模型，不立即清空全部仓库。
 
@@ -237,8 +240,8 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - 项目重启不依赖内存状态即可恢复；持久化最近摘要只用于 UI/诊断，新 service 必须重新读取并收敛，不能据此跳过 apply；
 - 单个活动目录缺失时不得创建目录，可同步其他有效活动仓库并把整体状态标记为 degraded。
 - Project Model authoritative state 的跨 JVM writer 必须互斥在已经验证并打开的稳定 `.idea` directory inode 上；替换、删除或重建任何 lock 子文件都不得产生第二把独立锁，也不得绕过 generation fence。
-- latest manifest/VCS read 收到 `ProcessCanceledException` 或 coroutine cancellation 时，仍必须原样结束该 read；若 request 仍为 latest 且 project/service 存活，UI 必须恢复进入 `READING` 前最近的稳定状态，不写业务 `lastError`，并保留用户可达的 `Sync Now` 恢复入口。
-- 单次 Project Model applier 收到平台或 coroutine cancellation 时不得发布普通 `Failed`、不得仅因该 submission 把 coordinator 永久关闭，也不得保留 `SYNCHRONIZING`；该 submission 保持 dirty 并以同一终止信号结束，owner scope 仍 active 时后续 refresh 必须能在同一 service/coordinator 生命周期重新 apply。owner scope 取消或 service dispose 仍永久停止 coordinator；observer 自身抛出的终止信号继续按既有 raw-propagation 边界结束 worker。
+- latest manifest/VCS read 收到 `ProcessCanceledException` 或 coroutine cancellation 时，仍必须原样结束该 read；若 request 仍为 latest 且 project/service 存活，UI 必须恢复进入 `READING` 前最近的稳定状态且不写业务 `lastError`。已有可见稳定状态时保留用户可达的 `Sync Now`；首次启动回滚到无 snapshot 的 `INACTIVE` 时，由 service scope 延迟提交一次有界 automatic successor，并以 predecessor generation 与 exact state version 防止旧重试覆盖更新 read/apply/dispose。
+- 单次 Project Model applier 收到平台或 coroutine cancellation 时不得发布普通 `Failed`、不得仅因该 submission 把 coordinator 永久关闭，也不得保留 `SYNCHRONIZING`；该 submission 保持 dirty 并以同一终止信号结束，owner scope 仍 active 时后续 refresh 必须能在同一 service/coordinator 生命周期重新 apply。首次 apply 回滚到无 snapshot 的 `INACTIVE` 时复用同一项一次性自动恢复；retry 自身再次取消不得续订，避免 cancellation storm。owner scope 取消或 service dispose 仍永久停止 coordinator；observer 自身抛出的终止信号继续按既有 raw-propagation 边界结束 worker。
 
 ### 7.3 性能与体验
 
@@ -250,6 +253,7 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 - 无目标变化时不触发重复索引；
 - 以 50 个活动仓库和 20 个保留仓库作为规模回归；
 - 不允许持续 CPU、无限 indexing、明显 UI freeze 或与事件数量等量的重复 apply；
+- 初始 cancellation recovery 必须有固定次数上限和延迟，新的 startup/VFS/VCS/manual generation、owner scope cancellation 或 dispose 必须使旧 timer 失效，不得形成热循环；
 - 插件错误不能阻止普通 GoLand 项目打开或使用不相关功能。
 - IntelliJ `ProcessCanceledException` 与 coroutine cancellation 必须以原实例传播到当前 read/apply 边界，不得被包装成普通 VCS degraded 或 Project Model failure；瞬时 submission 取消完成状态回滚后不得使仍存活的 service 失去后续同步能力。
 
@@ -286,11 +290,11 @@ GoLand 用户主动使用 IDE 自带 Git 功能不属于插件自动行为。插
 | GL-01 | GoLand 未安装 | Desktop 明确显示不可用，其他编辑器入口正常。 |
 | GL-02 | 标准路径安装 | Desktop 可打开正确 workspace root，启动不经过 shell。 |
 | GL-03 | Toolbox 安装 | 探测和启动策略经真实安装验证，失败时有明确诊断或稳定 fallback。 |
-| GL-04 | 首次打开 | 插件识别 manifest 并自动同步活动项目内容；缺失 Git Root 有明确 Directory Mappings 手动步骤，用户配置后事件自动复核为已配置。 |
+| GL-04 | 首次打开 | 插件识别 manifest 并自动同步活动项目内容；首次 read/apply 的一次 PCE 或 coroutine cancellation 由单次 startup trigger 自动重试并最终收敛，不依赖 direct service API、manifest 改写或新 VFS event；缺失 Git Root 有明确 Directory Mappings 手动步骤，用户配置后事件自动复核为已配置。 |
 | GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入项目内容；缺失 Git Root 显示待用户配置且插件零 VCS 写入。 |
 | GL-06 | 逻辑移除 | 磁盘目录保留并退出受管项目内容与默认搜索；原 Git mapping 原样保留，直到用户按提示在 Directory Mappings 中手动决定是否移除。 |
 | GL-07 | 重新添加 | 同一目录的项目内容恢复；插件重新检查现有 mapping，不创建重复 root/module 或任何 mapping。 |
-| GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环；瞬时 read/apply 取消不留下 `READING`/`SYNCHRONIZING`，下一次 `Sync Now` 可在同一 service 中恢复。 |
+| GL-08 | 原子替换和快速连续变更 | 最终项目模型与最新 manifest 一致，VCS 诊断来自最新可读配置，无并发异常、VCS 写入或持续索引循环；已有稳定状态时瞬时 read/apply 取消不留下 `READING`/`SYNCHRONIZING` 且 `Sync Now` 可恢复，首次启动的一次取消由有界 automatic retry 自动收敛。 |
 | GL-09 | manifest 损坏或临时缺失 | 保留上次有效模型，不应用部分数据，并提供稳定诊断和恢复入口。 |
 | GL-10 | 路径攻击 | root mismatch、绝对 relativePath、`..` 或 symlink escape 被拒绝。 |
 | GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新和外部进程动作禁用；恢复 trusted 后即使 digest 未变也强制重放一次 Project Model，修复 blocked 期间的 live drift。 |

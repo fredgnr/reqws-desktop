@@ -6,15 +6,25 @@ import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.util.Disposer
 import com.reqws.goland.ui.ReqwsToolWindowAvailabilityController
 
-internal class ReqwsStartupActivity : ProjectActivity {
+internal class ReqwsStartupActivity(
+  private val serviceForProject: (Project) -> ReqwsProjectService,
+  private val bindAvailability: (Project, ReqwsProjectService) -> Unit,
+) : ProjectActivity {
+  constructor() : this(
+    serviceForProject = { project -> project.service() },
+    bindAvailability = { project, service ->
+      val availabilityController = ReqwsToolWindowAvailabilityController.forProject(project)
+      Disposer.register(project, availabilityController)
+      availabilityController.bind(service)
+    },
+  )
+
   override suspend fun execute(project: Project) {
     // Start the lightweight fixed-path watcher even when the manifest is initially absent. This
     // lets an already-open project become a ReqWS project after Desktop atomically creates it.
     if (ReqwsProjectDetector.projectRoot(project) != null) {
-      val service = project.service<ReqwsProjectService>()
-      val availabilityController = ReqwsToolWindowAvailabilityController.forProject(project)
-      Disposer.register(project, availabilityController)
-      availabilityController.bind(service)
+      val service = serviceForProject(project)
+      bindAvailability(project, service)
       service.refreshAutomatically()
     }
   }

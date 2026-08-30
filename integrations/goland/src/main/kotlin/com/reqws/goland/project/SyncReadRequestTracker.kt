@@ -22,7 +22,7 @@ internal class SyncReadRequestTracker {
   private var pendingReconcileTrigger: SyncTrigger? = null
 
   fun begin(trigger: SyncTrigger): SyncReadRequest = synchronized(lock) {
-    beginLocked(trigger)
+    beginLocked(trigger, cancellationRecoveryAttempt = 0)
   }
 
   /** Begins a generation only when [condition] is true at the same selection boundary. */
@@ -31,10 +31,31 @@ internal class SyncReadRequestTracker {
     condition: () -> Boolean,
   ): SyncReadRequest? = synchronized(lock) {
     if (!condition()) return@synchronized null
-    beginLocked(trigger)
+    beginLocked(trigger, cancellationRecoveryAttempt = 0)
   }
 
-  private fun beginLocked(trigger: SyncTrigger): SyncReadRequest {
+  /**
+   * Starts a bounded cancellation-recovery generation only while [predecessor] is still latest.
+   * A user/VFS/VCS read that arrived during the retry delay therefore wins without being
+   * superseded by the stale timer.
+   */
+  fun beginCancellationRecoveryIf(
+    predecessor: SyncReadRequest,
+    condition: () -> Boolean,
+  ): SyncReadRequest? = synchronized(lock) {
+    if (predecessor.generation != latestGeneration || !condition()) {
+      return@synchronized null
+    }
+    beginLocked(
+      trigger = SyncTrigger.AUTOMATIC,
+      cancellationRecoveryAttempt = predecessor.cancellationRecoveryAttempt + 1,
+    )
+  }
+
+  private fun beginLocked(
+    trigger: SyncTrigger,
+    cancellationRecoveryAttempt: Int,
+  ): SyncReadRequest {
     latestGeneration += 1
     if (trigger.requiresReconciliation) {
       armReconcileIntentLocked(trigger)
@@ -42,6 +63,7 @@ internal class SyncReadRequestTracker {
     return SyncReadRequest(
       generation = latestGeneration,
       requestedTrigger = trigger,
+      cancellationRecoveryAttempt = cancellationRecoveryAttempt,
     )
   }
 
@@ -120,4 +142,5 @@ internal class SyncReadRequestTracker {
 internal data class SyncReadRequest(
   val generation: Long,
   val requestedTrigger: SyncTrigger,
+  val cancellationRecoveryAttempt: Int,
 )

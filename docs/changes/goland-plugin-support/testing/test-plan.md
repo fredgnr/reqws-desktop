@@ -193,6 +193,7 @@ workspace/
 - pending manual candidate 后到 automatic candidate 时使用最新内容并继承 manual；后到 automatic read failure 时发布最新失败但保留 intent，下一份 valid automatic candidate 必须以 manual trigger apply，不能应用旧 snapshot 或错误 no-op；
 - exception does not deadlock queue；
 - applier 抛出的 `ProcessCanceledException` / coroutine `CancellationException` 以同一实例形成非业务 cancellation event，不发布普通 `Failed`、不恢复 clean baseline；owner scope 仍 active 时同一 worker 必须接受并成功 apply 下一 candidate，真正的 scope cancellation/dispose 才关闭 coordinator；普通 observer exception 仍不能终止同步；
+- 首次 blank `INACTIVE` cancellation recovery 最多追加一个 automatic successor；successor 的 source generation/attempt 必须可追踪，第二次 cancellation 不得继续排队；
 - A 成功、B 部分 apply 后失败、manifest 回退 A 时必须重放 A，不能错误 no-op；
 - 新 coordinator/service 即使读到相同持久摘要也必须重新 apply/reconcile。
 
@@ -263,6 +264,7 @@ workspace/
 Swing 像素级 UI 不作为主自动化目标。测试 view model：
 
 - absent manifest 的普通项目在初始 `READING` 期间也保持 hidden；
+- 已有 fixed manifest 的首次 read/apply 即使回滚到 hidden `INACTIVE`，也必须由 service-owned bounded retry 自动恢复，不把不可见 Tool Window 当作手动入口；
 - 已有 snapshot 的 refresh/`READING` 期间保持 visible；
 - synchronized；
 - pending；
@@ -283,8 +285,9 @@ Swing 像素级 UI 不作为主自动化目标。测试 view model：
 - Tool Window 对 file-based project 可动态激活，但 ordinary project 不闪现 UI；
 - `shouldBeAvailable` 在 manifest absent 时初始为 false，service state controller 在内容尚未创建时也能在 EDT 完成 absent → create availability transition；
 - state listener 的 initial/publish/dispose 并发按队列顺序通知；`DISPOSED` 后 state 永不回退，晚到 publish 被拒绝；
-- latest refresh 的 registrar/inspection 等非取消异常必须发布 `ERROR / REFRESH_FAILED`，首读失败不伪造 snapshot/digest且允许下一次重新注册；已有 good state 时保留进入 `READING` 前的 snapshot/digest。PCE/coroutine cancellation 以同一实例结束当前 read、不发布普通错误，并在仍为 latest 且 service/project 存活时恢复最近稳定状态；回归必须通过公开 `refresh()`/Tool Window `Sync Now` 路径证明后续成功，不能直接调用内部 automatic refresh；
-- applier 首次抛 PCE/coroutine cancellation 时不发布业务 `Failed`、不永久保留 `SYNCHRONIZING`，同一 service/coordinator 的下一次公开 `refresh()` 必须成功 apply；若取消发生后更新 read 已发布 `READING`，旧 cancellation rollback 不得覆盖更新 generation；
+- latest refresh 的 registrar/inspection 等非取消异常必须发布 `ERROR / REFRESH_FAILED`，首读失败不伪造 snapshot/digest且允许下一次重新注册；已有 good state 时保留进入 `READING` 前的 snapshot/digest。PCE/coroutine cancellation 以同一实例结束当前 read、不发布普通错误，并在仍为 latest 且 service/project 存活时恢复最近稳定状态；已有可见 state 的回归必须通过公开 `refresh()`/Tool Window `Sync Now` 路径证明后续成功，不能直接调用内部 automatic refresh；
+- 对首次 read PCE、首次 read coroutine cancellation、首次 apply PCE、首次 apply coroutine cancellation 分别运行 platform integration test：只调用一次 production `ReqwsStartupActivity.execute`，不直接调用 `service.refresh*()`、不改写 manifest、不制造 VFS event，最终必须自动进入 `SYNCHRONIZED`、Tool Window 可见且 Sync 可用、`lastError` 为空；
+- initial cancellation retry 必须绑定 predecessor generation 与 exact rollback state version并延迟执行；连续两次取消只产生 initial + 1 retry，retry delay 期间 dispose/owner scope cancellation不产生第二次读取，newer read/apply publication 胜出后旧 timer 不发布 `READING`。post-registration read cancellation 仍先清理/接力 provisional listener；apply cancellation 发生后更新 read 已发布 `READING` 时，旧 rollback/retry 均不得覆盖更新 generation；
 - VCS external listener 只能在 callback 依赖全部初始化后注册；registrar 同步触发 callback 时不得访问半初始化 service 或递归注册；
 - VCS external listener 只在首个有效 candidate 后 provisional 注册，并在注册完成后立即复检同一 snapshot；latest-selection 边界只预约 epoch，平台 registrar、等待接力与 handle close 在两把 lifecycle 锁外执行，只有通过最终 latest gate 的 valid generation 才接受它。普通非 ReqWS project 永不注册，手工发布 VCS event 也不触发 `READING`、manifest read 或 state churn；
 - 首个 valid read 的 registrar 或注册后 inspection 阻塞时：更新 inactive/error generation 胜出必须立即撤销 provisional epoch，迟到 handle 返回后恰好关闭一次；更新 valid generation 胜出必须在 STARTING/STARTED 阶段接力同一 epoch，成功 registrar 只调用一次，首个 registrar 失败时由接力 generation 重试；释放旧 read 后不得重复 close 或误关已接力 listener；
@@ -381,6 +384,7 @@ W0 固定的阻塞矩阵是：
 - sleep/wake；
 - plugin disable/enable；
 - manual Sync Now。
+- 首次 read/apply cancellation 自动恢复 smoke（若测试构建提供受控 fault injection）；不得通过修改 manifest 或手动 Sync 掩盖启动恢复缺口。
 - 每次 `Sync Now` 分别记录 Project Model 阶段与只读 VCS 阶段；确认插件未调用 mapping writer，并将可能的 GoLand 原生 auto-detection 单独归因。
 
 ### 8.6 Tool Window 视觉与可用性
@@ -472,7 +476,7 @@ npm run package:macos
 
 ## 12. 验收证据格式
 
-2026-08-30 当前源码候选已在 JDK 21 下通过 269 项插件测试、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9027f16226a06c087fc9a327fb9758431afc2cc339d4473ea12bf7080a8943c6`，大小 475,296 bytes；Desktop `npm run check` 通过 31 个测试文件、335 项测试。完整插件验证使用一次性 Gradle daemon 强制重跑 `test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin`；31 个 XML suites 均为零 skipped/failure/error。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
+2026-08-30 当前 exact-source 候选已在 JDK 21 下通过 31 个 XML suites、281 项插件测试（零 skipped/failure/error）、项目配置/结构检查、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）和 ZIP 构建；ZIP SHA-256 为 `9746925dad410016187d1f9859829dfa77ca020d167f4a87f9261afbac6e2fc8`，大小 484,669 bytes。完整插件验证使用一次性 Gradle daemon、关闭 configuration/build cache 并强制重跑 `test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin`。Verifier 获取 JetBrains documented API changes 页面时出现一次网络 read timeout，因此没有应用 documented-problem ignore filter；两版目标 IDE 的实际验证仍分别完成并返回 `Compatible`，Gradle 总任务成功。Desktop `npm run check` 同时通过 typecheck、ESLint、i18n、文档检查，以及 31 个测试文件、335 项测试。这些是本轮自动化证据，但尚未形成满足下列格式、绑定推送后 exact commit 的完整 GUI 报告。真实 GoLand 场景和 verdict 仍须在同一候选上记录；局部单元测试、旧工作树 Verifier、Gradle 配置成功或 CI YAML 已提交都不能单独填补 GUI 缺口。
 
 dated verification 建议结构：
 

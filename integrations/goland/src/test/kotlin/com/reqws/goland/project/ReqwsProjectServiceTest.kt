@@ -2,9 +2,11 @@ package com.reqws.goland.project
 
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.reqws.goland.sync.SyncCandidateApplier
+import com.reqws.goland.ui.ReqwsToolWindowAvailabilityController
 import com.reqws.goland.ui.ReqwsToolWindowViewModel
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.VcsRootInspection
@@ -1256,6 +1258,77 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       cancellationDescription = "coroutine cancellation",
     )
 
+  fun testStartupReadProcessCancellationRetriesAutomatically() =
+    verifyStartupReadCancellationRetriesAutomatically(
+      expectedCancellation = ProcessCanceledException(),
+      cancellationDescription = "process cancellation",
+    )
+
+  fun testStartupReadCoroutineCancellationRetriesAutomatically() =
+    verifyStartupReadCancellationRetriesAutomatically(
+      expectedCancellation = CancellationException("cancel initial startup read"),
+      cancellationDescription = "coroutine cancellation",
+    )
+
+  private fun verifyStartupReadCancellationRetriesAutomatically(
+    expectedCancellation: Throwable,
+    cancellationDescription: String,
+  ) {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val inspectionCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val registrationCount = AtomicInteger(0)
+    val registrationCloseCount = AtomicInteger(0)
+    val availabilityChanges = CopyOnWriteArrayList<Boolean>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar {
+          registrationCount.incrementAndGet()
+          AutoCloseable { registrationCloseCount.incrementAndGet() }
+        },
+        vcsInspector = ReqwsVcsInspector {
+          if (inspectionCount.incrementAndGet() == 2) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service, availabilityChanges)
+
+      awaitCondition("startup read recovery after $cancellationDescription") {
+        retryWaitCount.get() == 1 &&
+          inspectionCount.get() >= 4 &&
+          applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(2, registrationCount.get())
+      assertEquals(1, registrationCloseCount.get())
+      assertNull(service.state.lastError)
+      assertNotNull(service.state.lastAppliedDigest)
+      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      assertTrue(recoveredView.visible)
+      assertTrue(recoveredView.syncEnabled)
+      assertEquals(false, availabilityChanges.first())
+      assertEquals(true, availabilityChanges.last())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
   private fun verifyLatestRefreshCancellationRestoresManualSync(
     expectedCancellation: Throwable,
     cancellationDescription: String,
@@ -1320,14 +1393,27 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testApplierProcessCancellationAllowsTheNextRefreshToSynchronize() =
-    verifyApplierProcessCancellationAllowsTheNextRefreshToSynchronize()
+  fun testStartupApplyProcessCancellationRetriesAutomatically() =
+    verifyStartupApplyCancellationRetriesAutomatically(
+      expectedCancellation = ProcessCanceledException(),
+      cancellationDescription = "process cancellation",
+    )
 
-  private fun verifyApplierProcessCancellationAllowsTheNextRefreshToSynchronize() {
+  fun testStartupApplyCoroutineCancellationRetriesAutomatically() =
+    verifyStartupApplyCancellationRetriesAutomatically(
+      expectedCancellation = CancellationException("cancel initial startup apply"),
+      cancellationDescription = "coroutine cancellation",
+    )
+
+  private fun verifyStartupApplyCancellationRetriesAutomatically(
+    expectedCancellation: Throwable,
+    cancellationDescription: String,
+  ) {
     writeValidManifest()
-    val expectedCancellation = ProcessCanceledException()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val applyCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val availabilityChanges = CopyOnWriteArrayList<Boolean>()
     val service = ReqwsProjectService.createForTest(
       project = project,
       coroutineScope = scope,
@@ -1340,31 +1426,421 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         vcsInspector = ReqwsVcsInspector {
           VcsRootInspection(emptyList(), emptyList())
         },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+        },
       ),
     )
     try {
-      awaitSuccessfulCompletion(
-        job = requireNotNull(service.refreshAutomatically()),
-        description = "initial read before applier process cancellation",
-      )
-      awaitCondition("applier process cancellation rollback") {
-        applyCount.get() == 1 &&
-          service.state.lifecycle == ReqwsLifecycleState.INACTIVE
+      executeStartupActivity(service, availabilityChanges)
+
+      awaitCondition("startup apply recovery after $cancellationDescription") {
+        retryWaitCount.get() == 1 &&
+          applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
       assertNull(service.state.lastError)
-      assertNull(service.state.lastAppliedDigest)
+      assertNotNull(service.state.lastAppliedDigest)
+      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      assertTrue(recoveredView.visible)
+      assertTrue(recoveredView.syncEnabled)
+      assertEquals(false, availabilityChanges.first())
+      assertEquals(true, availabilityChanges.last())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
 
-      awaitSuccessfulCompletion(
-        job = requireNotNull(service.refresh()),
-        description = "public refresh after applier process cancellation",
-      )
-      awaitCondition("successful apply after applier process cancellation") {
-        applyCount.get() == 2 &&
+  fun testApplyRollbackListenerFailureCannotSuppressStartupRetry() =
+    verifyApplyRollbackListenerFailureCannotSuppressStartupRetry()
+
+  private fun verifyApplyRollbackListenerFailureCannotSuppressStartupRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val expectedCancellation = ProcessCanceledException()
+    val expectedListenerFailure = IllegalStateException("synthetic rollback listener failure")
+    val failInactiveDelivery = AtomicBoolean(false)
+    val applyCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 1) throw expectedCancellation
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+        },
+      ),
+    )
+    val listenerHandle = service.addListener { next ->
+      if (
+        next.lifecycle == ReqwsLifecycleState.INACTIVE &&
+        failInactiveDelivery.compareAndSet(true, false)
+      ) {
+        throw expectedListenerFailure
+      }
+    }
+    try {
+      failInactiveDelivery.set(true)
+      executeStartupActivity(service)
+
+      awaitCondition("startup retry after rollback listener failure") {
+        retryWaitCount.get() == 1 &&
+          applyCount.get() == 2 &&
           service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
       assertNull(service.state.lastError)
       assertNotNull(service.state.lastAppliedDigest)
     } finally {
+      listenerHandle.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testStartupCancellationRetryIsBounded() =
+    verifyStartupCancellationRetryIsBounded()
+
+  private fun verifyStartupCancellationRetryIsBounded() {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val inspectionCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        vcsInspector = ReqwsVcsInspector {
+          inspectionCount.incrementAndGet()
+          throw ProcessCanceledException()
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+
+      awaitCondition("bounded startup cancellation retry") {
+        inspectionCount.get() == 2 && retryWaitCount.get() == 1
+      }
+      awaitStableLifecycle(
+        service = service,
+        expected = ReqwsLifecycleState.INACTIVE,
+        description = "bounded startup cancellation fallback",
+      )
+      assertEquals(2, inspectionCount.get())
+      assertEquals(1, retryWaitCount.get())
+      assertNull(service.state.lastError)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testStartupApplyCancellationRetryIsBounded() =
+    verifyStartupApplyCancellationRetryIsBounded()
+
+  private fun verifyStartupApplyCancellationRetryIsBounded() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw ProcessCanceledException()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+
+      awaitCondition("bounded startup apply cancellation retry") {
+        applyCount.get() == 2 && retryWaitCount.get() == 1
+      }
+      awaitStableLifecycle(
+        service = service,
+        expected = ReqwsLifecycleState.INACTIVE,
+        description = "bounded startup apply cancellation fallback",
+      )
+      assertEquals(2, applyCount.get())
+      assertEquals(1, retryWaitCount.get())
+      assertNull(service.state.lastError)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testDisposeCancelsPendingStartupCancellationRetry() =
+    verifyDisposeCancelsPendingStartupCancellationRetry()
+
+  private fun verifyDisposeCancelsPendingStartupCancellationRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val retryWaitEntered = CountDownLatch(1)
+    val allowRetryWait = CompletableDeferred<Unit>()
+    val inspectionCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        vcsInspector = ReqwsVcsInspector {
+          inspectionCount.incrementAndGet()
+          throw ProcessCanceledException()
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitEntered.countDown()
+          allowRetryWait.await()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "startup cancellation retry did not reach its delay",
+        retryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      service.dispose()
+      allowRetryWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, inspectionCount.get())
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+    } finally {
+      allowRetryWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testOwnerScopeCancellationCancelsPendingStartupRetry() =
+    verifyOwnerScopeCancellationCancelsPendingStartupRetry()
+
+  private fun verifyOwnerScopeCancellationCancelsPendingStartupRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val retryWaitEntered = CountDownLatch(1)
+    val allowRetryWait = CompletableDeferred<Unit>()
+    val inspectionCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        vcsInspector = ReqwsVcsInspector {
+          inspectionCount.incrementAndGet()
+          throw ProcessCanceledException()
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitEntered.countDown()
+          allowRetryWait.await()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "startup retry did not enter its delay before owner cancellation",
+        retryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      scope.cancel()
+      allowRetryWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, inspectionCount.get())
+      assertEquals(ReqwsLifecycleState.INACTIVE, service.state.lifecycle)
+      assertNull(service.state.lastError)
+    } finally {
+      allowRetryWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testNewerRefreshSupersedesPendingStartupCancellationRetry() =
+    verifyNewerRefreshSupersedesPendingStartupCancellationRetry()
+
+  private fun verifyNewerRefreshSupersedesPendingStartupCancellationRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val retryWaitEntered = CountDownLatch(1)
+    val allowRetryWait = CompletableDeferred<Unit>()
+    val cancelFirstInspection = AtomicBoolean(true)
+    val inspectionCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          inspectionCount.incrementAndGet()
+          if (cancelFirstInspection.compareAndSet(true, false)) {
+            throw ProcessCanceledException()
+          }
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitEntered.countDown()
+          allowRetryWait.await()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "startup cancellation retry did not reach its delay",
+        retryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer automatic refresh superseding startup retry",
+      )
+      awaitCondition("newer automatic refresh synchronization") {
+        applyCount.get() == 1 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val inspectionCountAfterWinner = inspectionCount.get()
+
+      allowRetryWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, applyCount.get())
+      assertEquals(inspectionCountAfterWinner, inspectionCount.get())
+      assertNull(service.state.lastError)
+    } finally {
+      allowRetryWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testNewerStablePublicationInvalidatesPendingStartupRetryVersion() =
+    verifyNewerStablePublicationInvalidatesPendingStartupRetryVersion()
+
+  private fun verifyNewerStablePublicationInvalidatesPendingStartupRetryVersion() {
+    writeValidManifest()
+    val expectedCancellation = ProcessCanceledException()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val applyStarted = CountDownLatch(1)
+    val allowApply = CountDownLatch(1)
+    val retryWaitEntered = CountDownLatch(1)
+    val allowRetryWait = CompletableDeferred<Unit>()
+    val cancelNextInspection = AtomicBoolean(false)
+    val inspectionCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          applyStarted.countDown()
+          check(allowApply.await(5, TimeUnit.SECONDS)) {
+            "test did not release the older startup apply"
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          inspectionCount.incrementAndGet()
+          if (cancelNextInspection.compareAndSet(true, false)) throw expectedCancellation
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitEntered.countDown()
+          allowRetryWait.await()
+        },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "startup apply did not start before the cancelled read",
+        applyStarted.await(5, TimeUnit.SECONDS),
+      )
+      awaitCondition("startup apply entered SYNCHRONIZING") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZING
+      }
+
+      cancelNextInspection.set(true)
+      val cancelledRead = requireNotNull(service.refreshAutomatically())
+      val failure = awaitFailedCompletion(
+        job = cancelledRead,
+        description = "latest read cancellation during older startup apply",
+      )
+      assertSame(expectedCancellation, failure)
+      assertTrue(
+        "startup retry did not enter its delay after exact rollback",
+        retryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+      assertEquals(ReqwsLifecycleState.INACTIVE, service.state.lifecycle)
+
+      allowApply.countDown()
+      awaitCondition("older apply published a newer stable state") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val inspectionCountAfterWinner = inspectionCount.get()
+
+      allowRetryWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, applyCount.get())
+      assertEquals(inspectionCountAfterWinner, inspectionCount.get())
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertNull(service.state.lastError)
+    } finally {
+      allowApply.countDown()
+      allowRetryWait.complete(Unit)
       service.dispose()
       scope.cancel()
     }
@@ -1815,6 +2291,8 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     val activeListener = AtomicReference<(() -> Job?)?>()
     val postRegistrationInspectionEntered = CountDownLatch(1)
     val allowPostRegistrationInspection = CountDownLatch(1)
+    val retryWaitEntered = CountDownLatch(1)
+    val allowRetryWait = CompletableDeferred<Unit>()
     val service = ReqwsProjectService.createForTest(
       project = project,
       coroutineScope = scope,
@@ -1844,6 +2322,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           }
           VcsRootInspection(emptyList(), emptyList())
         },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitEntered.countDown()
+          allowRetryWait.await()
+        },
       ),
     )
     try {
@@ -1858,8 +2340,12 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         description = "cancelled newer initial inspection",
       )
       assertSame(expectedCancellation, failed)
+      assertTrue(
+        "startup cancellation retry did not reach its delay",
+        retryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
       awaitCondition("cancelled latest generation registration rollback") {
-        closeCount.get() == 1
+        closeCount.get() == 1 && activeListener.get() == null
       }
       assertNull(activeListener.get())
 
@@ -1879,6 +2365,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     } finally {
       allowPostRegistrationInspection.countDown()
       service.dispose()
+      allowRetryWait.complete(Unit)
       scope.cancel()
     }
     assertEquals(1, closeCount.get())
@@ -1986,6 +2473,27 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
     assertTrue("$description did not complete", completion.await(5, TimeUnit.SECONDS))
     failure.get()?.let { throw AssertionError("$description failed", it) }
+  }
+
+  /** Exercises the production startup trigger once without calling either refresh API in tests. */
+  private fun executeStartupActivity(
+    service: ReqwsProjectService,
+    availabilityChanges: MutableList<Boolean>? = null,
+  ) {
+    val activity = ReqwsStartupActivity(
+      serviceForProject = { service },
+      bindAvailability = { _, boundService ->
+        val controller = ReqwsToolWindowAvailabilityController(
+          isProjectDisposed = { false },
+          isToolWindowDisposed = { false },
+          dispatchOnEdt = { action -> action() },
+          setAvailable = { available -> availabilityChanges?.add(available) },
+        )
+        Disposer.register(testRootDisposable, controller)
+        controller.bind(boundService)
+      },
+    )
+    runBlocking { activity.execute(project) }
   }
 
   private fun awaitFailedCompletion(job: Job, description: String): Throwable {
