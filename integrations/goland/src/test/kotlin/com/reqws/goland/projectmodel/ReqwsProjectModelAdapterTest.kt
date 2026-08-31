@@ -1,5 +1,10 @@
 package com.reqws.goland.projectmodel
 
+import com.intellij.openapi.components.service
+import com.intellij.openapi.roots.ProjectFileIndex
+import com.intellij.openapi.roots.ModuleRootEvent
+import com.intellij.openapi.roots.ModuleRootListener
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.platform.backend.workspace.WorkspaceModel
 import com.intellij.platform.workspace.jps.entities.ContentRootEntity
 import com.intellij.platform.workspace.jps.entities.ExcludeUrlEntity
@@ -20,6 +25,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicInteger
 
 class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
   private var localRoot: Path? = null
@@ -54,6 +60,18 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
       isTrusted = { true },
       markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B, TOKEN_C),
     )
+    val rootsChangedCount = AtomicInteger()
+    val guardedRootsChangedCount = AtomicInteger()
+    val mutationGuard = project.service<ReqwsProjectModelMutationGuard>()
+    project.messageBus.connect(testRootDisposable).subscribe(
+      ModuleRootListener.TOPIC,
+      object : ModuleRootListener {
+        override fun rootsChanged(event: ModuleRootEvent) {
+          rootsChangedCount.incrementAndGet()
+          if (mutationGuard.isActive) guardedRootsChangedCount.incrementAndGet()
+        }
+      },
+    )
 
     val first = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
 
@@ -71,6 +89,10 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     assertFalse(targetExcludedRelativePaths(root).contains("ordinary"))
     assertFalse(targetExcludedRelativePaths(root).contains("worktree"))
     assertEquals(beforeDependencies, requireNotNull(workspaceModel.currentSnapshot.resolve(moduleId)).dependencies)
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = setOf("repo-c"))
+    val rootsChangedAfterInitialProjection = rootsChangedCount.get()
+    val guardedRootsChangedAfterInitialProjection = guardedRootsChangedCount.get()
+    assertTrue(guardedRootsChangedAfterInitialProjection > 0)
 
     val second = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
 
@@ -79,6 +101,17 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     assertEquals(mapOf("repo-c" to setOf(TOKEN_B)), recoveryMap(state))
     assertEquals(setOf(".reqws", "user-hidden"), targetExcludedRelativePaths(root))
     assertEquals(setOf(markerRelative(TOKEN_A)), markerRelativePaths(root))
+    assertLiveProjection(root, included = setOf("repo-a", "repo-c"), excluded = emptySet())
+    assertTrue(
+      "removing a ReqWS exclude must publish a roots-changed event",
+      rootsChangedCount.get() > rootsChangedAfterInitialProjection,
+    )
+    val rootsChangedAfterReactivation = rootsChangedCount.get()
+    val guardedRootsChangedAfterReactivation = guardedRootsChangedCount.get()
+    assertTrue(
+      "removing a ReqWS exclude must keep its roots event inside the mutation guard",
+      guardedRootsChangedAfterReactivation > guardedRootsChangedAfterInitialProjection,
+    )
 
     val third = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
 
@@ -97,6 +130,78 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
       ownershipMap(state),
     )
     assertEquals(mapOf("repo-c" to setOf(TOKEN_B)), recoveryMap(state))
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = setOf("repo-c"))
+    assertTrue(
+      "re-adding a ReqWS exclude must publish a roots-changed event",
+      rootsChangedCount.get() > rootsChangedAfterReactivation,
+    )
+    assertTrue(
+      "re-adding a ReqWS exclude must keep its roots event inside the mutation guard",
+      guardedRootsChangedCount.get() > guardedRootsChangedAfterReactivation,
+    )
+  }
+
+  fun testSynchronizesGoModulesAfterEverySuccessfulLiveProjectionIncludingModelNoOp() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    gitRepository(root, "repo-c")
+    val calls = mutableListOf<Triple<String, Set<Path>, Set<Path>>>()
+    val notificationPolicies = mutableListOf<Boolean>()
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      ReqwsManagedModelState(),
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
+      goModulesProjection = ReqwsGoModulesProjection { moduleName, active, excluded, allowNotification ->
+        calls.add(Triple(moduleName, active.toSet(), excluded.toSet()))
+        notificationPolicies.add(allowNotification)
+      },
+    )
+
+    awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
+    awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+    val noOpModel = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+    awaitUpdate {
+      adapter.apply(
+        snapshot(root, listOf("repo-a", "repo-c")),
+        allowRootsChangeNotification = false,
+      )
+    }
+
+    assertTrue(noOpModel.added.isEmpty())
+    assertTrue(noOpModel.removed.isEmpty())
+    assertEquals(4, calls.size)
+    assertEquals(module.name, calls.last().first)
+    assertEquals(setOf(root.resolve("repo-a"), root.resolve("repo-c")), calls.last().second)
+    assertEquals(setOf(root.resolve(".reqws")), calls.last().third)
+    assertEquals(listOf(true, true, true, false), notificationPolicies)
+  }
+
+  fun testDoesNotSynchronizeGoModulesWhenTheLiveFileIndexVerifierFails() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    var goModuleSyncs = 0
+    val liveFailure = ProjectModelApplyException(
+      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
+      "live projection failed",
+    )
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      ReqwsManagedModelState(),
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_A),
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { _, _ -> throw liveFailure },
+      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> goModuleSyncs += 1 },
+    )
+
+    val thrown = expectApplyFailure {
+      adapter.apply(snapshot(root, listOf("repo-a")))
+    }
+
+    assertSame(liveFailure, thrown)
+    assertEquals(0, goModuleSyncs)
   }
 
   fun testRemovesOwnedTargetAfterStateReloadWithoutRuntimeEntityTags() {
@@ -355,7 +460,7 @@ $excludeElements
     assertEquals(1, targetExcludedRelativePathsList(root).count { it == "repo-c" })
   }
 
-  fun testBorrowsAnExistingFilesystemAliasWithoutAddingASemanticDuplicate() {
+  fun testAddsAnOwnedExactExcludeWhenAnExistingFilesystemAliasDoesNotAffectTheLiveIndex() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-c")
@@ -372,11 +477,13 @@ $excludeElements
       ).apply(snapshot(root, emptyList()))
     }
 
-    assertTrue(result.borrowed.contains("repo-c"))
-    assertFalse(ownershipMap(state).containsKey("repo-c"))
+    assertTrue(result.added.contains("repo-c"))
+    assertFalse(result.borrowed.contains("repo-c"))
+    assertEquals(TOKEN_B, ownershipMap(state)["repo-c"])
     assertTrue(targetExcludedRelativePaths(root).contains("retained-alias"))
-    assertFalse(targetExcludedRelativePaths(root).contains("repo-c"))
-    assertEquals(1, markerRelativePaths(root).size)
+    assertTrue(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertEquals(2, markerRelativePaths(root).size)
+    assertLiveProjection(root, included = emptySet(), excluded = setOf("repo-c"))
   }
 
   fun testUsesFilesystemIdentityWhenManifestCaseDiffersFromAnActiveRepository() {
@@ -501,16 +608,15 @@ $excludeElements
     assertTrue(state.ownership().managedExcludes.isEmpty())
   }
 
-  fun testRejectsAnActiveRepositoryExcludedThroughAFilesystemAlias() {
+  fun testPreservesFilesystemAliasWithoutTreatingTheActiveRepositoryAsExcluded() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
     Files.createSymbolicLink(root.resolve("active-alias"), root.resolve("repo-a"))
     addExclude("active-alias")
     val state = ReqwsManagedModelState()
-    val before = excludedRelativePathsList(root)
 
-    val failure = expectApplyFailure {
+    val result = awaitUpdate {
       WorkspaceExcludeModelAdapter(
         project,
         state,
@@ -519,9 +625,10 @@ $excludeElements
       ).apply(snapshot(root, listOf("repo-a")))
     }
 
-    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
-    assertEquals(before, excludedRelativePathsList(root))
-    assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertEquals(setOf(".reqws"), result.managedExcludes)
+    assertTrue(targetExcludedRelativePaths(root).contains("active-alias"))
+    assertFalse(targetExcludedRelativePaths(root).contains("repo-a"))
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = emptySet())
   }
 
   fun testFailsClosedWhenAnExistingFilesystemIdentityCannotBeCompared() {
@@ -1277,6 +1384,23 @@ $excludeElements
       moduleEntity.contentRoots.singleOrNull { it.url.url == workspaceUrl },
     )
     return contentRoot.excludedUrls.map { it.url.url }.sorted()
+  }
+
+  private fun assertLiveProjection(
+    root: Path,
+    included: Set<String>,
+    excluded: Set<String>,
+  ) {
+    val fileIndex = ProjectFileIndex.getInstance(project)
+    included.forEach { relative ->
+      val file = requireNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve(relative)))
+      assertTrue("$relative should be in project content", fileIndex.isInContent(file))
+      assertFalse("$relative should not be excluded", fileIndex.isExcluded(file))
+    }
+    excluded.forEach { relative ->
+      val file = requireNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve(relative)))
+      assertTrue("$relative should be excluded", fileIndex.isExcluded(file))
+    }
   }
 
   private fun ownershipMap(state: ReqwsManagedModelState): Map<String, String> =

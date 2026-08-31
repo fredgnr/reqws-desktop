@@ -32,12 +32,14 @@ internal class ReqwsProjectLoadEngine(
         lifecycle = lifecycle,
         snapshot = snapshot,
         lastAppliedDigest = previous.lastAppliedDigest,
+        validatedProjectionDigest = previous.validatedProjectionDigest,
       )
     } catch (exception: ManifestException) {
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.ERROR,
         snapshot = previous.snapshot,
         lastAppliedDigest = previous.lastAppliedDigest,
+        validatedProjectionDigest = previous.validatedProjectionDigest,
         lastError = ReqwsProjectError(
           code = exception.code.name,
           field = exception.field,

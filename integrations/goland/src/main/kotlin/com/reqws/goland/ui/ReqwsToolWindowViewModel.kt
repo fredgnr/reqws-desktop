@@ -55,13 +55,32 @@ data class ReqwsToolWindowViewModel(
         .contains(VcsWorkspaceDiagnosticCode.GIT_PLUGIN_UNAVAILABLE)
       val inspectionFailed = vcsInspection?.workspaceDiagnostics.orEmpty()
         .contains(VcsWorkspaceDiagnosticCode.INSPECTION_FAILED)
+      val projectionConfirmed = snapshot != null &&
+        lifecycle != ReqwsLifecycleState.READING &&
+        lifecycle != ReqwsLifecycleState.SYNCHRONIZING &&
+        state.validatedProjectionDigest == snapshot.digestSha256 &&
+        state.lastError?.code !in setOf(
+          ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+          ReqwsStableErrorCode.OWNERSHIP_CONFLICT,
+          ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
+        )
+      val projectContentUnavailable = snapshot != null && !projectionConfirmed
+      val displayLifecycle = if (
+        lifecycle == ReqwsLifecycleState.SYNCHRONIZED && projectContentUnavailable
+      ) {
+        // Cancellation can intentionally restore the last stable domain state while invalidating
+        // its live-projection proof. Never render that recovery state as fully Synced.
+        ReqwsLifecycleState.DEGRADED
+      } else {
+        lifecycle
+      }
       return ReqwsToolWindowViewModel(
         visible = lifecycle != ReqwsLifecycleState.DISPOSED &&
           (snapshot != null ||
             (lifecycle != ReqwsLifecycleState.INACTIVE && lifecycle != ReqwsLifecycleState.READING)),
         workspaceName = snapshot?.manifest?.name,
         featureBranch = snapshot?.manifest?.featureBranch,
-        statusKey = lifecycle.resourceKey(),
+        statusKey = displayLifecycle.resourceKey(),
         statusDetailKey = when {
           lifecycle == ReqwsLifecycleState.SAFE_MODE_BLOCKED -> "message.safeModeHint"
           showVcsDiagnostics && gitIntegrationUnavailable ->
@@ -71,7 +90,7 @@ data class ReqwsToolWindowViewModel(
             "message.vcsManualConfigurationRequired"
           else -> null
         },
-        statusTone = lifecycle.statusTone(),
+        statusTone = displayLifecycle.statusTone(),
         repositories = snapshot?.repositories.orEmpty().mapIndexed { index, repository ->
           val vcsStatus = repositoryVcsStatuses[index]
           ReqwsRepositoryViewModel(
@@ -79,6 +98,7 @@ data class ReqwsToolWindowViewModel(
             statusKey = when {
               repository.availability == RepositoryAvailability.MISSING ||
                 vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> "repository.missing"
+              projectContentUnavailable -> "repository.projectContentUnavailable"
               gitIntegrationUnavailable || inspectionFailed -> "repository.gitStatusUnavailable"
               vcsInspection != null && vcsStatus == null -> "repository.gitStatusUnavailable"
               vcsStatus == VcsRepositoryStatus.NOT_GIT -> "repository.notGit"
@@ -90,6 +110,7 @@ data class ReqwsToolWindowViewModel(
             statusTone = when {
               repository.availability == RepositoryAvailability.MISSING ||
                 vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> ReqwsStatusTone.WARNING
+              projectContentUnavailable -> ReqwsStatusTone.WARNING
               gitIntegrationUnavailable || inspectionFailed -> ReqwsStatusTone.WARNING
               vcsInspection != null && vcsStatus == null -> ReqwsStatusTone.WARNING
               vcsStatus == VcsRepositoryStatus.CONFIGURED || vcsInspection == null ->
@@ -102,7 +123,7 @@ data class ReqwsToolWindowViewModel(
         errorCode = state.lastError?.code,
         vcsDiagnosticCode = vcsDiagnosticCode,
         preservedSnapshot = lifecycle == ReqwsLifecycleState.ERROR &&
-          state.lastError != null && snapshot != null,
+          state.lastError != null && projectionConfirmed,
         syncEnabled = lifecycle != ReqwsLifecycleState.INACTIVE &&
           lifecycle != ReqwsLifecycleState.READING &&
           lifecycle != ReqwsLifecycleState.DISPOSED,

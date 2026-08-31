@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -73,6 +74,61 @@ class LatestWinsSyncCoordinatorTest {
     assertEquals("a", projection)
     assertEquals("a", coordinator.lastAppliedDigest)
     coordinator.close()
+  }
+
+  @Test
+  fun `project model change same digest reapplies and restores a drifted projection`() = runBlocking {
+    val attempts = mutableListOf<String>()
+    var projection = ""
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = {
+        attempts += it.value
+        projection = it.value
+      },
+    )
+
+    assertTrue(coordinator.offer(candidate("a")))
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+    projection = "drifted"
+    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.PROJECT_MODEL_CHANGE))
+    val reapplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+
+    assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, reapplied.trigger)
+    assertEquals(listOf("a", "a"), attempts)
+    assertEquals("a", projection)
+    assertEquals("a", coordinator.lastAppliedDigest)
+    coordinator.close()
+  }
+
+  @Test
+  fun `reconciliation trigger priority is manual trust project-model then automatic`() {
+    assertEquals(
+      SyncTrigger.PROJECT_MODEL_CHANGE,
+      mergeReconcileTrigger(null, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
+    assertEquals(
+      SyncTrigger.PROJECT_MODEL_CHANGE,
+      mergeReconcileTrigger(SyncTrigger.PROJECT_MODEL_CHANGE, SyncTrigger.AUTOMATIC),
+    )
+    assertEquals(
+      SyncTrigger.TRUST_TRANSITION,
+      mergeReconcileTrigger(SyncTrigger.PROJECT_MODEL_CHANGE, SyncTrigger.TRUST_TRANSITION),
+    )
+    assertEquals(
+      SyncTrigger.TRUST_TRANSITION,
+      mergeReconcileTrigger(SyncTrigger.TRUST_TRANSITION, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
+    assertEquals(
+      SyncTrigger.MANUAL,
+      mergeReconcileTrigger(SyncTrigger.TRUST_TRANSITION, SyncTrigger.MANUAL),
+    )
+    assertEquals(
+      SyncTrigger.MANUAL,
+      mergeReconcileTrigger(SyncTrigger.MANUAL, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
   }
 
   @Test
@@ -218,6 +274,90 @@ class LatestWinsSyncCoordinatorTest {
       assertEquals(listOf("base", "base"), applied)
       coordinator.close()
   }
+
+  @Test
+  fun `a same-digest automatic candidate cannot replace a queued verify-only follow-up`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applyTriggers = mutableListOf<Pair<String, SyncTrigger>>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base") {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applyTriggers += candidate.value to candidate.trigger
+        },
+      )
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      firstApplyStarted.await()
+      coordinator.offer(candidate("stable"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("stable"), SyncTrigger.AUTOMATIC)
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val followUp = assertEvent<SyncCoordinatorEvent.Applied>(events, "stable")
+
+      assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, followUp.trigger)
+      assertEquals(
+        listOf(
+          "base" to SyncTrigger.AUTOMATIC,
+          "stable" to SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+        ),
+        applyTriggers,
+      )
+
+      coordinator.offer(candidate("stable"), SyncTrigger.AUTOMATIC)
+      val noOp = assertEvent<SyncCoordinatorEvent.NoOp>(events, "stable")
+      assertEquals(SyncTrigger.AUTOMATIC, noOp.trigger)
+
+      coordinator.offer(candidate("new-digest"), SyncTrigger.AUTOMATIC)
+      val newer = assertEvent<SyncCoordinatorEvent.Applied>(events, "new-digest")
+      assertEquals(SyncTrigger.AUTOMATIC, newer.trigger)
+      coordinator.close()
+    }
+
+  @Test
+  fun `a different-digest automatic candidate supersedes a queued verify-only follow-up`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applyTriggers = mutableListOf<Pair<String, SyncTrigger>>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base") {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applyTriggers += candidate.value to candidate.trigger
+        },
+      )
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      firstApplyStarted.await()
+      coordinator.offer(candidate("old-digest"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("new-digest"), SyncTrigger.AUTOMATIC)
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val newer = assertEvent<SyncCoordinatorEvent.Applied>(events, "new-digest")
+
+      assertEquals(SyncTrigger.AUTOMATIC, newer.trigger)
+      assertEquals(
+        listOf(
+          "base" to SyncTrigger.AUTOMATIC,
+          "new-digest" to SyncTrigger.AUTOMATIC,
+        ),
+        applyTriggers,
+      )
+      coordinator.close()
+    }
 
   @Test
   fun `a newer automatic digest keeps its content while inheriting pending manual intent`() = runBlocking {
@@ -539,6 +679,33 @@ class LatestWinsSyncCoordinatorTest {
 
     assertFalse(coordinator.offer(candidate("after-cancel")))
     assertTrue(coordinator.isClosed)
+  }
+
+  @Test
+  fun `worker cancellation before the accepted-success boundary cannot commit a digest`() = runBlocking {
+    val ownerJob = SupervisorJob()
+    val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+    val commits = AtomicInteger(0)
+    val events = CopyOnWriteArrayList<SyncCoordinatorEvent>()
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = owner,
+      applier = SyncCandidateApplier<String> {
+        requireNotNull(currentCoroutineContext()[Job]).cancel()
+      },
+      committer = SyncCandidateCommitter { commits.incrementAndGet() },
+      observer = SyncCoordinatorObserver(events::add),
+    )
+    try {
+      assertTrue(coordinator.offer(candidate("cancel-before-commit")))
+      withTimeout(5_000) { coordinator.awaitClosed() }
+
+      assertEquals(0, commits.get())
+      assertNull(coordinator.lastAppliedDigest)
+      assertFalse(events.any { event -> event is SyncCoordinatorEvent.Applied })
+    } finally {
+      coordinator.close()
+      ownerJob.cancel()
+    }
   }
 
   @Test

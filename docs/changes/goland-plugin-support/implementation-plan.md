@@ -2,7 +2,7 @@
 title: GoLand 插件支持探索与实施计划
 type: technical-design
 status: active
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # GoLand 插件支持探索与实施计划
@@ -177,12 +177,12 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 
 | 工作包 | 目标 | 当前状态 |
 |---|---|---|
-| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；当前 exact-source 候选已通过 GO-261.25134.147 / GO-262.8665.270 Verifier。 |
+| W0 | 锁定工具链和可用公开 API | baseline 与 JDK 21 toolchain 已锁定；最终候选仍需重复执行 261/262 Verifier。 |
 | W1 | 建立只读 plugin 骨架 | parser、digest、Tool Window、Safe Mode 与自动化整合检查已完成。 |
-| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，legacy PSC 仅迁移，异常窗口、cold recovery 与 JPS serialization 需由最终自动化确认，真实 IDE reopen 待 GUI。 |
-| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms、latest-wins、sticky reconcile、versioned current/stable publication、read/apply cancellation CAS recovery 与首次启动一次性 automatic retry 已实现，并纳入当前 281 项插件测试。 |
+| W2 | 选择项目模型策略 | A 因 ownership 安全门禁失败，已选择 B；companion-marker adapter 以 `.idea/reqws-managed-project-model.json` verified atomic managed/recovery claims 为权威，并以 `ProjectFileIndex` 与 `VgoModulesRegistry` 作为双 live gate；legacy PSC 仅迁移，真实 IDE reopen 仍需 GUI 证明。 |
+| W3 | 建立可靠自动同步 | manifest 尚不存在时即安装 canonical watcher；350 ms manifest debounce、250 ms external project-model debounce、latest-wins、sticky reconcile、versioned publication、read/apply cancellation recovery 与首次启动一次性 automatic retry 已实现，最终候选仍需全量回归。 |
 | W4 | 完成 VCS 与 Desktop 启动 | 产品边界已改为生产零 VCS mutation：插件只读 mappings、显示手动 Directory Mappings 步骤并监听配置事件复核；旧 VCS ownership/lock inert，不自动迁移或清理。当前 exact-source 的实现、项目/结构检查与 261/262 Verifier 已通过，真实 GoLand 手动配置路径待验收。 |
-| W5 | 完成功能、规模和安全验证 | 2026-08-30 当前 exact-source 候选的 Desktop `npm run check`（31 个测试文件、335 项测试）、281 项插件测试、项目/结构检查、插件 ZIP 和 fresh 261/262 Verifier 已通过；GUI、Go 功能、reopen、规模和平台 auto-detection 归因仍待推送后 exact commit 验收。 |
+| W5 | 完成功能、规模和安全验证 | 自动化、项目/结构检查、插件 ZIP 与 261/262 Verifier 必须在最终候选上重跑；GUI 需证明双 live gate、`PACKAGE` configuration、reopen、规模以及 GoLand 原生 Go/VCS 行为归因。 |
 | W6 | 整合 CI、指南与验收材料 | 独立 CI job 与指南已更新；exact-head GUI、验证报告和最终 handoff 待 W5。 |
 
 工作包的决策依赖仍是 `W0 → W1 → W2 → W3 → W4 → W5 → W6`；实现可在边界稳定后并行，但 W5/W6 的完成结论必须基于整合后的 exact-head，而不是各工作包的局部结果。
@@ -248,7 +248,7 @@ docs/changes/goland-plugin-support/testing/verification-YYYY-MM-DD.md
 - valid fixture 展示 workspace、branch 和 active repositories；
 - Tool Window 与归档原型具有同一信息层级，状态不只靠颜色表达，窄宽度下仓库行不拉伸且三个动作都可达；
 - malformed、oversized、unsupported、root mismatch 和 path escape 有稳定错误；
-- Safe Mode 无 model/external-process 副作用，VCS 在所有模式下都只读；
+- Safe Mode 无 model、ReqWS roots-event 或 external-process 副作用，VCS 在所有模式下都只读；
 - project dispose 后无未管理 task；
 - 尚未修改 Content Root、module 或 VCS mapping；
 - plugin tests、verifyPlugin、buildPlugin 通过。
@@ -296,6 +296,9 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - `.idea` stable directory handle：直接在已打开的 directory descriptor 上取得非阻塞跨 JVM exclusive lock，同一 handle 内完成 state 读取、atomic replace 能力探针、temp write/force、move、directory force 和 readback，末尾复验路径 identity；lock 子文件不是互斥权威，其 rename/unlink/recreate 不得绕过 generation fence；
 - legacy PSC migration、atomic state reload、独立 JPS serialization contract 与 reopen recovery；
 - pre-mutation managed/recovery 落盘、同 JVM recovery 保留、post-commit trust/dispose 与 remove/re-add new-token recovery；
+- authoritative Workspace Model 复核后顺序执行两个 live gate：public `ProjectFileIndex` content/exclude 断言，以及 public `VgoModulesRegistry` 中目标 module 的 active/excluded Go module roots 断言；
+- registry 首次 mismatch 且 project trusted/active 时，只在 `edtWriteAction` + `ReqwsProjectModelMutationGuard` 内调用一次 public `ProjectRootManagerEx.makeRootsChange({}, RootsChangeRescanningInfo.NO_RESCAN_NEEDED)`，随后以只读方式最多等待 30 秒；Safe Mode 不发 event；
+- Go Modules production path 只读取 public registry，不调用 `VgoIntegrationManager`、`VgoStatusTracker`、scheduler、反射/private API，也不直接 spawn Go command 或下载；
 - user-owned entries preservation；
 - ownership conflict 的保守失败。
 
@@ -307,6 +310,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - model-level tests 覆盖 initial/add/remove/re-add、marker tamper、verified atomic 发布/回读失败、稳定目录锁持有期间替换同名 lock 子文件仍拒绝第二 repository 同代写入、`.idea` 在持锁事务中的 rename + symlink replacement、legacy PSC migration、同 JVM recovery 保留、cold state reload 与 JPS serialization；目录或 lock 子文件替换不得产生第二 writer，也不得让 state/temp/readback 转向外部目录，真实 GoLand reopen 由 GUI 补足；
 - 用户无关 module/root 不丢失；
 - retained repo 不进入默认项目内容；
+- active/retained 的 `ProjectFileIndex` 与 Go Modules registry 都收敛后才记录 clean digest；registry 超时稳定降级为 `PROJECT_CONTENT_NOT_CONVERGED`；
+- public roots event 每轮最多一次，trust/dispose/cancellation/无普通顶层 `go.mod` 路径均有确定性回归；
 - Plugin Verifier 无禁止 API；
 - 选择过程先记录在 active 技术方案；只有完整 Verifier 与 GUI 证据形成后才写入 dated verification report。
 
@@ -325,6 +330,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - single-flight coordinator；
 - latest-wins pending candidate；
 - 仅同一个 clean coordinator 生命周期内的自动/VFS same-digest 请求 no-op；手动 `Sync Now` 与新 service/reopen 均强制 reconcile；
+- service 构造时订阅 public `ModuleRootListener`；只有 valid snapshot、project active 且 `ReqwsProjectModelMutationGuard` 未激活时才接受外部 project-model event，burst 使用固定 250 ms 防抖并提交 `PROJECT_MODEL_CHANGE` same-digest forced reconcile；
+- Workspace Model mutation 与 public roots notifier 都由同一 guard 抑制同步 self-event；GoLand 语言层若在 guard 后发布一次迟到 event，可产生一次有界 follow-up，registry 已 clean 的 replay 不再发 event，禁止 roots/apply loop；
 - Safe Mode 的 latest blocked read 在注册后 VCS inspection 前 arm 独立 force-reconcile intent；trust poll 只提交 automatic wake-up，因此先到的 automatic trusted read继承 intent，迟到 poll 不会再制造第二次强制重放；该 intent 和手动 intent 一样跨 automatic read/candidate/read failure 保留，不能被 same-digest baseline 跳过；
 - temporary missing 的有限 retry；
 - invalid candidate 保留 last good model；
@@ -354,7 +361,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 单项目最多一个 apply；
 - coordinator exception 不死锁；apply 的 PCE/coroutine cancellation 保留同一实例且不发布普通 `Failed`，当前 submission 结束后同一 worker 可处理下一候选；首次 read/apply 的一次取消只自动追加一个 successor，重复取消无热循环；owner scope cancellation/dispose 仍终止 worker，普通 observer exception 继续隔离；
 - 无持续 indexing loop 或 VFS event storm；
-- 自动测试覆盖 debounce、latest-wins、dispose 和恢复。
+- 自动测试覆盖 350 ms manifest debounce、250 ms external project-model debounce、`PROJECT_MODEL_CHANGE` forced same-digest、guarded self-event、bounded language follow-up、latest-wins、dispose 和恢复。
 
 ## 10. W4：VCS 只读诊断与 Desktop GoLand 启动
 
@@ -379,7 +386,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - path identity normalization；
 - Git plugin unavailable 的稳定诊断；
 - read/配置差异的 degraded state；
-- Tool Window 展示 model/VCS 分层状态，`Sync Now` 重放 Project Model reconcile 并重新检查 VCS；其中 VCS 阶段始终只读。
+- Tool Window 展示 authoritative model、两个 live gate与 VCS 分层状态，`Sync Now` 重放 Project Model reconcile/live gates 并重新检查 VCS；其中 VCS 阶段始终只读。
 
 261/262 没有适合本契约的稳定原子 mapping mutation API，因此 production 选择零 VCS mutation。ReqWS 不再与 Settings、`ModuleVcsDetector` 或其他插件竞争写入；payload-less event 与读取并发最多造成短暂旧诊断，下一事件或 `Sync Now` 重新读取，不会覆盖未知 mapping 或 `rootSettings`。
 
@@ -421,6 +428,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - manifest attribute 检查后把 `.reqws` 替换为外部 symlink 不会重定向读取；`.idea` 在 state transaction 中替换也不会让 lock/state/temp/readback 转向外部目录；目录替换/symlink retarget 不会把 snapshot 旧 canonical target 与 live identity 混合成 configured；
 - latest 非取消 refresh 异常离开 `READING` 并保留 last-good snapshot/digest；projection/coordinator/VCS 中的 PCE 与 coroutine cancellation 不被包装成业务失败。已有稳定 state 时 latest read/apply 取消后仍可由用户 `Sync Now` 收敛；首次 blank `INACTIVE` 的一次取消由 startup 已启动的同一 service 自动重试，不依赖用户入口或新文件事件；
 - trusted、Safe Mode、startup、manifest add/remove/re-add、automatic refresh、manual sync 与 restart 的 ReqWS 调用链均没有 VCS mutation API；
+- trusted 下 Go Modules registry mismatch 只经一次 public no-rescan roots event 唤醒 GoLand，Safe Mode 不发 event；所有路径都不调用 `VgoIntegrationManager`、`VgoStatusTracker`、scheduler 或直接 spawn Go command/download；
 - 用户 mapping、顺序、VCS 类型与 `rootSettings` 不被 ReqWS writer 覆盖；Project Model 触发的 GoLand 原生 auto-detection 另行记录和归因；
 - 生产源码不引用 mapping setter 或 VCS ownership writer；旧 ownership/lock 文件保持 inert 且不自动清理；
 - Settings/pooled writer 与 ReqWS 读取交错时只影响短暂诊断，不产生 lost update；
@@ -441,8 +449,8 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - code completion；
 - navigate to declaration；
 - find usages；
-- run test；
-- run/debug main package；
+- Go Test 与 Go Application 原生 configuration 使用 workspace module、`kind=PACKAGE` 与 package import path，configuration validation 无 package error，且无需 “Continue Anyway” 即可 run/debug；
+- FILE/DIRECTORY configuration 或 Terminal `go test` 成功只可作为补充，不替代 `PACKAGE` registry 语义；
 - Git diff/log/commit root selection。
 
 同时验证：
@@ -458,6 +466,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - logical remove repo-b；
 - repo-b 目录仍存在；
 - re-add repo-b；
+- add/remove/re-add 每一步分别核对 authoritative Workspace Model、public `ProjectFileIndex` 与 public `VgoModulesRegistry`；对应 `PACKAGE` configuration 在活动时可校验/执行、逻辑移除时不再错误解析，重新添加后无需重启恢复；
 - GoLand restart；
 - Desktop not running；
 - malformed → valid manifest；
@@ -468,9 +477,11 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 重复 initial cancellation 到达 retry 上限后不继续 churn，retry delay 期间 dispose/owner cancellation 不启动第二 read，newer generation/state publication 胜出时旧 timer 不覆盖；
 - plugin disable/enable；
 - plugin ZIP reinstall；
-- sleep/wake。
+- sleep/wake；
+- 外部 Project Roots / Project Model drift 通过 `ModuleRootListener` 触发 250 ms 防抖的 `PROJECT_MODEL_CHANGE` same-digest reconcile；验证 ReqWS guarded self-event 无 replay、GoLand 迟到 event 最多有界 follow-up 且无循环；
 - 按 Tool Window 提示在 Directory Mappings 手动添加活动 Git Root、复核 retained mapping，并确认配置事件自动刷新状态；
 - 对纯 VCS inspection、配置事件和 `Sync Now` 的 VCS 阶段做 mapping/`.idea/vcs.xml` 保持性检查；manifest 驱动的 Project Model 若触发 GoLand 原生 auto-detection，记录其前后差异与 IDE 设置，不归因于 ReqWS writer。
+- 若 public roots event 触发 GoLand 原生 `go list`、module refresh 或依赖下载，记录 event、GoLand logger/process 与网络时间线并单独归因；同时证明 ReqWS 没有 direct spawn/download 调用。
 
 ### 11.4 规模和性能
 
@@ -479,6 +490,7 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - 100 次 rapid rewrite；
 - 观察 sync stage duration、EDT freeze、event/apply ratio、index completion、CPU、threads 和 memory；
 - 同一 live coordinator 的自动 clean same-digest no-op、手动 same-digest 强制 reconcile，并记录 reopen 强制 reconcile 的额外 apply；
+- external model event burst 只产生一次 250 ms 后的 forced replay；registry 已收敛后不再发布 roots event，语言层迟到 event 只有有界 follow-up；
 - Project/Git UI 保持可交互。
 
 不设置脱离本机环境的绝对毫秒门限，但以下任一情况判失败：
@@ -503,15 +515,17 @@ B 已成为唯一 production path，因此不继续探索 C，不增加 runtime 
 - Project Model ownership state tamper；
 - 旧 VCS ownership/lock 存在且保持 inert；
 - Safe Mode；
+- Safe Mode 的 registry mismatch 不发布 ReqWS roots event；
 - ownership conflict；
 - 用户 module/root 保护，以及所有 mapping/`rootSettings` 的无条件保持；
 - 生产路径静态与运行时零 mapping setter/ownership write；
+- 生产路径静态与运行时零 `VgoIntegrationManager`/`VgoStatusTracker`/scheduler、反射/private API 与 direct Go command/download；
 - 插件不存在任何 delete/clone/checkout 入口。
 
 ### 11.6 Exit criteria
 
 - requirements GL-01 至 GL-14 与 GL-16 均有 exact-head 证据；
-- Go development basics 通过；
+- Go development basics 通过，且 `PACKAGE` run/test configuration 在 validation 阶段即可解析并直接执行；
 - 没有严重性能或事件问题；
 - 安全负向场景符合设计；
 - 所有已知限制有明确影响和恢复建议；
@@ -562,7 +576,7 @@ cd integrations/goland
 2. 记录 SHA-256；
 3. Install Plugin from Disk；
 4. 重启 GoLand；
-5. 使用固定 fixture 完成 GL-04 至 GL-14；
+5. 使用固定 fixture 完成 GL-04 至 GL-14，包括 authoritative Workspace Model → `ProjectFileIndex` → `VgoModulesRegistry`、`PACKAGE` configuration、external model drift 和 Safe Mode no-roots-event 证据；
 6. 从 packaged 或开发态 Desktop 完成 GL-01 至 GL-03、GL-15；
 7. 记录截图、关键日志、环境和未覆盖边界；其中 Tool Window 截图对照归档原型，覆盖浅/深主题、常用窄宽度和关键状态；
 8. 给出 `GO` 或 `NO-GO`。
@@ -586,7 +600,7 @@ cd integrations/goland
 | Desktop contract | Vitest | IPC、preload、errors、renderer/i18n |
 | Desktop integration | Vitest + temp fixtures | workspace ready、root/manifest validation、回归 |
 | Plugin pure unit | JUnit/Kotlin | parser、path、digest、planner、coordinator |
-| Plugin platform | IntelliJ test framework | roots、VCS 只读诊断/配置事件、Project Model persistent ownership、Safe Mode |
+| Plugin platform | IntelliJ test framework | authoritative roots、`ProjectFileIndex`/`VgoModulesRegistry` 双 live gate、public roots notifier、external model event、VCS 只读诊断/配置事件、Project Model persistent ownership、Safe Mode |
 | Binary compatibility | verifyPlugin / Plugin Verifier | descriptor、dependency、API、bytecode |
 | macOS GUI smoke | 真实 GoLand | Project、Search、Git、Go、launch、restart |
 | Scale/adversarial | fixture generator + GoLand | 50+20、rapid rewrite、symlink、ownership conflict、VCS 零写入 |
@@ -631,6 +645,7 @@ cd integrations/goland
 
 - 选定 strategy 的真实 GoLand 证据；
 - Go analysis/test/debug；
+- `PACKAGE` run/test configuration validation，FILE/DIRECTORY/Terminal 不得作为替代；
 - ownership 和用户配置保护；
 - retained repository 隔离；
 - internal/experimental API；
@@ -644,6 +659,7 @@ cd integrations/goland
 - VCS configured/missing/wrong-VCS/retained 只读分类、手动配置说明与事件复核；
 - 生产零 mapping mutation、旧 VCS ownership/lock inert；
 - VFS 并发与错误恢复；
+- 双 live gate、single public roots event、30 秒只读 registry bound、250 ms external-event debounce、guard self-event suppression 与 bounded follow-up；
 - add/remove/re-add 端到端；
 - Desktop 回归和 i18n。
 
@@ -666,14 +682,16 @@ cd integrations/goland
 - Desktop 有受测试的 GoLand availability/open flow；
 - plugin ZIP 可构建并通过磁盘安装；
 - manifest contract 由 TypeScript 和 Kotlin fixtures 覆盖；
-- 活动项目内容与 manifest 自动一致；活动 Git Root 差异有可执行的手动配置提示，用户配置后可自动复核；
-- retained repository 不进入默认项目范围；其 Git mapping 保持原样并提示用户复核；
+- 活动项目内容与 manifest 自动一致，authoritative Workspace Model、public `ProjectFileIndex` 与 public `VgoModulesRegistry` 均收敛后才记录 clean；活动 Git Root 差异有可执行的手动配置提示，用户配置后可自动复核；
+- retained repository 不进入默认项目范围或目标 module 的 Go Modules registry；其 Git mapping 保持原样并提示用户复核；
 - add/remove/re-add 无需重启；
 - manifest 原子替换、快速连续变化和错误恢复可收敛；
 - 首次启动的单次 read/apply PCE 或 coroutine cancellation 可由有界、cancellation-neutral automatic retry 收敛，重复取消不形成热循环；
 - Safe Mode、root identity、path containment 和 symlink 安全通过；
+- Safe Mode 不发布 ReqWS roots event；trusted registry mismatch 每轮最多发一次 public no-rescan roots event 并只读有界等待，external model drift 通过 250 ms `PROJECT_MODEL_CHANGE` replay 收敛且无 self-event/follow-up loop；
 - 用户 module/root 不被越权删除，VCS mapping、顺序与 `rootSettings` 从不被插件修改；
-- Go completion/navigation/test/debug 通过；
+- Go completion/navigation 及原生 `kind=PACKAGE` run/test/debug 通过，无 package validation error 或 “Continue Anyway”；
+- production 不调用 `VgoIntegrationManager`、`VgoStatusTracker`、scheduler、反射/private API，也不直接 spawn Go command/download；GoLand 原生 `go list`/下载单独归因；
 - restart 冷恢复且不依赖 Desktop；
 - 50+20 规模无事件风暴、持续 CPU 或无限 indexing；
 - Desktop、plugin、docs、package 和 verifier checks 全绿；

@@ -6,29 +6,87 @@ import com.reqws.goland.manifest.RepositoryAvailability
 import com.reqws.goland.manifest.ResolvedRepository
 import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
+import com.reqws.goland.projectmodel.ProjectModelApplyException
+import com.reqws.goland.projectmodel.ProjectModelErrorCode
+import com.reqws.goland.sync.SyncTrigger
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReqwsProjectionApplierTest {
   @Test
-  fun `advances digest after the managed project model converges`() = runBlocking {
+  fun `returns after the managed project model converges`() = runBlocking {
     val events = mutableListOf<String>()
     val snapshot = snapshot()
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { events.add("model") },
-      digestRecorder = AppliedDigestRecorder { events.add("digest:$it") },
+      projectModel = ProjectModelProjection { _, _ -> events.add("model") },
     )
 
     applier.apply(snapshot)
 
-    assertEquals(listOf("model", "digest:${snapshot.digestSha256}"), events)
+    assertEquals(listOf("model"), events)
+  }
+
+  @Test
+  fun `disables another roots notification for a bounded project-model follow-up`() = runBlocking {
+    var notificationAllowed: Boolean? = null
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      projectModel = ProjectModelProjection { _, allowRootsChangeNotification ->
+        notificationAllowed = allowRootsChangeNotification
+      },
+    )
+
+    applier.apply(snapshot(), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+
+    assertEquals(false, notificationAllowed)
+  }
+
+  @Test
+  fun `maps a stale live file index to a layered project-content diagnostic`() {
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      projectModel = ProjectModelProjection { _, _ ->
+        throw ProjectModelApplyException(
+          ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
+          "Live ProjectFileIndex did not converge.",
+        )
+      },
+    )
+
+    val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, failure.stableCode)
+    assertEquals("PROJECT_FILE_INDEX", failure.field)
+    assertTrue(failure.degraded)
+  }
+
+  @Test
+  fun `keeps the Go Modules registry failure layer in diagnostics`() {
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { true },
+      projectModel = ProjectModelProjection { _, _ ->
+        throw ProjectModelApplyException(
+          ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED,
+          "Go Modules registry did not converge.",
+        )
+      },
+    )
+
+    val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, failure.stableCode)
+    assertEquals("GO_MODULES_REGISTRY", failure.field)
   }
 
   @Test
@@ -36,8 +94,7 @@ class ReqwsProjectionApplierTest {
     var sideEffects = 0
     val applier = ReqwsProjectionApplier(
       isTrusted = { false },
-      projectModel = ProjectModelProjection { sideEffects += 1 },
-      digestRecorder = AppliedDigestRecorder { sideEffects += 1 },
+      projectModel = ProjectModelProjection { _, _ -> sideEffects += 1 },
     )
 
     val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
@@ -54,8 +111,7 @@ class ReqwsProjectionApplierTest {
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { true },
-      projectModel = ProjectModelProjection { sideEffects += 1 },
-      digestRecorder = AppliedDigestRecorder { sideEffects += 1 },
+      projectModel = ProjectModelProjection { _, _ -> sideEffects += 1 },
     )
 
     assertThrows(ReqwsProjectionApplyException::class.java) {
@@ -66,31 +122,26 @@ class ReqwsProjectionApplierTest {
   }
 
   @Test
-  fun `does not record a clean digest when service disposal follows the model commit`() {
+  fun `rejects service disposal that follows the model commit`() {
     var disposed = false
-    var digestRecorded = false
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { disposed },
-      projectModel = ProjectModelProjection { disposed = true },
-      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+      projectModel = ProjectModelProjection { _, _ -> disposed = true },
     )
 
     assertThrows(ReqwsProjectionApplyException::class.java) {
       runBlocking { applier.apply(snapshot()) }
     }
 
-    assertEquals(false, digestRecorded)
   }
 
   @Test
-  fun `propagates coroutine cancellation from the project model without recording a digest`() {
+  fun `propagates coroutine cancellation from the project model`() {
     val cancellation = CancellationException("cancel project model apply")
-    var digestRecorded = false
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { throw cancellation },
-      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+      projectModel = ProjectModelProjection { _, _ -> throw cancellation },
     )
 
     val thrown = assertThrows(CancellationException::class.java) {
@@ -98,17 +149,14 @@ class ReqwsProjectionApplierTest {
     }
 
     assertSame(cancellation, thrown)
-    assertFalse(digestRecorded)
   }
 
   @Test
-  fun `propagates process cancellation from the project model without recording a digest`() {
+  fun `propagates process cancellation from the project model`() {
     val cancellation = ProcessCanceledException()
-    var digestRecorded = false
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { throw cancellation },
-      digestRecorder = AppliedDigestRecorder { digestRecorded = true },
+      projectModel = ProjectModelProjection { _, _ -> throw cancellation },
     )
 
     val thrown = assertThrows(ProcessCanceledException::class.java) {
@@ -116,7 +164,6 @@ class ReqwsProjectionApplierTest {
     }
 
     assertSame(cancellation, thrown)
-    assertFalse(digestRecorded)
   }
 
   private fun snapshot(): ManifestSnapshot {

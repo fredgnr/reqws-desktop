@@ -108,6 +108,49 @@ class SyncReadRequestTrackerTest {
   }
 
   @Test
+  fun `a newer automatic read inherits the exact verify-only event lineage`() {
+    val tracker = SyncReadRequestTracker()
+    val followUp = tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "a".repeat(64),
+      projectModelEventEpoch = 17,
+    )
+    val automatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var offeredTrigger: SyncTrigger? = null
+
+    assertFalse(tracker.offerCandidateIfLatest(followUp) { true })
+    assertEquals("a".repeat(64), automatic.projectModelOriginDigest)
+    assertEquals(17L, automatic.projectModelEventEpoch)
+    assertTrue(
+      tracker.offerCandidateIfLatest(automatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `overlapping verify-only events keep the newer event lineage`() {
+    val tracker = SyncReadRequestTracker()
+    tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "a".repeat(64),
+      projectModelEventEpoch = 21,
+    )
+    val newer = tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "b".repeat(64),
+      projectModelEventEpoch = 22,
+    )
+
+    assertEquals("b".repeat(64), newer.projectModelOriginDigest)
+    assertEquals(22L, newer.projectModelEventEpoch)
+  }
+
+  @Test
   fun `a read failure preserves trust-transition intent for the next valid candidate`() {
     val tracker = SyncReadRequestTracker()
     tracker.begin(SyncTrigger.TRUST_TRANSITION)

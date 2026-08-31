@@ -27,6 +27,11 @@ data class ReqwsProjectState(
   val lifecycle: ReqwsLifecycleState,
   val snapshot: ManifestSnapshot? = null,
   val lastAppliedDigest: String? = null,
+  /**
+   * In-memory proof that this project-service instance accepted a successful live projection.
+   * Unlike [lastAppliedDigest], this value is never restored from persistent state.
+   */
+  val validatedProjectionDigest: String? = null,
   val lastError: ReqwsProjectError? = null,
   val vcsInspection: VcsRootInspection? = null,
 ) {
@@ -48,5 +53,6 @@ internal fun ReqwsProjectState.afterSuccessfulProjection(
     ReqwsLifecycleState.SYNCHRONIZED
   },
   lastAppliedDigest = appliedDigest,
+  validatedProjectionDigest = appliedDigest,
   lastError = null,
 )

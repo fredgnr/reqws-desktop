@@ -8,10 +8,12 @@ import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
 import com.reqws.goland.projectmodel.ReqwsProjectModelAdapter
+import com.reqws.goland.sync.SyncTrigger
 import kotlinx.coroutines.CancellationException
 
 internal object ReqwsStableErrorCode {
   const val PROJECT_MODEL_APPLY_FAILED = "PROJECT_MODEL_APPLY_FAILED"
+  const val PROJECT_CONTENT_NOT_CONVERGED = "PROJECT_CONTENT_NOT_CONVERGED"
   const val REFRESH_FAILED = "REFRESH_FAILED"
   const val OWNERSHIP_CONFLICT = "OWNERSHIP_CONFLICT"
   const val SAFE_MODE_BLOCKED = "SAFE_MODE_BLOCKED"
@@ -24,32 +26,34 @@ internal object ReqwsStableErrorCode {
 internal class ReqwsProjectionApplyException(
   val stableCode: String,
   val degraded: Boolean,
+  val field: String? = null,
   cause: Throwable? = null,
 ) : RuntimeException(stableCode, cause) {
   override fun toString(): String =
-    "ReqwsProjectionApplyException(stableCode=$stableCode, degraded=$degraded)"
+    "ReqwsProjectionApplyException(stableCode=$stableCode, degraded=$degraded, field=$field)"
 }
 
 internal fun interface ProjectModelProjection {
-  suspend fun apply(snapshot: ManifestSnapshot)
+  suspend fun apply(snapshot: ManifestSnapshot, allowRootsChangeNotification: Boolean)
 }
 
-internal fun interface AppliedDigestRecorder {
-  fun markApplied(digestSha256: String)
-}
-
-/** Applies the managed project model and advances the digest after that owned projection converges. */
+/** Applies and verifies the managed projection; the coordinator commits its digest afterward. */
 internal class ReqwsProjectionApplier(
   private val isTrusted: () -> Boolean,
   private val isProjectDisposed: () -> Boolean = { false },
   private val projectModel: ProjectModelProjection,
-  private val digestRecorder: AppliedDigestRecorder,
 ) {
-  suspend fun apply(snapshot: ManifestSnapshot) {
+  suspend fun apply(
+    snapshot: ManifestSnapshot,
+    trigger: SyncTrigger = SyncTrigger.AUTOMATIC,
+  ) {
     ensureProjectionAllowed()
 
     try {
-      projectModel.apply(snapshot)
+      projectModel.apply(
+        snapshot,
+        trigger != SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      )
     } catch (exception: ProcessCanceledException) {
       throw exception
     } catch (exception: CancellationException) {
@@ -65,9 +69,9 @@ internal class ReqwsProjectionApplier(
     }
 
     // The model adapter performs its own transaction gates. Recheck the service lifecycle before
-    // publishing a clean digest because service disposal can precede Project.isDisposed.
+    // returning to the coordinator's accepted-success commit because service disposal can precede
+    // Project.isDisposed.
     ensureProjectionAllowed()
-    digestRecorder.markApplied(snapshot.digestSha256)
   }
 
   private fun ensureProjectionAllowed() {
@@ -86,11 +90,23 @@ internal class ReqwsProjectionApplier(
       ProjectModelErrorCode.INVALID_OWNERSHIP_STATE,
       ProjectModelErrorCode.NESTED_CONTENT_ROOT_CONFLICT,
       ProjectModelErrorCode.OWNERSHIP_CONFLICT -> ReqwsStableErrorCode.OWNERSHIP_CONFLICT
+      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
+      ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED ->
+        ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED
       else -> ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED
+    }
+    val field = when (exception.code) {
+      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED -> "PROJECT_FILE_INDEX"
+      ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED -> "GO_MODULES_REGISTRY"
+      else -> null
     }
     return ReqwsProjectionApplyException(
       stableCode = stableCode,
-      degraded = stableCode == ReqwsStableErrorCode.OWNERSHIP_CONFLICT,
+      degraded = stableCode in setOf(
+        ReqwsStableErrorCode.OWNERSHIP_CONFLICT,
+        ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+      ),
+      field = field,
       cause = exception,
     )
   }
@@ -105,15 +121,17 @@ internal class ReqwsProjectionApplier(
       project: Project,
       isServiceDisposed: () -> Boolean = { false },
     ): ReqwsProjectionApplier {
-      val persistence = project.service<ReqwsSyncPersistence>()
       val isDisposed = { project.isDisposed || isServiceDisposed() }
       return ReqwsProjectionApplier(
         isTrusted = { TrustedProjects.isProjectTrusted(project) },
         isProjectDisposed = isDisposed,
-        projectModel = ProjectModelProjection { snapshot ->
-          project.service<ReqwsProjectModelAdapter>().apply(snapshot, isDisposed)
+        projectModel = ProjectModelProjection { snapshot, allowRootsChangeNotification ->
+          project.service<ReqwsProjectModelAdapter>().apply(
+            snapshot = snapshot,
+            isServiceDisposed = isDisposed,
+            allowRootsChangeNotification = allowRootsChangeNotification,
+          )
         },
-        digestRecorder = AppliedDigestRecorder(persistence::markApplied),
       )
     }
   }

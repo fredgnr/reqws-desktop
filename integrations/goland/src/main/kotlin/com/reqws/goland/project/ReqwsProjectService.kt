@@ -6,16 +6,21 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ModuleRootEvent
+import com.intellij.openapi.roots.ModuleRootListener
 import com.reqws.goland.manifest.ManifestErrorCode
 import com.reqws.goland.manifest.ManifestReader
 import com.reqws.goland.manifest.ManifestSnapshot
+import com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard
 import com.reqws.goland.sync.LatestWinsSyncCoordinator
 import com.reqws.goland.sync.SyncCandidate
 import com.reqws.goland.sync.SyncCandidateApplier
+import com.reqws.goland.sync.SyncCandidateCommitter
 import com.reqws.goland.sync.SyncCoordinatorEvent
 import com.reqws.goland.sync.SyncCoordinatorObserver
 import com.reqws.goland.sync.SyncFailureStage
 import com.reqws.goland.sync.SyncTrigger
+import com.reqws.goland.sync.mergeReconcileTrigger
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.ReqwsVcsDiagnosticsService
 import com.reqws.goland.vcs.VcsRootInspection
@@ -50,6 +55,7 @@ class ReqwsProjectService private constructor(
   )
 
   private val disposed = AtomicBoolean(false)
+  private val lifecycleCommitLock = Any()
   private val readRequests = SyncReadRequestTracker()
   private val statePublisher = TerminalStatePublisher(
     initialState = ReqwsProjectState.INACTIVE,
@@ -60,7 +66,16 @@ class ReqwsProjectService private constructor(
         state.lifecycle != ReqwsLifecycleState.DISPOSED
     },
   )
-  private val watcherRef = AtomicReference<ManifestVfsWatcher?>()
+  private val watcherRef = AtomicReference<Disposable?>()
+  private val manifestWatcherFactory = runtimeOverrides?.manifestWatcherFactory
+    ?: ReqwsManifestWatcherFactory { watchedProject, manifestPath, watchedScope, request ->
+      ManifestVfsWatcher(
+        project = watchedProject,
+        manifestPath = manifestPath,
+        coroutineScope = watchedScope,
+        syncRequest = request,
+      )
+    }
   private val initialCancellationRetryRef = AtomicReference<Job?>()
   private val applyingState = AtomicReference<ApplyingState?>()
   private val candidateLock = Any()
@@ -83,8 +98,17 @@ class ReqwsProjectService private constructor(
     scope = coroutineScope,
     applier = runtimeOverrides?.candidateApplier
       ?: SyncCandidateApplier<ManifestSnapshot> { candidate ->
-        projectionApplier.apply(candidate.value)
+        projectionApplier.apply(candidate.value, candidate.trigger)
       },
+    committer = SyncCandidateCommitter { candidate ->
+      runtimeOverrides?.beforeCandidateCommit?.invoke()
+      synchronized(lifecycleCommitLock) {
+        if (disposed.get() || project.isDisposed) {
+          throw CancellationException("ReqWS project service was disposed before digest commit")
+        }
+        persistence.markApplied(candidate.digestSha256)
+      }
+    },
     observer = SyncCoordinatorObserver(::onCoordinatorEvent),
   )
   private val trustMonitor = TrustTransitionMonitor(
@@ -119,6 +143,39 @@ class ReqwsProjectService private constructor(
   private val initialCancellationRetryWaiter =
     runtimeOverrides?.initialCancellationRetryWaiter
       ?: InitialCancellationRetryWaiter { delay(it) }
+  private val projectModelChangeLifecycleLock = Any()
+  private var projectModelChangeRegistration: AutoCloseable? = null
+  private var projectModelChangeDebounceJob: Job? = null
+  private var projectModelChangePendingIntent: ProjectModelRefreshIntent? = null
+  private var projectModelChangeNextEventEpoch = 0L
+  private var projectModelChangeRefreshStarted = false
+  private val projectModelMutationGuard = project.service<ReqwsProjectModelMutationGuard>()
+  private val projectModelChangeRegistrar = runtimeOverrides?.projectModelChangeRegistrar
+    ?: ReqwsProjectModelChangeRegistrar { listener ->
+      val connection = project.messageBus.connect()
+      connection.subscribe(
+        ModuleRootListener.TOPIC,
+        object : ModuleRootListener {
+          override fun rootsChanged(event: ModuleRootEvent) {
+            listener(
+              if (event.isCausedByWorkspaceModelChangesOnly) {
+                ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY
+              } else {
+                ReqwsProjectModelChangeKind.ORDINARY
+              },
+            )
+          }
+        },
+      )
+      AutoCloseable(connection::disconnect)
+    }
+  private val projectModelChangeDebounceWaiter =
+    runtimeOverrides?.projectModelChangeDebounceWaiter
+      ?: ReqwsProjectModelChangeDebounceWaiter { delay(it) }
+
+  init {
+    registerProjectModelChangeMonitoring()
+  }
 
   val state: ReqwsProjectState
     get() = statePublisher.state
@@ -354,10 +411,121 @@ class ReqwsProjectService private constructor(
     }
   }
 
+  private fun registerProjectModelChangeMonitoring() {
+    val registration = projectModelChangeRegistrar.addProjectModelChangeListener(
+      ::handleProjectModelChange,
+    )
+    val closeImmediately = synchronized(projectModelChangeLifecycleLock) {
+      if (disposed.get() || project.isDisposed) {
+        true
+      } else {
+        check(projectModelChangeRegistration == null) {
+          "ReqWS project-model change monitoring was registered more than once"
+        }
+        projectModelChangeRegistration = registration
+        false
+      }
+    }
+    if (closeImmediately) registration.close()
+  }
+
+  private fun handleProjectModelChange(kind: ReqwsProjectModelChangeKind) {
+    if (!shouldScheduleProjectModelChangeRefresh()) return
+    val scheduled = synchronized(projectModelChangeLifecycleLock) {
+      if (!shouldScheduleProjectModelChangeRefresh()) return@synchronized null
+      runtimeOverrides?.beforeProjectModelIntentCapture?.invoke()
+      val observedDigest = statePublisher.state.snapshot?.digestSha256
+        ?: return@synchronized null
+      projectModelChangeNextEventEpoch += 1
+      val incomingIntent = when (kind) {
+        ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY -> ProjectModelRefreshIntent(
+          trigger = SyncTrigger.PROJECT_MODEL_CHANGE,
+          originDigest = null,
+          eventEpoch = projectModelChangeNextEventEpoch,
+        )
+        ReqwsProjectModelChangeKind.ORDINARY -> ProjectModelRefreshIntent(
+          trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+          originDigest = observedDigest,
+          eventEpoch = projectModelChangeNextEventEpoch,
+        )
+      }
+      val currentJob = projectModelChangeDebounceJob
+      val nextIntent = if (currentJob != null && !projectModelChangeRefreshStarted) {
+        mergeProjectModelRefreshIntent(projectModelChangePendingIntent, incomingIntent)
+      } else {
+        incomingIntent
+      }
+      currentJob?.cancel()
+      projectModelChangePendingIntent = nextIntent
+      projectModelChangeRefreshStarted = false
+      coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        val launchedJob = currentCoroutineContext()[Job]
+        try {
+          projectModelChangeDebounceWaiter.wait(PROJECT_MODEL_CHANGE_DEBOUNCE_MILLIS)
+          val intent = synchronized(projectModelChangeLifecycleLock) {
+            if (projectModelChangeDebounceJob !== launchedJob) {
+              null
+            } else {
+              projectModelChangeRefreshStarted = true
+              projectModelChangePendingIntent
+            }
+          } ?: return@launch
+          if (
+            !disposed.get() &&
+            !project.isDisposed &&
+            statePublisher.state.snapshot != null
+          ) {
+            requestRefresh(
+              trigger = intent.trigger,
+              projectModelOriginDigest = intent.originDigest,
+              projectModelEventEpoch = intent.eventEpoch.takeIf {
+                intent.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP
+              },
+            )?.join()
+          }
+        } finally {
+          synchronized(projectModelChangeLifecycleLock) {
+            if (projectModelChangeDebounceJob === launchedJob) {
+              projectModelChangeDebounceJob = null
+              projectModelChangePendingIntent = null
+              projectModelChangeRefreshStarted = false
+            }
+          }
+        }
+      }.also { projectModelChangeDebounceJob = it }
+    } ?: return
+    scheduled.start()
+  }
+
+  private fun shouldScheduleProjectModelChangeRefresh(): Boolean =
+    !disposed.get() &&
+      !project.isDisposed &&
+      statePublisher.state.snapshot != null &&
+      !projectModelMutationGuard.isActive
+
+  private fun mergeProjectModelRefreshIntent(
+    current: ProjectModelRefreshIntent?,
+    incoming: ProjectModelRefreshIntent,
+  ): ProjectModelRefreshIntent {
+    val mergedTrigger = mergeReconcileTrigger(current?.trigger, incoming.trigger)
+      ?: incoming.trigger
+    return ProjectModelRefreshIntent(
+      trigger = mergedTrigger,
+      originDigest = if (mergedTrigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) {
+        incoming.originDigest
+      } else {
+        null
+      },
+      eventEpoch = incoming.eventEpoch,
+    )
+  }
+
   private fun requestRefresh(
     trigger: SyncTrigger,
     requiredVcsRegistrationVersion: Long? = null,
     cancellationRecovery: InitialCancellationRecovery? = null,
+    projectModelOriginDigest: String? = null,
+    projectModelEventEpoch: Long? = null,
   ): Job? {
     if (disposed.get() || project.isDisposed) return null
     val request = when {
@@ -369,8 +537,16 @@ class ReqwsProjectService private constructor(
             current.state.snapshot == null
         } ?: return null
       }
-      requiredVcsRegistrationVersion == null -> readRequests.begin(trigger)
-      else -> readRequests.beginIf(trigger) {
+      requiredVcsRegistrationVersion == null -> readRequests.begin(
+        trigger = trigger,
+        projectModelOriginDigest = projectModelOriginDigest,
+        projectModelEventEpoch = projectModelEventEpoch,
+      )
+      else -> readRequests.beginIf(
+        trigger = trigger,
+        projectModelOriginDigest = projectModelOriginDigest,
+        projectModelEventEpoch = projectModelEventEpoch,
+      ) {
         synchronized(vcsChangeLifecycleLock) {
           vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED &&
             vcsChangeRegistrationVersion == requiredVcsRegistrationVersion
@@ -714,10 +890,19 @@ class ReqwsProjectService private constructor(
           observedVcsRegistrationVersion = observedVcsRegistrationVersion,
         ) ?: return
         currentCoroutineContext().ensureActive()
+        runtimeOverrides?.beforeCandidateOffer?.invoke()
         val accepted = readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
           rememberCandidate(snapshot.digestSha256, prepared.state, request)
-          val offered = coordinator.offer(SyncCandidate(snapshot.digestSha256, snapshot), trigger)
+          val projectionTrigger = projectionTriggerForDigest(
+            request = request,
+            trigger = trigger,
+            digestSha256 = snapshot.digestSha256,
+          )
+          val offered = coordinator.offer(
+            SyncCandidate(snapshot.digestSha256, snapshot),
+            projectionTrigger,
+          )
           offered && completeVcsChangeMonitoringPreparation(
             prepared.monitoring,
             accepted = true,
@@ -734,6 +919,24 @@ class ReqwsProjectService private constructor(
     }
   }
 
+  private fun projectionTriggerForDigest(
+    request: SyncReadRequest,
+    trigger: SyncTrigger,
+    digestSha256: String,
+  ): SyncTrigger {
+    if (trigger != SyncTrigger.PROJECT_MODEL_FOLLOW_UP) return trigger
+    return if (
+      request.projectModelOriginDigest == digestSha256 &&
+      request.projectModelEventEpoch != null
+    ) {
+      SyncTrigger.PROJECT_MODEL_FOLLOW_UP
+    } else {
+      // A newer manifest supersedes the verify-only event lineage. Its different digest must be
+      // allowed to publish the one ordinary roots notification required for fresh Go module roots.
+      SyncTrigger.AUTOMATIC
+    }
+  }
+
   private fun onCoordinatorEvent(event: SyncCoordinatorEvent) {
     if (disposed.get()) return
     when (event) {
@@ -742,6 +945,7 @@ class ReqwsProjectService private constructor(
         val publication = statePublisher.prepareUpdate { current ->
           (candidate?.state ?: current.state).copy(
             lifecycle = ReqwsLifecycleState.SYNCHRONIZING,
+            validatedProjectionDigest = null,
             lastError = null,
           )
         }
@@ -778,7 +982,12 @@ class ReqwsProjectService private constructor(
         val rollback = cancelled?.publication?.let { publication ->
           statePublisher.prepareCompareAndPublish(
             expectedVersion = publication.after.version,
-            next = publication.after.stableState,
+            next = publication.after.stableState.copy(
+              // An applier cancellation may arrive after an authoritative layer committed but
+              // before every live gate completed. Keep the stable snapshot for recovery, but do
+              // not keep advertising its previous live-projection proof.
+              validatedProjectionDigest = null,
+            ),
           )
         }
         val sourceRequest = cancelled?.candidate?.sourceRequest
@@ -807,7 +1016,17 @@ class ReqwsProjectService private constructor(
 
   private fun handleCoordinatorFailure(event: SyncCoordinatorEvent.Failed) {
     if (event.stage == SyncFailureStage.READ && event.cause is ReadStateFailure) {
-      publish(event.cause.failedState)
+      val failedState = event.cause.failedState
+      statePublisher.prepareUpdate { current ->
+        failedState.copy(
+          // A read failure may have waited behind an apply that invalidated its old live proof.
+          // Intersect with the proof current at publication time so queued state cannot resurrect
+          // a digest that a later apply failure or cancellation already withdrew.
+          validatedProjectionDigest = current.state.validatedProjectionDigest.takeIf { proof ->
+            proof == failedState.snapshot?.digestSha256
+          },
+        )
+      }?.deliver()
       return
     }
 
@@ -818,6 +1037,7 @@ class ReqwsProjectService private constructor(
       publish(
         (candidate?.state ?: state).copy(
           lifecycle = ReqwsLifecycleState.SAFE_MODE_BLOCKED,
+          validatedProjectionDigest = null,
           lastError = null,
         ),
       )
@@ -834,8 +1054,10 @@ class ReqwsProjectService private constructor(
         } else {
           ReqwsLifecycleState.ERROR
         },
+        validatedProjectionDigest = null,
         lastError = ReqwsProjectError(
           code = stableCode,
+          field = projectionFailure?.field,
           digestSha256 = event.digestSha256,
         ),
       ),
@@ -911,14 +1133,25 @@ class ReqwsProjectService private constructor(
       )
 
   private fun ensureWatcher(projectRoot: Path) {
-    if (watcherRef.get() != null || disposed.get()) return
-    val watcher = ManifestVfsWatcher(
+    if (watcherRef.get() != null || disposed.get() || project.isDisposed) return
+    val watcher = manifestWatcherFactory.create(
       project = project,
       manifestPath = ReqwsProjectDetector.manifestPath(projectRoot),
       coroutineScope = coroutineScope,
       syncRequest = ManifestSyncRequest { requestRefresh(SyncTrigger.AUTOMATIC) },
     )
-    if (!watcherRef.compareAndSet(null, watcher)) watcher.dispose()
+    if (!watcherRef.compareAndSet(null, watcher)) {
+      watcher.dispose()
+      return
+    }
+    // Disposal can finish while the factory is blocked. Withdraw the late publication when this
+    // thread still owns it; otherwise dispose() already took responsibility for closing it.
+    if (
+      (disposed.get() || project.isDisposed) &&
+      watcherRef.compareAndSet(watcher, null)
+    ) {
+      watcher.dispose()
+    }
   }
 
   private fun rememberCandidate(
@@ -976,33 +1209,61 @@ class ReqwsProjectService private constructor(
   }
 
   override fun dispose() {
-    if (!disposed.compareAndSet(false, true)) return
-    try {
-      statePublisher.publish(ReqwsProjectState.DISPOSED)
-    } finally {
-      val revocation = synchronized(vcsChangeLifecycleLock) {
-        vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
-        val currentEpoch = vcsChangeMonitoringEpoch
-        val currentRegistration = vcsChangeRegistration
-        vcsChangeMonitoringEpoch = null
-        vcsChangeRegistration = null
-        vcsChangeMonitoringAccepted = false
-        currentEpoch?.let {
-          VcsChangeMonitoringRevocation(
-            startAttempt = it.startAttempt,
-            registration = currentRegistration,
-          )
+    val ownsDisposal = synchronized(lifecycleCommitLock) {
+      disposed.compareAndSet(false, true)
+    }
+    if (!ownsDisposal) return
+    var firstFailure: Throwable? = null
+    fun cleanup(action: () -> Unit) {
+      try {
+        action()
+      } catch (failure: Throwable) {
+        val currentFailure = firstFailure
+        if (currentFailure == null) {
+          firstFailure = failure
+        } else if (currentFailure !== failure) {
+          currentFailure.addSuppressed(failure)
         }
       }
-      finishVcsChangeMonitoringRevocation(revocation)
-      readRequests.invalidate()
-      cancelPendingInitialCancellationRetry()
-      trustMonitor.close()
-      watcherRef.getAndSet(null)?.dispose()
-      coordinator.close()
-      synchronized(candidateLock) { candidateStates.clear() }
-      applyingState.set(null)
     }
+
+    cleanup { statePublisher.publish(ReqwsProjectState.DISPOSED) }
+    val revocation = synchronized(vcsChangeLifecycleLock) {
+      vcsChangeMonitoringState = VcsChangeMonitoringState.DISPOSED
+      val currentEpoch = vcsChangeMonitoringEpoch
+      val currentRegistration = vcsChangeRegistration
+      vcsChangeMonitoringEpoch = null
+      vcsChangeRegistration = null
+      vcsChangeMonitoringAccepted = false
+      currentEpoch?.let {
+        VcsChangeMonitoringRevocation(
+          startAttempt = it.startAttempt,
+          registration = currentRegistration,
+        )
+      }
+    }
+    cleanup { finishVcsChangeMonitoringRevocation(revocation) }
+    cleanup { readRequests.invalidate() }
+    cleanup { cancelPendingInitialCancellationRetry() }
+    val projectModelChangeResources = synchronized(projectModelChangeLifecycleLock) {
+      val resources = ProjectModelChangeResources(
+        debounceJob = projectModelChangeDebounceJob,
+        registration = projectModelChangeRegistration,
+      )
+      projectModelChangeDebounceJob = null
+      projectModelChangePendingIntent = null
+      projectModelChangeRefreshStarted = false
+      projectModelChangeRegistration = null
+      resources
+    }
+    cleanup { projectModelChangeResources.debounceJob?.cancel() }
+    cleanup { projectModelChangeResources.registration?.close() }
+    cleanup { trustMonitor.close() }
+    cleanup { watcherRef.getAndSet(null)?.dispose() }
+    cleanup { coordinator.close() }
+    cleanup { synchronized(candidateLock) { candidateStates.clear() } }
+    cleanup { applyingState.set(null) }
+    firstFailure?.let { throw it }
   }
 
   private data class CandidateState(
@@ -1043,6 +1304,25 @@ class ReqwsProjectService private constructor(
     val registration: AutoCloseable?,
   )
 
+  private data class ProjectModelChangeResources(
+    val debounceJob: Job?,
+    val registration: AutoCloseable?,
+  )
+
+  private data class ProjectModelRefreshIntent(
+    val trigger: SyncTrigger,
+    val originDigest: String?,
+    val eventEpoch: Long,
+  ) {
+    init {
+      require(
+        (trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) == (originDigest != null),
+      ) {
+        "Only a verify-only project-model follow-up may carry an origin digest"
+      }
+    }
+  }
+
   private enum class VcsChangeMonitoringState {
     NOT_STARTED,
     RESERVED,
@@ -1063,6 +1343,7 @@ class ReqwsProjectService private constructor(
     private const val MAX_PENDING_CANDIDATES = 8
     private const val MAX_INITIAL_CANCELLATION_RETRY_ATTEMPTS = 1
     private const val INITIAL_CANCELLATION_RETRY_DELAY_MILLIS = 250L
+    private const val PROJECT_MODEL_CHANGE_DEBOUNCE_MILLIS = 250L
 
     internal fun createForTest(
       project: Project,
@@ -1090,8 +1371,32 @@ internal fun interface ReqwsVcsChangeRegistrar {
   fun addExternalChangeListener(listener: () -> Job?): AutoCloseable
 }
 
+internal fun interface ReqwsProjectModelChangeRegistrar {
+  fun addProjectModelChangeListener(
+    listener: (ReqwsProjectModelChangeKind) -> Unit,
+  ): AutoCloseable
+}
+
+internal enum class ReqwsProjectModelChangeKind {
+  WORKSPACE_MODEL_ONLY,
+  ORDINARY,
+}
+
+internal fun interface ReqwsProjectModelChangeDebounceWaiter {
+  suspend fun wait(delayMillis: Long)
+}
+
 internal fun interface InitialCancellationRetryWaiter {
   suspend fun wait(delayMillis: Long)
+}
+
+internal fun interface ReqwsManifestWatcherFactory {
+  fun create(
+    project: Project,
+    manifestPath: Path,
+    coroutineScope: CoroutineScope,
+    syncRequest: ManifestSyncRequest,
+  ): Disposable
 }
 
 internal data class ReqwsProjectServiceRuntimeOverrides(
@@ -1100,9 +1405,15 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val trustPollMillis: Long? = null,
   val trustPollWaiter: TrustPollWaiter? = null,
   val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
+  val projectModelChangeRegistrar: ReqwsProjectModelChangeRegistrar? = null,
+  val projectModelChangeDebounceWaiter: ReqwsProjectModelChangeDebounceWaiter? = null,
   val vcsInspector: ReqwsVcsInspector? = null,
   val beforeReadingPublication: (() -> Unit)? = null,
   val beforeCancellationRollback: (() -> Unit)? = null,
   val beforeVcsCallbackRefresh: (() -> Unit)? = null,
+  val beforeProjectModelIntentCapture: (() -> Unit)? = null,
+  val beforeCandidateOffer: (() -> Unit)? = null,
+  val beforeCandidateCommit: (() -> Unit)? = null,
   val initialCancellationRetryWaiter: InitialCancellationRetryWaiter? = null,
+  val manifestWatcherFactory: ReqwsManifestWatcherFactory? = null,
 )

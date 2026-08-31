@@ -38,6 +38,8 @@ enum class ProjectModelErrorCode {
   AMBIGUOUS_WORKSPACE_ROOT,
   NESTED_CONTENT_ROOT_CONFLICT,
   OWNERSHIP_CONFLICT,
+  LIVE_FILE_INDEX_NOT_CONVERGED,
+  GO_MODULES_REGISTRY_NOT_CONVERGED,
   RETAINED_REPOSITORY_DISCOVERY_FAILED,
 }
 
@@ -67,6 +69,7 @@ class ReqwsProjectModelAdapter(
   suspend fun apply(
     snapshot: ManifestSnapshot,
     isServiceDisposed: () -> Boolean = { false },
+    allowRootsChangeNotification: Boolean = true,
   ): ProjectModelApplyResult {
     val isColdModelSnapshot = firstModelSnapshot.get()
     val result = WorkspaceExcludeModelAdapter(
@@ -75,7 +78,7 @@ class ReqwsProjectModelAdapter(
       isTrusted = { TrustedProjects.isProjectTrusted(project) },
       isProjectDisposed = { project.isDisposed || isServiceDisposed() },
       isColdModelSnapshot = isColdModelSnapshot,
-    ).apply(snapshot)
+    ).apply(snapshot, allowRootsChangeNotification)
     firstModelSnapshot.set(false)
     return result
   }
@@ -95,8 +98,19 @@ internal class WorkspaceExcludeModelAdapter(
   private val pathsReferToSameFile: (Path, Path) -> Boolean = { first, second ->
     Files.isSameFile(first, second)
   },
+  private val liveProjectionVerifier: ReqwsLiveProjectionVerifier =
+    PlatformReqwsLiveProjectionVerifier(project),
+  private val projectModelMutationGuard: ReqwsProjectModelMutationGuard = project.service(),
+  private val goModulesProjection: ReqwsGoModulesProjection = ReqwsGoModulesSynchronizer(
+    project = project,
+    isProjectDisposed = isProjectDisposed,
+    isTrusted = isTrusted,
+  ),
 ) {
-  suspend fun apply(snapshot: ManifestSnapshot): ProjectModelApplyResult {
+  suspend fun apply(
+    snapshot: ManifestSnapshot,
+    allowRootsChangeNotification: Boolean = true,
+  ): ProjectModelApplyResult {
     ensureMutationAllowed()
 
     val binding = managedModelStateBinding(snapshot.manifest.id, snapshot.canonicalProjectRoot)
@@ -254,37 +268,56 @@ internal class WorkspaceExcludeModelAdapter(
 
     if (changesModel) {
       ensureMutationAllowed()
-      workspaceModel.update("Synchronize ReqWS project excludes") { storage ->
-        ensureMutationAllowed()
-        val module = storage.resolve(ModuleId(target.moduleName))
-          ?: throw ownershipConflict("The target module disappeared during synchronization.")
-        val contentRoot = module.contentRoots.singleOrNull { it.url.url == target.url.url }
-          ?: throw ownershipConflict("The target workspace Content Root changed during synchronization.")
-        ensureNoNestedContentRootConflict(storage, target, ownershipProofUrls)
-        if (contentRoot.excludedUrls.map { entity -> entity.url.url } != plannedExcludedUrls) {
-          throw ownershipConflict(
-            "The target workspace excludes changed after the ReqWS intent was persisted.",
-          )
-        }
-        storage.modifyContentRootEntity(contentRoot) {
-          val keptEntities = excludedUrls.filter { it.url.url !in plan.removableUrls }
-          val desiredEntities = plan.added.flatMap { relative ->
-            val claim = plan.addedClaims.getValue(relative)
-            listOf(
-              ExcludeUrlEntity(desiredUrls.getValue(relative), contentRoot.entitySource),
-              ExcludeUrlEntity(
-                markerUrlsByToken.getValue(claim.markerToken),
-                contentRoot.entitySource,
-              ),
+      projectModelMutationGuard.withSuspendingMutation {
+        workspaceModel.update("Synchronize ReqWS project excludes") { storage ->
+          ensureMutationAllowed()
+          val module = storage.resolve(ModuleId(target.moduleName))
+            ?: throw ownershipConflict("The target module disappeared during synchronization.")
+          val contentRoot = module.contentRoots.singleOrNull { it.url.url == target.url.url }
+            ?: throw ownershipConflict("The target workspace Content Root changed during synchronization.")
+          ensureNoNestedContentRootConflict(storage, target, ownershipProofUrls)
+          if (contentRoot.excludedUrls.map { entity -> entity.url.url } != plannedExcludedUrls) {
+            throw ownershipConflict(
+              "The target workspace excludes changed after the ReqWS intent was persisted.",
             )
           }
-          // Keep unrelated user entries byte-for-byte, including duplicates. The durable intent
-          // already revoked removed tokens and retained them as recovery-only claims.
-          ensureMutationAllowed()
-          excludedUrls = keptEntities + desiredEntities
+          val removableEntities = contentRoot.excludedUrls.filter { entity ->
+            entity.url.url in plan.removableUrls
+          }
+          removableEntities.forEach { entity ->
+            ensureMutationAllowed()
+            if (!storage.removeEntity(entity)) {
+              throw ownershipConflict("A planned ReqWS exclude disappeared during synchronization.")
+            }
+          }
+          if (plan.added.isNotEmpty()) {
+            val updatedModule = storage.resolve(ModuleId(target.moduleName))
+              ?: throw ownershipConflict("The target module disappeared during synchronization.")
+            val updatedContentRoot = updatedModule.contentRoots.singleOrNull {
+              it.url.url == target.url.url
+            } ?: throw ownershipConflict(
+              "The target workspace Content Root changed during synchronization.",
+            )
+            storage.modifyContentRootEntity(updatedContentRoot) {
+              val desiredEntities = plan.added.flatMap { relative ->
+                val claim = plan.addedClaims.getValue(relative)
+                listOf(
+                  ExcludeUrlEntity(desiredUrls.getValue(relative), updatedContentRoot.entitySource),
+                  ExcludeUrlEntity(
+                    markerUrlsByToken.getValue(claim.markerToken),
+                    updatedContentRoot.entitySource,
+                  ),
+                )
+              }
+              // Explicit child-entity removal above ensures the Workspace File Index receives
+              // removal events for reactivated repositories. Keep all unrelated entries untouched.
+              ensureMutationAllowed()
+              excludedUrls = excludedUrls + desiredEntities
+              ensureMutationAllowed()
+            }
+          }
           ensureMutationAllowed()
         }
-        ensureMutationAllowed()
       }
       ensureMutationAllowed()
       requireExpectedModel(
@@ -295,6 +328,23 @@ internal class WorkspaceExcludeModelAdapter(
         changedMessage = "The target workspace excludes changed after ReqWS synchronization.",
       )
     }
+    ensureMutationAllowed()
+    liveProjectionVerifier.verify(
+      activeRepositoryPaths = currentActivePaths.values,
+      excludedPaths = desiredRelativePaths.map { relative ->
+        resolveRelative(snapshot.canonicalProjectRoot, relative)
+      },
+    )
+    ensureMutationAllowed()
+    goModulesProjection.synchronize(
+      moduleName = target.moduleName,
+      activeRepositoryPaths = currentActivePaths.values,
+      excludedPaths = desiredRelativePaths.map { relative ->
+        resolveRelative(snapshot.canonicalProjectRoot, relative)
+      },
+      allowRootsChangeNotification = allowRootsChangeNotification,
+    )
+    ensureMutationAllowed()
     return ProjectModelApplyResult(
       strategy = REQWS_MODEL_STRATEGY,
       moduleName = target.moduleName,
