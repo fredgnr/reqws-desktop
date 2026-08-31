@@ -1,8 +1,8 @@
 ---
 title: GoLand 插件 GUI 验收报告（2026-08-17）
 type: test-report
-status: active
-updated: 2026-08-17
+status: archived
+updated: 2026-08-31
 ---
 
 # GoLand 插件 GUI 验收报告（2026-08-17）
@@ -46,7 +46,7 @@ updated: 2026-08-17
 | Go | CLI 1.24.7；GUI 运行/调试使用 GoLand 自动识别的 1.26.5 toolchain |
 | Node / npm | 24.19.0 / 11.17.0（`nvm use`） |
 | Git | 2.55.0 |
-| fixture root | `<home>/GolandProjects/reqws-desktop/out/gui-acceptance-20260817/workspace` |
+| fixture root | 隔离 fixture 工作区（不记录本机绝对路径） |
 
 验收直接操作用户日常 GoLand，没有复制或启动第二个 IDE 实例。fixture 位于仓库忽略的 `out/` 下，使用三个本地 `git init -b main` 仓库，不含真实 remote 或凭据。
 
@@ -130,13 +130,7 @@ re-add b: Git=[repo-a, repo-b, repo-c]  excludes=[.reqws]
 
 ## 5. Screenshots and log evidence
 
-本地、未纳入 Git 的截图保存在：
-
-```text
-out/gui-acceptance-20260817/evidence/
-```
-
-其中 `reopened-synced.jpeg`、`add-repo-c.jpeg`、`remove-repo-b.jpeg`、`invalid-manifest.jpeg` 和 `restart-recovered.jpeg` 对应本报告核心阶段。由于用户要求不提交代码，这些二进制证据仅保留在本机 ignored 输出目录。
+本轮曾生成本地、未纳入 Git 的原始截图。后续隐私审计确认该集合混有真实用户绝对路径和 URL 上下文，因此整组原图已从可发布证据中撤回，不再记录目录或文件名，也不得被后续报告复用。若需要重现本报告阶段，必须使用仅含 `repo-a`、`repo-b`、`repo-c` 的隔离 fixture 重新截图并逐图复审。
 
 GoLand `idea.log` 记录了 Workspace Model 与 VCS 的真实提交：
 

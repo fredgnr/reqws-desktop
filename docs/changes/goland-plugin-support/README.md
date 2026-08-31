@@ -4,7 +4,7 @@
 
 - 状态：active
 - 阶段：实现与验证中
-- 更新日期：2026-08-30
+- 更新日期：2026-08-31
 - 实施分支：`feat/goland-plugin-support`
 
 ## 文档
@@ -45,7 +45,7 @@
 - 使用指南：更新。[GoLand 插件使用指南](../../guides/goland-plugin-guide.md)增加 Directory Mappings 手动配置、日常变更和排障步骤。
 - 开发指南：更新。明确 VCS API 只读边界，以及旧 `.idea/reqws-vcs-ownership.json`/lock 为 inert 且不得自动迁移或清理。
 - 交付记录：不创建。本轮没有发布、安装迁移、回滚或对外交付里程碑。
-- 按次验证报告：已创建。[2026-08-17 GUI 验收报告](testing/verification-2026-08-17.md)记录真实日常 GoLand 结果，并因 project-dispose 异常、Project View 刷新缺口、矩阵未完成和缺少 exact commit 判定为 `NO-GO`。
+- 按次验证报告：已更新。[2026-08-30 GUI 验收报告](testing/verification-2026-08-30.md)绑定当日历史 exact HEAD、ZIP 和 packaged Desktop，记录 automatic refresh 与 reactivated repository live ProjectFileIndex 阻塞并判定 `NO-GO`；同 JVM recovery claims 保留符合设计，不是失败原因；[2026-08-31 待修复与未完成验证清单](testing/open-bugs-and-verification-work-2026-08-31.md)绑定当前本地 exact implementation commit 与剩余矩阵；[2026-08-17 报告](testing/verification-2026-08-17.md)已归档。
 
 ## 2026-08-30 并发与取消修复的文档分类结论
 
@@ -54,7 +54,7 @@
 - 测试方案：更新。增加 lock 子文件替换后的第二 repository 同代写入、公开 `Sync Now` 恢复 read cancellation，以及首次 apply PCE 后下一 refresh 成功的确定性回归。
 - 开发指南：更新。维护上述持久化和 lifecycle 不变量，避免后续实现重新引入 replaceable child lock 或一次性 coordinator。
 - 用户指南：仅更新当前自动化验证摘要。Tool Window 操作与错误恢复步骤没有变化，本轮修复既有 `Sync Now` 的可达性。
-- 交付记录和新的按次报告：不创建。本轮没有发布、安装迁移、回滚或新的真实 GUI 执行；自动化结果在当前需求包和测试索引中更新，历史 GUI 报告保持原样。
+- 交付记录：不创建。本次修复没有发布、安装迁移或回滚；它本身只更新自动化证据，当天后续真实 GUI 执行另行形成[2026-08-30 按次报告](testing/verification-2026-08-30.md)。
 
 ## 2026-08-30 首次取消恢复修复的文档分类结论
 
@@ -62,8 +62,12 @@
 - 技术方案与实施计划：更新。记录 completion-cleanup 后的一次性 service-scope retry、source generation/exact state-version gate、固定延迟与 dispose/owner cancellation 边界。
 - 测试方案：更新。增加首次 read/apply × PCE/CE 四项 production startup 入口回归，以及 retry 上限和 dispose 负向用例。
 - 开发指南与用户指南：更新。维护有界、cancellation-neutral、无热循环的首次启动恢复不变量，并说明单次瞬时取消会自动重试。
-- 交付记录和新的按次报告：不创建。本轮没有发布、安装迁移、回滚或新的真实 GUI 执行；自动化和产物证据在 exact-source 全量验证后更新，历史 GUI 报告保持原样。
+- 交付记录：不创建。本次修复没有发布、安装迁移或回滚；它本身只更新自动化和产物证据，当天后续真实 GUI 执行另行形成[2026-08-30 按次报告](testing/verification-2026-08-30.md)。
 
 ## 当前验证状态
 
-功能包处于 active 的实现与验证阶段，不表示已经完成。2026-08-18 已确定新的产品边界：Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。这一取舍从产品路径移除了 whole-list writer 覆盖用户配置的风险。2026-08-30 当前源码候选继续保留 Safe Mode sticky reconcile 和 two-phase VCS listener，并把 Project Model writer 的跨 JVM 互斥绑定到 stable `.idea` directory inode；lock 子文件替换不能绕过 generation fence。service state publisher 原子维护 current/stable/version，latest read 与单次 applier cancellation 仅能 CAS 回滚自己的 `READING`/`SYNCHRONIZING` publication，已胜出的 read/apply/dispose 不会被旧取消覆盖；已有可见 stable state 时公开 `Sync Now` 可恢复，首次 blank `INACTIVE` 则在 cleanup 后由 service scope 延迟自动重试一次，并以 source generation、exact rollback version、manifest entry 和 owner/dispose gate 防止旧 timer 越权或形成热循环。当前 exact-source 候选已在 JDK 21 下通过 31 个 XML suites、281 项插件测试（零 skipped/failure/error）、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）与 ZIP 构建；ZIP SHA-256 为 `9746925dad410016187d1f9859829dfa77ca020d167f4a87f9261afbac6e2fc8`，大小 484,669 bytes。Desktop `npm run check` 同时通过 typecheck、ESLint、i18n、文档检查，以及 31 个测试文件、335 项测试。真实 GoLand 的手动 Directory Mappings、平台原生 auto-detection 归因、Project/Search/Go 功能、reopen、规模与 GUI 状态矩阵仍待绑定推送后 exact commit 验收，不能据自动化结果给出 `GO`。[真实同步态截图](ui/tool-window-implementation-2026-08-17.png)仍只作为旧候选的界面参考，[既有 2026-08-17 GUI 验收](testing/verification-2026-08-17.md)正文保持历史 `NO-GO` 证据。
+功能包处于 active 的实现与验证阶段，不表示已经完成。Project Model 继续通过 `.idea/reqws-managed-project-model.json` verified atomic ownership 自动同步；VCS Directory Mappings 完全归用户与 GoLand 所有，插件生产路径只读取当前 mappings、展示缺失/冲突/保留仓库候选提示，并在配置事件或 `Sync Now` 后重新检查。插件不得调用 mapping mutation API，不写 `.idea/vcs.xml`；未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与 lock 只作为 inert 文件保留，不读取、不迁移、也不自动清理。
+
+当前源码已固定为本地 implementation commit `26fb3c6517b1fcb46b2e82ed9336e24b1d2a8945`。JDK 21 完整门禁通过 35 个 XML suites、345 项插件测试（0 skipped/failure/error）、production source/composed-JAR forbidden-symbol gate、`verifyPluginProjectConfiguration`、`verifyPluginStructure`，以及 GO-261.25134.147 / GO-262.8665.270 Plugin Verifier（均 `Compatible`）。exact ZIP SHA-256 为 `b8fec9f55ff15f98532dc898d044dfbbb253024fff5081e7f167651a435b35df`，ZIP 内 JAR SHA-256 为 `17f20c0dce78f933352eb1b9c219839c2cdd2763973c5fd1f262ed51731072f2`。Desktop `npm run check` 同时通过 31 个测试文件、335 项测试。代码复核未发现剩余 P0/P1；现有 tracked 截图/文档隐私也已收口。
+
+该 implementation commit 尚未推送到配置的 GitHub `origin`，当前 exact ZIP 也尚未重新安装并执行完整 §8 GUI。2026-08-30 历史 GUI 已证明旧候选的安装、初始双仓库投影、手动 Directory Mappings、VCS 只读边界和 repo-a 主要 Go/Git smoke，同时暴露 automatic watcher、live `ProjectFileIndex`、Go registry/PACKAGE 与 Tool Window truthfulness 缺陷；这些缺陷已有当前实现和自动化覆盖，但不能继承为 GUI `PASS`。恢复、规模、视觉/无障碍、用户配置保护和 close/exit 矩阵仍未完成，因此当前 verdict 继续为 `NO-GO`。[复审通过的浅色同步态截图](ui/tool-window-implementation-2026-08-30.png)只作为历史候选界面证据，不改变 verdict。
