@@ -15,7 +15,7 @@ updated: 2026-08-31
 - 旧候选确认过 4 组产品缺陷；当前实现和自动化声称已经修复，但真实 GUI 尚未完成对应的动态回归，因此只能标为“修复已实现，GUI 待关闭”，不能标为 `PASS`。
 - 已确认的证据隐私问题已在 tracked 文档和资产中收口：禁用原图整组撤出可发布证据，当前纳入 Git 的 2026-08-30 PNG 已逐图复审，只包含隔离 fixture；后续 GUI 场景仍须重新截图并逐图复审。
 - 当前 exact implementation commit 尚未完成 §8 GUI 验收；仅能保留历史候选在 §8.1、§8.2 的部分结果作为问题背景，不能继承为当前候选证据。§8.3 动态增删、§8.5 恢复和大部分 §8.6–§8.7 仍未完成。
-- 当前源码已固定为本地 exact implementation commit，但尚未推送到配置的 GitHub `origin`；安全审批要求用户对该外部目标另行明确确认。在远端可取得性和 GUI 矩阵都关闭前不能给出 `GO`。
+- 当前源码已固定为 exact implementation commit，并已推送到配置的 GitHub `origin`；远端 tip 与本地 HEAD 的独立查询结果一致，implementation commit 可由远端 feature branch 取得。远端可取得性门禁已关闭，但 GUI 矩阵关闭前仍不能给出 `GO`。
 
 状态定义：
 
@@ -30,8 +30,8 @@ updated: 2026-08-31
 
 | 项目 | 当前值 | 判断 |
 |---|---|---|
-| candidate 类型 | 本地 exact implementation commit | 源码可由单一 Git commit 复现；远端可取得性仍待 push。 |
-| implementation commit / tree | `26fb3c6517b1fcb46b2e82ed9336e24b1d2a8945` / `b8fa0088b41759c3c03bc213707766f5f30d9ed2` | 相对当前 upstream ahead 1、behind 0；首次 push 被安全审批拒绝，等待用户明确确认当前 GitHub `origin`。 |
+| candidate 类型 | 远端可取得的 exact implementation commit | 源码可由单一 Git commit 复现，并已由配置的远端 feature branch 提供。 |
+| implementation commit / tree | `26fb3c6517b1fcb46b2e82ed9336e24b1d2a8945` / `b8fa0088b41759c3c03bc213707766f5f30d9ed2` | 已推送；独立远端 tip 查询与推送后的本地 HEAD 一致，且该 commit 是远端分支可取得的祖先。 |
 | plugin ZIP | SHA-256 `b8fec9f55ff15f98532dc898d044dfbbb253024fff5081e7f167651a435b35df`，566,230 bytes | 从上述 exact implementation commit 重建；尚未用于新的 GUI 安装。 |
 | ZIP 内 plugin JAR | SHA-256 `17f20c0dce78f933352eb1b9c219839c2cdd2763973c5fd1f262ed51731072f2`，606,936 bytes | 与上述 ZIP 绑定；尚无当前 exact commit 的 installed-JAR 哈希。 |
 | 插件自动化 | 35 个 XML suites、345 项测试，0 skipped/failure/error；44 个 production 文件与 293 个 composed-JAR class 通过 forbidden-symbol gate | 自动化门禁通过；headless fixture 不能替代真实 Go registry/PACKAGE GUI。 |
@@ -80,7 +80,7 @@ updated: 2026-08-31
 | ID | 优先级 | 工作 | 完成条件 |
 |---|---|---|---|
 | WORK-01 | P0 | 高风险动态回归 | 在当前 exact implementation commit 完成 §8.3 和 registry/PACKAGE 核心路径；任何失败先修代码并重新固定 commit/产物。 |
-| WORK-02 | P0 | remote exact candidate | 本地 exact implementation commit 与 ZIP 已形成；取得用户对当前 GitHub `origin` 的明确外传确认后推送，并验证远端 tip 可取得。随后从同一 commit 重新安装，从 §8.1 开始重验。 |
+| WORK-02 | DONE | remote exact candidate | exact implementation commit 与文档提交已推送；独立远端 tip 查询匹配本地 HEAD，implementation commit 可由远端 feature branch 取得。 |
 | WORK-03 | P1 | 规模与性能 | 完成 50 active + 20 retained、连续增删、100 次 rapid rewrite，并记录 event/apply、registry wait、CPU、内存与 indexing 稳定性。 |
 | WORK-04 | P1 | 安全与完整回归 | 把自动化安全/对抗结果逐项映射到 dated verification，并补 Desktop 真实启动、VS Code、Cursor、Finder、workspace 增删、i18n 与 packaged app 手工回归。 |
 | WORK-05 | DONE | 现有证据隐私收口 | EVIDENCE-PRIVACY-01 已完成；后续新报告继续只链接复审通过的隔离 fixture 资产，不复用禁用原图。 |
@@ -88,8 +88,8 @@ updated: 2026-08-31
 
 ## 6. 下一轮执行顺序与停止条件
 
-1. 明确确认当前 GitHub `origin` 后推送本地 commits，验证远端 tip；GUI 全程只运行隔离 ReqWS profile。
-2. 安装当前 exact ZIP，再优先执行 §8.3 add/remove/re-add 和 §8.4 的 registry/PACKAGE 关键路径；这是决定是否还需改代码的最短路径。
+1. 安装当前 exact ZIP；GUI 全程只运行隔离 ReqWS profile。
+2. 优先执行 §8.3 add/remove/re-add 和 §8.4 的 registry/PACKAGE 关键路径；这是决定是否还需改代码的最短路径。
 3. 任一四层不一致、automatic 场景使用了 `Sync Now`、PACKAGE 依赖 `Continue Anyway`，或 Tool Window 错报成功时，立即保存脱敏证据并回到代码修复；不得继续累计伪通过项。
 4. 核心动态路径通过后完成 §8.2、§8.5–§8.7、规模、安全与 Desktop 回归。
 5. 完成当前 exact commit 的安装、完整门禁和 GUI 矩阵；最终报告不能混用旧候选截图、日志或哈希。
@@ -99,5 +99,4 @@ updated: 2026-08-31
 - GUI-REG-01 至 GUI-REG-04 任一未关闭；
 - §8 任一必测项仍为 `PENDING` 或只有单层证据；
 - 出现任何未经隐私复审的新截图；
-- candidate 尚未从配置的远端取得；
 - 最终 ZIP、installed JAR、日志和 GUI 证据未绑定同一 commit。

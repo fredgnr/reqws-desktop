@@ -11,11 +11,11 @@
 | 文档 | 类型 | 状态 | 说明 |
 |---|---|---|---|
 | [测试方案](test-plan.md) | test-plan | active | 定义 Desktop、插件、JetBrains Platform、Plugin Verifier、真实 macOS GUI、规模和安全测试。 |
-| [2026-08-31 待修复与未完成验证清单](open-bugs-and-verification-work-2026-08-31.md) | test-report | active | 记录已完成的证据隐私修复、四组待 GUI 回归关闭的历史产品缺陷、当前 exact implementation commit、未完成矩阵与远端可取得性阻塞。 |
+| [2026-08-31 待修复与未完成验证清单](open-bugs-and-verification-work-2026-08-31.md) | test-report | active | 记录已完成的证据隐私修复和远端可取得性门禁、四组待 GUI 回归关闭的历史产品缺陷、当前 exact implementation commit 与未完成矩阵。 |
 | [2026-08-30 GUI 验收报告](verification-2026-08-30.md) | test-report | archived | 绑定历史本地 exact HEAD 与 ZIP；安装和 repo-a Go/Git smoke 通过，但 manifest 自动同步与 reactivated repository live ProjectFileIndex 失败，结论为 `NO-GO`。 |
 | [2026-08-17 GUI 验收报告](verification-2026-08-17.md) | test-report | archived | 保存旧候选的 project-dispose 异常、Project View 刷新缺口和 `NO-GO` 历史证据。 |
 
-[2026-08-31 清单](open-bugs-and-verification-work-2026-08-31.md)是当前待办状态的入口：代码复核未发现剩余 P0/P1，automatic watcher、live `ProjectFileIndex`、Go Modules registry/PACKAGE 与 Tool Window truthfulness 四组历史缺陷已有自动化修复但仍缺动态 GUI 关闭证据。现有 tracked 截图/文档隐私已收口，源码也已固定为本地 exact implementation commit；该 commit 尚未获准推送到当前 GitHub `origin`，完整 §8 矩阵仍未完成，因此 verdict 继续为 `NO-GO`。
+[2026-08-31 清单](open-bugs-and-verification-work-2026-08-31.md)是当前待办状态的入口：代码复核未发现剩余 P0/P1，automatic watcher、live `ProjectFileIndex`、Go Modules registry/PACKAGE 与 Tool Window truthfulness 四组历史缺陷已有自动化修复但仍缺动态 GUI 关闭证据。现有 tracked 截图/文档隐私已收口，exact implementation commit 已推送并可从配置的 GitHub `origin` 取得；完整 §8 矩阵仍未完成，因此 verdict 继续为 `NO-GO`。
 
 当前 implementation commit 为 `26fb3c6517b1fcb46b2e82ed9336e24b1d2a8945`。JDK 21 完整命令通过 35 个 XML suites、345 项插件测试（0 skipped/failure/error）、44 个 production 文件与 293 个 composed-JAR class 的 forbidden-symbol gate、项目配置/结构检查，以及 GO-261.25134.147 / GO-262.8665.270 两版 Plugin Verifier（均 `Compatible`）。exact ZIP SHA-256 为 `b8fec9f55ff15f98532dc898d044dfbbb253024fff5081e7f167651a435b35df`（566,230 bytes），ZIP 内 JAR SHA-256 为 `17f20c0dce78f933352eb1b9c219839c2cdd2763973c5fd1f262ed51731072f2`（606,936 bytes）。Desktop `npm run check` 同时通过 31 个文件、335 项测试。该 ZIP 尚未完成当前 commit 的 GUI 安装与第 8 节验收。
 
