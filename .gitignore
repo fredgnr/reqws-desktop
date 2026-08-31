@@ -7,3 +7,10 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 .npm/
+/integrations/goland/.gradle/
+/integrations/goland/.idea/
+/integrations/goland/.intellijPlatform/
+/integrations/goland/.kotlin/
+/integrations/goland/build/
+/integrations/goland/local.properties
+/integrations/goland/*.iml

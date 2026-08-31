@@ -1,0 +1,7 @@
+interface:
+  display_name: "ReqWS GoLand Plugin Install"
+  short_description: "Build and install the ReqWS GoLand plugin"
+  default_prompt: "Use $reqws-goland-plugin-install to build, install, restart, and verify the local ReqWS GoLand plugin with Computer Use."
+
+policy:
+  allow_implicit_invocation: false

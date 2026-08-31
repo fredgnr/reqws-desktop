@@ -27,6 +27,7 @@ export const IPC_CHANNELS = {
     openVSCode: 'editors:open-vscode',
     openCursor: 'editors:open-cursor',
     openCursorRoot: 'editors:open-cursor-root',
+    openGoLand: 'editors:open-goland',
     revealInFinder: 'editors:reveal-in-finder',
   },
   operationProgress: 'operation:progress',

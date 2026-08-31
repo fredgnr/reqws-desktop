@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_non_ecma_trim_control",
+  "name": "Non-ECMA trim control workspace",
+  "featureBranch": "feature/non-ecma-trim-control",
+  "rootPath": "\u001C/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/non-ecma-trim-control.code-workspace",
+  "repositories": [],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}

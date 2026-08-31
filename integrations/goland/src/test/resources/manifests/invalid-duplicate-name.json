@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_duplicate",
+  "name": "Duplicate repository workspace",
+  "featureBranch": "feature/duplicate",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/duplicate.code-workspace",
+  "repositories": [
+    {
+      "catalogRepositoryId": "repo_one",
+      "name": "Équipe",
+      "url": "https://example.test/team/one.git",
+      "defaultBranch": "main",
+      "relativePath": "Équipe"
+    },
+    {
+      "catalogRepositoryId": "repo_two",
+      "name": "ÉQUIPE",
+      "url": "https://example.test/team/two.git",
+      "defaultBranch": "main",
+      "relativePath": "ÉQUIPE"
+    }
+  ],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}

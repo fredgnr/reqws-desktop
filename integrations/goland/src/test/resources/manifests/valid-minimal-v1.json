@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_minimal",
+  "name": "Minimal workspace",
+  "featureBranch": "feature/minimal",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-golden-workspace.code-workspace",
+  "repositories": [],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}
