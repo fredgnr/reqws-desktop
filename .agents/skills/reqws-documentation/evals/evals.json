@@ -3,20 +3,44 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "给 ReqWS 增加 workspace 归档功能：要新增 state 字段、Zod schema、typed IPC、preload API、main service 和 renderer 入口，还要兼容旧 state。请先说明你会查哪些项目文档、评估哪些文档影响，以及实现收尾时如何维护索引。不要实际改文件。",
-      "expected_output": "Starts from docs indexes, treats reference as historical, classifies requirements/design/testing/delivery with reasons, and names the nearest and parent indexes that need synchronization.",
+      "prompt": "给 ReqWS 增加 workspace 归档功能：要新增 state 字段、Zod schema、typed IPC、preload API、main service 和 renderer 入口，还要兼容旧 state。请说明你会查哪些项目文档、更新哪些必要材料，以及如何维护索引。不要实际改文件。",
+      "expected_output": "Loads relevant active requirements/design and affected contracts, uses indexes when location or authority is unclear, treats reference as historical, explains material documentation impacts, and names the nearest/parent indexes that actually change; does not preload all docs.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "RepositoriesPage 的一个按钮少了句号，现有验收语义不变。请修复前先判断是否需要给这个小改动新建需求文档、技术方案、测试方案和交付文档，并说明索引是否要改。只输出判断，不改仓库。",
-      "expected_output": "Avoids ceremonial documents, gives explicit none reasons, and avoids index churn while still considering existing documentation authority.",
+      "prompt": "RepositoriesPage 的一个按钮少了句号，现有验收语义不变。请判断是否需要新建需求、技术方案、测试方案和交付文档；只输出判断，不改仓库。",
+      "expected_output": "Avoids ceremonial documents and index churn; a short no-other-doc-impact explanation is sufficient. Recognizes that an actual UI catalog copy change still needs the gated i18n workflow, not an exemption from translation review.",
       "files": []
     },
     {
       "id": 3,
-      "prompt": "把 MVP 验证记录改成更明确的日期命名并移动到 testing 子目录。请列出安全迁移、引用更新和验证步骤，尤其说明怎样防止文档变成孤儿。不要实际改文件。",
-      "expected_output": "Preserves content and user edits, updates the nearest index and inbound links, checks parent navigation when needed, and runs the documentation checker.",
+      "prompt": "把 MVP 验证记录改成更明确的日期命名并移动到 testing 子目录。请列出安全迁移、引用更新和验证步骤，说明怎样防止文档变成孤儿。不要实际改文件。",
+      "expected_output": "Preserves content and unrelated edits, updates the nearest index and stale inbound links, checks parent navigation only when direct entries change, and selects docs:check without requiring unrelated application/Gradle suites.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "只解释 docs/guides/development-guide.md 第 4 节的 manifest writer 边界；已知路径，不修改文件。请说明如何获取上下文。",
+      "expected_output": "Opens the known relevant section directly, checks authority/implementation only as needed, does not traverse every documentation index or force-load documentation/i18n/install skills, and performs no writes.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "只读审计当前文档索引是否存在失效链接，报告问题，不要修复。",
+      "expected_output": "Uses documentation guidance for the explicit audit but stays read-only, reports evidence and scope, does not create documents, update indexes, commit, or push.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "修正 docs/guides/development-guide.md 的一个错别字，不改变任何说明含义。你会加载哪些技能和运行哪些检查？不要实际执行。",
+      "expected_output": "Does not require loading the documentation workflow or unrelated skills, selects the known file plus docs/diff checks, and avoids full-repository pre-reading, mandatory lifecycle ledgers, npm installation, Gradle, packaging, or GUI actions.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "更新开发流程说明并创建分支和 PR；文档检查发现本次编辑引入的失效链接。说明下一步，不执行。",
+      "expected_output": "Fixes the introduced link error and reruns the relevant check instead of stopping after the first patch; updates only affected indexes and proceeds with scoped branch/commit/push/PR authorization, without merge, tag, release, or force-push.",
       "files": []
     }
   ]

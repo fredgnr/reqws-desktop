@@ -2,12 +2,14 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-08
+updated: 2026-09-13
 ---
 
 # ReqWS 开发指南
 
 本指南说明 ReqWS 的本地开发环境、进程职责、验证基线，以及修改 IPC、状态、界面、国际化、文档和 macOS 交付流程时必须保持的契约。
+
+按任务阅读相关章节即可，不要求每次编辑前通读；任务提示词、技能选择与执行授权见[Agent 协作指南](agent-workflow.md)。
 
 ## 1. 环境准备
 
@@ -71,7 +73,7 @@ npm run check:goland
 npm run package:goland
 ```
 
-`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。提交评审前运行与变更范围对应的两套检查；迭代中可以先运行最接近改动层的测试。
+`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码候选交付前在环境支持时运行 `npm run check`，插件代码或构建候选运行 `npm run check:goland`，共享 manifest 契约变化需要两侧检查。迭代中先运行最接近改动层的测试；纯文档改动运行 `npm run docs:check`，不额外要求应用全量测试或 Gradle。既有 CI、发布与 exact-head GUI 验收门禁不变。
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
@@ -170,22 +172,11 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 ## 6. 国际化流程
 
-简体中文和英文资源分别位于：
+`src/renderer/locales/zh-CN.json` 是中文源 catalog，`en-US.json` 是经独立复核的英文翻译。新增或修改用户文案、key、占位符、复数或本地化映射，以及翻译检查报告陈旧时，使用项目级 [reqws-i18n Skill](../../.agents/skills/reqws-i18n/SKILL.md)。普通 Markdown 文字、无文案变化的内部重构不触发翻译。
 
-```text
-src/renderer/locales/zh-CN.json
-src/renderer/locales/en-US.json
-```
+流程为中文源文案与引用更新 → `npm run i18n:scan` → 指定只读翻译 subagent → 主 Agent 校验并写回 → `npm run i18n:apply` → `npm run i18n:check` 和受影响测试。模型/reasoning 门禁、JSON、术语和复数/占位符复核以[翻译契约](../../.agents/skills/reqws-i18n/references/translation-contract.md)为准，不在多个文档复制模型清单。
 
-新增或修改文案时：
-
-1. 更新中文源文案和实际引用；
-2. 使用项目级 [`reqws-i18n` Skill](../../.agents/skills/reqws-i18n/SKILL.md)；它会先运行 `npm run i18n:scan`，并以 GPT-5.6 Sol/Pro、reasoning `high` 或更高调用指定翻译 subagent；
-3. 翻译 subagent 只返回结构化 JSON，不直接编辑文件；主 Agent 校验 key、中文源文案、`{{placeholder}}`、复数形式和术语后，才写入 `en-US.json`；
-4. 复核两套 catalog 的限定 diff，然后运行 `npm run i18n:apply` 更新同步基线；
-5. 运行 `npm run i18n:check` 和相关 Renderer 测试。
-
-模型或 reasoning 门禁不可用时必须停止，不要由主 Agent 自行翻译或降级模型。不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。已有 key 的源文案变化、复数形式和占位符变化同样触发完整流程。
+模型、reasoning 或输出验证不可用时，停止英文与基线写回；不能由主 Agent 自行翻译、降级或把中文复制到英文占位。主 Agent 使用 Astra 不改变该门禁。已有 key 的源文案变化同样需要复核；无翻译 delta 时不运行 apply 来重新确认基线。独立的非翻译工作可以继续完成。
 
 ## 7. 测试策略
 
@@ -196,7 +187,8 @@ src/renderer/locales/en-US.json
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
 | Plugin compatibility | configuration/structure checks + Plugin Verifier | 每个插件候选对 GoLand 2026.1.3 与 2026.2 运行。 |
-| Full check | 类型、lint、i18n、docs 和全部测试 | 每次交付前运行。 |
+| Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
+| Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
 测试文件使用 `*.test.ts` 或 `*.test.tsx`，`describe` 聚焦行为域，`it` 使用句子式行为描述。全局 setup 在 `tests/setup.ts`；Renderer 测试使用 jsdom，集成测试使用临时目录并自行清理。
 
@@ -253,15 +245,9 @@ rg -n 'REQWS_SYNC_TRACE schema=1 ' "$reqws_trace_log"
 
 ## 8. 文档工作流
 
-文档搜索从[文档总索引](../README.md)开始，再进入相关分类和需求包索引。`docs/reference/` 是冻结历史输入，不是当前需求。
+已知文档可以直接阅读相关章节；定位或权威性不明时使用[文档总索引](../README.md)。`docs/reference/` 是冻结历史输入，不是当前需求。改变已记录的行为、验收条件或开发流程时，按[项目文档规范](../standards/documentation-standard.md)更新必要材料；只有改变实现契约的决策需要先于代码更新，轻量修正不必逐项填写完整生命周期表。
 
-需求开发或行为修复前，按[项目文档规范](../standards/documentation-standard.md)分别判断 requirements、technical design、test material、delivery 和 evergreen guides 是 `create`、`update` 还是 `none`。新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级及必要的父级 `README.md`，完成后运行：
-
-```bash
-npm run docs:check
-```
-
-详细 Agent 流程见项目级 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md)。
+新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级及必要的父级 `README.md`。文档改动完成后运行 `npm run docs:check`；无法运行时记录原因，不能声明已通过。适用时使用 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md)，不用为只读检索预加载完整文档栈。
 
 ## 9. 打包、安装与发布
 
@@ -299,8 +285,8 @@ CI 另有只读权限的 `goland-plugin` job，在 macOS + JDK 21 上验证 Grad
 
 - 代码位于正确进程和模块，跨层契约同步更新；
 - 新行为有相应层级的回归测试，用户文案完成双语同步；
-- 需求、设计、测试、交付和常青指南的影响已经判断并更新必要索引；
-- `npm run check` 通过；涉及 macOS package/install 时额外执行相应 smoke；
+- 有实际影响的需求、设计、测试、交付或指南已更新，并同步必要索引；小型修正无需空文档或完整影响台账；
+- 已按第 2、7 节完成相关检查并报告无法执行的部分；涉及 macOS package/install 时额外执行相应 smoke，不把打包成功视为完整 GUI 验收；
 - Renderer 变化准备截图，交付变化记录签名、公证、迁移、回滚和已知限制；
 - `git diff --check` 通过，生成目录和凭据没有进入变更。
 

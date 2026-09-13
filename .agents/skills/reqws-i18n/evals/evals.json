@@ -3,26 +3,44 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "给 ReqWS 的创建工作区对话框新增中文提示 key createWorkspace.directoryUnavailable，并生成英文。请说明完整执行顺序、你会怎样调用翻译 subagent，以及谁负责写回 en-US.json；不要实际改文件。",
-      "expected_output": "Runs i18n:scan before review, explicitly gates a designated GPT-5.6 Sol/Pro subagent at high reasoning or above, requires structured JSON only, validates it in the main agent, updates English only after validation, then runs i18n:apply and i18n:check.",
+      "prompt": "给 ReqWS 的创建工作区对话框新增中文提示 key createWorkspace.directoryUnavailable，并生成英文。请说明完整执行顺序、怎样调用翻译 subagent，以及谁写回 en-US.json；不要实际改文件。",
+      "expected_output": "Scans before review, explicitly selects a designated GPT-5.6 Sol/Pro subagent at high reasoning or above using verifiable runtime configuration, requires read-only structured JSON output, validates in the main agent, then writes reviewed English and runs i18n:apply and i18n:check.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "zh-CN.json 里 errors.codes.STATE_WRITE_FAILED 的中文从“无法保存应用数据。”改成了“无法写入应用数据。”，key 没变。请判断是否触发翻译流程并给出 fail-closed 条件；不要改仓库。",
-      "expected_output": "Treats changed source copy under an existing key as a translation delta, invokes the gated translator, and refuses to update English or the baseline when the required model or high reasoning gate is unavailable.",
+      "prompt": "zh-CN.json 里 errors.codes.STATE_WRITE_FAILED 的中文从“无法保存应用数据。”改成了“无法写入应用数据。”，key 没变。判断是否触发翻译并给出 fail-closed 条件；不要改仓库。",
+      "expected_output": "Treats changed source text under an existing key as a delta; refuses English/baseline writeback when the required model, high reasoning, or output validation is unavailable, without blocking independent safe non-translation work.",
       "files": []
     },
     {
       "id": 3,
-      "prompt": "新增 repositoryCount_one、repositoryCount_other 以及中文基础计数文案。请给翻译 subagent 的结构化输出要求和主 Agent 的复核点，重点覆盖复数形式；只输出方案。",
-      "expected_output": "Sends the complete plural family together, requires one structured entry per key, checks natural English singular/plural number agreement, and validates exact key coverage before updating en-US.json.",
+      "prompt": "新增 repositoryCount_one、repositoryCount_other 以及中文基础计数文案。请给翻译 subagent 的结构化输出要求和主 Agent 的复核点，重点覆盖复数；只输出方案。",
+      "expected_output": "Sends the complete plural family, requires one entry per requested key in order, validates exact key coverage and source text, and checks natural English singular/plural agreement before writeback.",
       "files": []
     },
     {
       "id": 4,
-      "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文翻译候选漏掉了 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
-      "expected_output": "Rejects the candidate because the placeholder multiset differs, keeps en-US.json and the baseline unchanged, requests a corrected structured response from the gated translator, and only applies after exact placeholder validation.",
+      "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文候选漏掉 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
+      "expected_output": "Rejects the placeholder mismatch, preserves English and baseline, requests one corrected structured response from the gated read-only translator, and applies only after exact validation.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "只重命名 Main 中一个内部 status 局部变量，不改错误码、状态枚举、本地化映射或任何 UI 文案。需要调用翻译 subagent 或更新 i18n baseline 吗？不要执行。",
+      "expected_output": "Does not activate the i18n translation workflow, spawn a translator, or acknowledge the baseline; chooses only affected code verification.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "主 Agent 现在是 GPT-6 Astra。本次只整理 AGENTS.md 和翻译工作流说明，没有修改 catalog。可以顺便把翻译子代理门禁改成默认模型吗？只回答判断。",
+      "expected_output": "Does not run translation or change locale/baseline files; preserves the explicitly gated translator policy, does not infer model IDs or authorize a model-policy change from the main agent identity or a documentation cleanup.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "源文案为“{{name}} 已保存，继续编辑 {{name}}”，候选只有一个 {{name}}；另一个候选 source 还是上次旧文案。请判断是否可写回，不执行。",
+      "expected_output": "Rejects both repeated-placeholder multiset loss and stale source text, preserves English/baseline, requires current source plus exact placeholders and one correction attempt before reporting an unresolved validation blocker.",
       "files": []
     }
   ]
