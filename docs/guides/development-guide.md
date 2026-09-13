@@ -2,12 +2,14 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-08
+updated: 2026-09-13
 ---
 
 # ReqWS 开发指南
 
 本指南说明 ReqWS 的本地开发环境、进程职责、验证基线，以及修改 IPC、状态、界面、国际化、文档和 macOS 交付流程时必须保持的契约。
+
+按任务直接阅读对应章节，无需把本指南作为每次编辑的必读全文；Agent 的 skill 路由和任务 prompt 示例见 [Agent 协作指南](agent-workflow.md)。
 
 ## 1. 环境准备
 
@@ -20,7 +22,7 @@ ReqWS 是 macOS-only 的 Electron、TypeScript 和 React 项目。开发环境�
 - 首次安装依赖和 Electron runtime 时可访问 npm registry 与 GitHub。
 - GUI smoke 按改动范围安装 VS Code、Cursor 或 GoLand。
 
-初始化 checkout：
+初始化源码开发 checkout（纯文档修改不要求安装完整应用依赖）：
 
 ```bash
 nvm use
@@ -71,7 +73,7 @@ npm run check:goland
 npm run package:goland
 ```
 
-`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。提交评审前运行与变更范围对应的两套检查；迭代中可以先运行最接近改动层的测试。
+`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码交付前运行 `npm run check`，插件代码交付前运行 `npm run check:goland`，共享 manifest 契约变化同时运行两套门禁；迭代中先运行受影响测试。纯文档/指令更新运行文档及 skill 静态检查，不要求额外本地应用构建或 Gradle；现有 CI 和发布门禁不变。
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
@@ -177,7 +179,7 @@ src/renderer/locales/zh-CN.json
 src/renderer/locales/en-US.json
 ```
 
-新增或修改文案时：
+用户可见文案、locale key、占位符、复数或 UI-facing error/status/message mapping 变化时使用 i18n skill；仅布局或内部重构且文案与映射不变时不触发。存在翻译增量时：
 
 1. 更新中文源文案和实际引用；
 2. 使用项目级 [`reqws-i18n` Skill](../../.agents/skills/reqws-i18n/SKILL.md)；它会先运行 `npm run i18n:scan`，并以 GPT-5.6 Sol/Pro、reasoning `high` 或更高调用指定翻译 subagent；
@@ -185,7 +187,7 @@ src/renderer/locales/en-US.json
 4. 复核两套 catalog 的限定 diff，然后运行 `npm run i18n:apply` 更新同步基线；
 5. 运行 `npm run i18n:check` 和相关 Renderer 测试。
 
-模型或 reasoning 门禁不可用时必须停止，不要由主 Agent 自行翻译或降级模型。不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。已有 key 的源文案变化、复数形式和占位符变化同样触发完整流程。
+模型或 reasoning 门禁不可用时停止依赖该门禁的翻译与 baseline 写入，记录阻塞；独立且安全的工作可继续，不要由主 Agent 自行翻译或降级模型。不要只改一套语言后更新基线，也不要把中文复制到英文作为临时占位。已有 key 的源文案变化、复数形式和占位符变化同样触发完整流程。
 
 ## 7. 测试策略
 
@@ -196,11 +198,14 @@ src/renderer/locales/en-US.json
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
 | Plugin compatibility | configuration/structure checks + Plugin Verifier | 每个插件候选对 GoLand 2026.1.3 与 2026.2 运行。 |
-| Full check | 类型、lint、i18n、docs 和全部测试 | 每次交付前运行。 |
+| Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码或构建配置交付前运行；CI 门禁不变。 |
+| Docs/instructions | 文档结构、链接、元数据与改动的 skill/eval 文件 | 纯文档修改运行 `npm run docs:check`，另检查 skill 引用和 eval JSON；不要求本地应用构建。 |
 
 测试文件使用 `*.test.ts` 或 `*.test.tsx`，`describe` 聚焦行为域，`it` 使用句子式行为描述。全局 setup 在 `tests/setup.ts`；Renderer 测试使用 jsdom，集成测试使用临时目录并自行清理。
 
 不要通过放宽 schema、安全断言、path containment 或跳过失败测试来让检查通过。修复行为后补能证明回归的最小测试。
+
+在请求范围内可持续运行临时 fixture 的相关测试、修复本次引入的失败并重跑，无需逐步确认。只在相关输入未变化时复用已完成检查；环境缺失或平台不符必须记录为未执行，不能记为通过。启动真实应用、安装或修改真实 userData 不属于测试 fixture 授权。
 
 ### GoLand 插件构建与调试
 
@@ -253,9 +258,9 @@ rg -n 'REQWS_SYNC_TRACE schema=1 ' "$reqws_trace_log"
 
 ## 8. 文档工作流
 
-文档搜索从[文档总索引](../README.md)开始，再进入相关分类和需求包索引。`docs/reference/` 是冻结历史输入，不是当前需求。
+已知文档时直接阅读相关章节并确认状态；领域或权威性不明时使用[文档总索引](../README.md)、相关局部索引或关键词搜索，不要求顺序通读。`docs/reference/` 是冻结历史输入，不是当前需求。
 
-需求开发或行为修复前，按[项目文档规范](../standards/documentation-standard.md)分别判断 requirements、technical design、test material、delivery 和 evergreen guides 是 `create`、`update` 还是 `none`。新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级及必要的父级 `README.md`，完成后运行：
+需求、设计、验收或交付边界变化时，按[项目文档规范](../standards/documentation-standard.md)判断受影响材料；决定实现方向的需求与技术决策先于编码。小修无需五类逐项报告或空文档集。新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级索引、必要的父级 `README.md` 和入链，文档修改完成后运行：
 
 ```bash
 npm run docs:check
@@ -295,12 +300,12 @@ CI 另有只读权限的 `goland-plugin` job，在 macOS + JDK 21 上验证 Grad
 
 ## 11. 完成检查
 
-交付变更前确认：
+按实际变更范围完成实现、验证和必要文档，不停在第一版草稿。交付前确认相关项：
 
 - 代码位于正确进程和模块，跨层契约同步更新；
 - 新行为有相应层级的回归测试，用户文案完成双语同步；
-- 需求、设计、测试、交付和常青指南的影响已经判断并更新必要索引；
-- `npm run check` 通过；涉及 macOS package/install 时额外执行相应 smoke；
+- 受影响的需求、设计、测试、交付或常青指南已更新，索引在需要时同步；
+- 第 7 节对应范围的检查已完成，未执行项与原因如实记录；涉及 macOS package/install 时额外执行相应 smoke；
 - Renderer 变化准备截图，交付变化记录签名、公证、迁移、回滚和已知限制；
 - `git diff --check` 通过，生成目录和凭据没有进入变更。
 

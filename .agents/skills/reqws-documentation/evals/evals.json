@@ -4,19 +4,37 @@
     {
       "id": 1,
       "prompt": "给 ReqWS 增加 workspace 归档功能：要新增 state 字段、Zod schema、typed IPC、preload API、main service 和 renderer 入口，还要兼容旧 state。请先说明你会查哪些项目文档、评估哪些文档影响，以及实现收尾时如何维护索引。不要实际改文件。",
-      "expected_output": "Starts from docs indexes, treats reference as historical, classifies requirements/design/testing/delivery with reasons, and names the nearest and parent indexes that need synchronization.",
+      "expected_output": "Uses relevant indexes to discover the unknown requirement, treats reference as historical, explains material requirements/design/testing/delivery impact, and names affected nearest and parent indexes without loading unrelated documents.",
       "files": []
     },
     {
       "id": 2,
       "prompt": "RepositoriesPage 的一个按钮少了句号，现有验收语义不变。请修复前先判断是否需要给这个小改动新建需求文档、技术方案、测试方案和交付文档，并说明索引是否要改。只输出判断，不改仓库。",
-      "expected_output": "Avoids ceremonial documents, gives explicit none reasons, and avoids index churn while still considering existing documentation authority.",
+      "expected_output": "Avoids ceremonial documents and unnecessary index churn. Answers the requested impact assessment without requiring full-document preloading; recognizes that actual UI-copy changes still follow the i18n workflow.",
       "files": []
     },
     {
       "id": 3,
       "prompt": "把 MVP 验证记录改成更明确的日期命名并移动到 testing 子目录。请列出安全迁移、引用更新和验证步骤，尤其说明怎样防止文档变成孤儿。不要实际改文件。",
-      "expected_output": "Preserves content and user edits, updates the nearest index and inbound links, checks parent navigation when needed, and runs the documentation checker.",
+      "expected_output": "Preserves content and user edits, updates the nearest index and inbound links, checks parent navigation when needed, and selects docs:check without demanding an unrelated application build.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "仅修复 docs/guides/user-guide.md 中一个错字，含义、标题、状态和索引摘要不变。说明最小阅读与检查范围，不改文件。",
+      "expected_output": "Does not require this skill or the full index chain. Reads the relevant known section, does not rewrite indexes or create lifecycle documents, and chooses docs:check rather than full Vitest, Gradle, or packaging.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "只解释 src/shared/schemas.ts 里一个已有校验函数的用途，不改变行为或文档。",
+      "expected_output": "Does not activate documentation maintenance solely for a read-only code explanation, inspect every document, or mutate files.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "只读审计 docs/ 的断链和未索引文档，输出问题与修复建议；不要实际修复。",
+      "expected_output": "Uses the documentation audit route and relevant indexes/checker, reports findings and limitations, and does not convert an audit into authorized writes.",
       "files": []
     }
   ]

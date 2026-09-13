@@ -24,6 +24,24 @@
       "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文翻译候选漏掉了 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
       "expected_output": "Rejects the candidate because the placeholder multiset differs, keeps en-US.json and the baseline unchanged, requests a corrected structured response from the gated translator, and only applies after exact placeholder validation.",
       "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "仅调整 RepositoriesPage 的 CSS 间距，文案、aria label、locale key、映射和行为均不变。说明需要哪些 skill，不改文件。",
+      "expected_output": "Does not activate the translation skill or delegate a translator for layout-only work; chooses verification for the actual visual change and leaves catalogs/baseline unchanged.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "任务同时要求修正文档链接并新增一句 UI 文案；当前无法指定 GPT-5.6 Sol/Pro 的翻译 subagent 或 high reasoning。说明怎样继续，不实际改文件。",
+      "expected_output": "Reports the translation gate as blocked, leaves English and baseline unchanged, never substitutes Astra or main-agent translation, and can complete independent authorized documentation work without claiming the whole task is fully verified.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "只修复遗漏的 UI 错误码到已有翻译 key 的映射，两个 catalog 内容均未改变且 i18n:scan 没有翻译增量。说明处理路径，不改文件。",
+      "expected_output": "Uses the mapping/structural route, validates the actual mapping and relevant tests, and does not fabricate a translation delta, spawn an unnecessary translator, or rewrite the baseline.",
+      "files": []
     }
   ]
 }
