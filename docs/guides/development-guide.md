@@ -174,9 +174,9 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 `src/renderer/locales/zh-CN.json` 是中文源 catalog，`en-US.json` 是经独立复核的英文翻译。新增或修改用户文案、key、占位符、复数或本地化映射，以及翻译检查报告陈旧时，使用项目级 [reqws-i18n Skill](../../.agents/skills/reqws-i18n/SKILL.md)。普通 Markdown 文字、无文案变化的内部重构不触发翻译。
 
-流程为中文源文案与引用更新 → `npm run i18n:scan` → 指定只读翻译 subagent → 主 Agent 校验并写回 → `npm run i18n:apply` → `npm run i18n:check` 和受影响测试。模型/reasoning 门禁、JSON、术语和复数/占位符复核以[翻译契约](../../.agents/skills/reqws-i18n/references/translation-contract.md)为准，不在多个文档复制模型清单。
+流程为中文源文案与引用更新 → `npm run i18n:scan` → 使用与主 Agent 相同模型的只读翻译 subagent → 主 Agent 校验并写回 → `npm run i18n:apply` → `npm run i18n:check` 和受影响测试。模型/reasoning 门禁、JSON、术语和复数/占位符复核以[翻译契约](../../.agents/skills/reqws-i18n/references/translation-contract.md)为准，不在多个文档复制模型清单。
 
-模型、reasoning 或输出验证不可用时，停止英文与基线写回；不能由主 Agent 自行翻译、降级或把中文复制到英文占位。主 Agent 使用 Astra 不改变该门禁。已有 key 的源文案变化同样需要复核；无翻译 delta 时不运行 apply 来重新确认基线。独立的非翻译工作可以继续完成。
+模型、reasoning 或输出验证不可用时，停止英文与基线写回；不能由主 Agent 自行翻译、降级或把中文复制到英文占位。模型可通过运行时继承或显式使用主 Agent 当前配置来保持一致，reasoning 仍至少为 `high`。已有 key 的源文案变化同样需要复核；无翻译 delta 时不运行 apply 来重新确认基线。独立的非翻译工作可以继续完成。
 
 ## 7. 测试策略
 

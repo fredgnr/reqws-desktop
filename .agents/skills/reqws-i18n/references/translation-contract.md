@@ -4,11 +4,11 @@ Use this contract only for a ReqWS catalog translation delta; [SKILL.md](../SKIL
 
 ## Model and ownership gate
 
-The existing project policy requires a designated GPT-5.6 Sol/Pro translation subagent at reasoning `high` or above. Request `gpt-5.6-sol` or a currently exposed GPT-5.6 Pro model explicitly, with `reasoning_effort: high` or stronger. Do not rely on an inherited/default model, infer an API model ID, or silently substitute Astra or another tier. Changing this policy requires explicit user authorization, not a prompt-cleanup task.
+Use a designated translation subagent with the same model as the main agent. Prefer runtime-supported inheritance of the main agent's model; when an explicit model is required, use the main agent's current configured model identifier. Do not hard-code a model family or version, invent an API model ID from a display name, or substitute a different default model. Keep reasoning at `high` or above; sharing the model does not lower that floor.
 
-Give the subagent read-only access and bounded context: repository path, requested keys in catalog order, current source/target values, relevant neighboring copy, terminology, and this output contract. Do not grant repository write ownership. Runtime configuration/metadata is the evidence for the actual model and reasoning level; the subagent's prose assertion alone does not establish it.
+Give the subagent read-only access and bounded context: repository path, requested keys in catalog order, current source/target values, relevant neighboring copy, terminology, and this output contract. Do not grant repository write ownership. Runtime configuration/metadata, including confirmed model inheritance, is the evidence for model matching and reasoning level; the subagent's prose assertion alone does not establish it.
 
-Stop translation writeback without changing `en-US.json` or `scripts/i18n-baseline.json` when the required model or reasoning cannot be selected/verified, the actual model/tier differs, or the response is still invalid after one correction attempt. Report that blocker; do not translate in the main agent or downgrade the model. Preserve unrelated work.
+Stop translation writeback without changing `en-US.json` or `scripts/i18n-baseline.json` when the same-model configuration or reasoning floor cannot be established, the actual subagent model differs from the main agent, or the response is still invalid after one correction attempt. Report that blocker; do not translate in the main agent or fall back to a different model. Preserve unrelated work.
 
 ## Output
 

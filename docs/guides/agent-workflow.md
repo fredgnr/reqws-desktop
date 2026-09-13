@@ -27,7 +27,7 @@ updated: 2026-09-13
 
 [GoLand 安装技能](../../.agents/skills/reqws-goland-plugin-install/SKILL.md)仍只允许用户显式选择或调用。普通编译、Kotlin 修复、文档中提到技能名称，均不授权安装或重启。有效确认只延续尚未结束的同一工作流；工件或目标变化时重新确认。
 
-翻译子代理的现有模型、reasoning、只读权限和 JSON 门禁集中在[翻译契约](../../.agents/skills/reqws-i18n/references/translation-contract.md)。主 Agent 使用 Astra 不会自动改变该门禁；本次指令整理不新增模型 ID、不改宿主配置，也不授权降级。只有真实翻译任务才需要该子代理，不能因为编辑这份说明而启动它。
+翻译子代理使用与主 Agent 相同的模型，不再固定模型系列或版本。优先使用运行时支持的模型继承；需要显式指定时，使用主 Agent 当前配置中的模型标识，不从展示名称猜测 API ID。reasoning 仍至少为 `high`；只读权限、JSON 输出、主 Agent 校验与失败时禁止写回等要求见[翻译契约](../../.agents/skills/reqws-i18n/references/translation-contract.md)。只有真实翻译任务才需要该子代理，不能因为编辑这份说明而启动它。
 
 ## 3. 安全执行与完成边界
 
@@ -70,7 +70,7 @@ updated: 2026-09-13
 三个 skill 的 `evals/evals.json` 保存场景，不是已执行的测试报告：
 
 - [文档场景](../../.agents/skills/reqws-documentation/evals/evals.json)：跨层契约、轻量修正、移动索引、已知文件直读、只读审查和按需验证。
-- [翻译场景](../../.agents/skills/reqws-i18n/evals/evals.json)：模型门禁、旧 key 新文案、复数、重复占位符和无翻译 delta 的负例。
+- [翻译场景](../../.agents/skills/reqws-i18n/evals/evals.json)：与主 Agent 同模型的继承/显式选择、模型不匹配保护、旧 key 新文案、复数、重复占位符和无翻译 delta 的负例。
 - [安装场景](../../.agents/skills/reqws-goland-plugin-install/evals/evals.json)：显式触发、工件确认、未保存编辑、故障恢复、普通构建和错误触发负例。
 
 评估前后版本时，使用相同任务、宿主工具/权限和可确认的模型/reasoning 配置，在独立的新会话中运行；触发负例必须允许正常技能发现，不能预先强制加载被测技能。记录是否选对技能、读取了哪些文件、是否越权、完成条件是否达到和验证缺口。只读场景不得产生写入，安装场景可用非执行计划或隔离环境，不为评测触碰日常 IDE。

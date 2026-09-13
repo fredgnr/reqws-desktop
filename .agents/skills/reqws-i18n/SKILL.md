@@ -13,7 +13,7 @@ Inspect affected keys, callers, and enough neighboring copy for context. Existin
 
 Update Chinese source copy and its callers, then run `npm run i18n:scan`. Before acknowledgement, source/catalog drift or missing English keys may explain a non-zero scan; malformed catalogs, placeholders, missing runtime keys, and error/status/message mapping failures are defects, not expected drift.
 
-For a translation delta, load [the translation contract](references/translation-contract.md) before delegation or English/baseline writeback. It is the authority for the existing explicit model/reasoning gate, JSON shape, terminology, and validation. Automatically use the required read-only translator; the main agent validates and writes only reviewed English values. Do not translate in the main agent as a fallback.
+For a translation delta, load [the translation contract](references/translation-contract.md) before delegation or English/baseline writeback. It is the authority for model selection, the reasoning floor, JSON shape, terminology, and validation. Automatically use a read-only translation subagent with the same model as the main agent; the main agent validates and writes only reviewed English values. Do not translate in the main agent as a fallback.
 
 After validating the response, review both catalog diffs, then run:
 
@@ -22,6 +22,6 @@ npm run i18n:apply
 npm run i18n:check
 ```
 
-Never apply merely to silence a scan. If the model/reasoning gate or output validation fails, leave English and the baseline unchanged and report the blocker; independent non-translation work can continue. Do not infer a model upgrade from the main agent's identity.
+Never apply merely to silence a scan. If the model/reasoning gate or output validation fails, leave English and the baseline unchanged and report the blocker; independent non-translation work can continue. Use the runtime model configuration rather than a fixed model name; confirmed model inheritance is allowed.
 
 Finish with affected renderer/contract tests and report changed keys, actual translator model/reasoning evidence, and check results. Structural checks are not linguistic review. No translation delta means no translator and no baseline acknowledgement.
