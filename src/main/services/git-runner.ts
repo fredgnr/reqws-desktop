@@ -17,12 +17,29 @@ const OUTPUT_TRUNCATION_MARKER = Buffer.from(
   'utf8',
 );
 
-const GIT_CANDIDATES = [
-  'git',
+const FIXED_GIT_CANDIDATES = [
   '/usr/bin/git',
   '/opt/homebrew/bin/git',
   '/usr/local/bin/git',
 ] as const;
+
+function gitCandidates(searchPath: string | undefined): string[] {
+  const candidates = [
+    ...(searchPath ?? '')
+      .split(path.delimiter)
+      // Empty PATH entries mean cwd to POSIX lookup. Do not discover a Git
+      // executable from the app's mutable working directory.
+      .filter((directory) => directory.length > 0)
+      .map((directory) => path.resolve(directory, 'git')),
+    ...FIXED_GIT_CANDIDATES,
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    return true;
+  });
+}
 
 export type GitErrorCode =
   | 'INVALID_INPUT'
@@ -250,7 +267,7 @@ export class GitRunner {
   }
 
   static async resolveGitPath(spawnProcess: SpawnGitProcess = spawnNodeProcess): Promise<string> {
-    for (const candidate of GIT_CANDIDATES) {
+    for (const candidate of gitCandidates(process.env.PATH)) {
       const runner = new GitRunner(candidate, spawnProcess);
       try {
         const result = await runner.run(['--version'], {

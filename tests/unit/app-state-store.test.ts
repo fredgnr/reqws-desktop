@@ -106,6 +106,31 @@ describe('AppStateStore', () => {
     });
   });
 
+  it('reads a legacy-only credential-free URL without resetting the state file', async () => {
+    const { store, filePath } = await createStore();
+    const timestamp = '2026-08-12T00:00:00.000Z';
+    const legacyUrl = 'ssh://git@a%ZZb.example/team/order-api.git';
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        settings: {},
+        repositories: [{
+          id: 'repo_legacy',
+          name: 'order-api',
+          url: legacyUrl,
+          defaultBranch: 'main',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }],
+        workspaces: [],
+      }),
+      'utf8',
+    );
+
+    expect((await store.read()).repositories[0]?.url).toBe(legacyUrl);
+  });
+
   it('does not overwrite corrupt state and surfaces STATE_CORRUPT', async () => {
     const { store, filePath } = await createStore();
     await writeFile(filePath, '{}', 'utf8');

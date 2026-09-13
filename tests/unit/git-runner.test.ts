@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import type {
   ChildProcessWithoutNullStreams,
   SpawnOptionsWithoutStdio,
 } from 'node:child_process';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GIT_OUTPUT_LIMIT_BYTES,
@@ -49,14 +50,17 @@ function successfulSpawn(
 }
 
 describe('GitRunner', () => {
-  it('resolves PATH git first and validates it with git --version', async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('resolves PATH Git to an absolute path and validates it with git --version', async () => {
     const calls: SpawnCall[] = [];
+    vi.stubEnv('PATH', ['/custom/bin', '/other/bin'].join(path.delimiter));
     const runner = await GitRunner.create(successfulSpawn(calls));
 
-    expect(runner.gitPath).toBe('git');
+    expect(runner.gitPath).toBe('/custom/bin/git');
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      command: 'git',
+      command: '/custom/bin/git',
       args: ['--version'],
       options: { shell: false, stdio: 'pipe' },
     });
@@ -64,6 +68,7 @@ describe('GitRunner', () => {
 
   it('tries the fixed macOS fallbacks in the documented order', async () => {
     const calls: SpawnCall[] = [];
+    vi.stubEnv('PATH', '/custom/bin');
     const spawnProcess: SpawnGitProcess = (command, args, options) => {
       calls.push({ command, args, options });
       const child = fakeChild();
@@ -78,7 +83,45 @@ describe('GitRunner', () => {
 
     expect(runner.gitPath).toBe('/usr/local/bin/git');
     expect(calls.map((call) => call.command)).toEqual([
-      'git',
+      '/custom/bin/git',
+      '/usr/bin/git',
+      '/opt/homebrew/bin/git',
+      '/usr/local/bin/git',
+    ]);
+  });
+
+  it('ignores empty PATH entries instead of resolving Git from cwd', async () => {
+    const calls: SpawnCall[] = [];
+    vi.stubEnv('PATH', ['', '/custom/bin', ''].join(path.delimiter));
+
+    const runner = await GitRunner.create(successfulSpawn(calls));
+
+    expect(runner.gitPath).toBe('/custom/bin/git');
+    expect(calls.map((call) => call.command)).toEqual(['/custom/bin/git']);
+  });
+
+  it('makes relative PATH entries absolute and removes duplicate candidates', async () => {
+    const calls: SpawnCall[] = [];
+    const relativeGit = path.resolve('relative-bin', 'git');
+    vi.stubEnv('PATH', [
+      'relative-bin',
+      '/usr/bin',
+      'relative-bin',
+    ].join(path.delimiter));
+    const spawnProcess: SpawnGitProcess = (command, args, options) => {
+      calls.push({ command, args, options });
+      const child = fakeChild();
+      queueMicrotask(() => {
+        if (command === '/usr/local/bin/git') child.emit('close', 0, null);
+        else child.emit('error', Object.assign(new Error('not found'), { code: 'ENOENT' }));
+      });
+      return child;
+    };
+
+    await GitRunner.create(spawnProcess);
+
+    expect(calls.map((call) => call.command)).toEqual([
+      relativeGit,
       '/usr/bin/git',
       '/opt/homebrew/bin/git',
       '/usr/local/bin/git',

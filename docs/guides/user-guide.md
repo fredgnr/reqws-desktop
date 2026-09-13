@@ -2,7 +2,7 @@
 title: ReqWS 使用说明
 type: guide
 status: active
-updated: 2026-08-14
+updated: 2026-08-18
 ---
 
 # ReqWS 使用说明
@@ -11,7 +11,7 @@ updated: 2026-08-14
 
 ## 1. ReqWS 会做什么
 
-ReqWS 把同一项需求涉及的多个 Git 仓库分别完整克隆到一个工作区根目录，并让它们使用同一个功能分支。每个仓库都有独立的 `.git`，不会共享 Git worktree 或对象目录。ReqWS 还会生成一个由自己管理的 `.code-workspace` 文件，便于用 VS Code 或 Cursor 一次打开全部仓库。
+ReqWS 把同一项需求涉及的多个 Git 仓库分别完整克隆到一个工作区根目录，并让它们使用同一个功能分支。每个仓库都有独立的 `.git`，不会共享 Git worktree 或对象目录。ReqWS 会生成一个由自己管理的 `.code-workspace` 供 VS Code 或 Cursor 使用，也可以把 workspace root 交给安装了 ReqWS 插件的 GoLand。
 
 ReqWS 不会执行 pull、merge、rebase、push 或创建 PR/MR，也不会自动删除本地仓库或工作区目录。
 
@@ -20,7 +20,8 @@ ReqWS 不会执行 pull、merge、rebase、push 或创建 PR/MR，也不会自�
 - macOS；Windows 和 Linux 不是当前目标平台。
 - Git。缺少 Git 时仍可编辑仓库列表和设置，但不能测试连接、创建工作区或添加仓库。
 - 从源码安装时需要 Node.js 24.x、兼容的 npm，以及首次下载依赖和 Electron 二进制的网络连接。
-- VS Code 和 Cursor 是可选项；Finder 打开目录不依赖它们。
+- VS Code、Cursor 和 GoLand 是可选项；Finder 打开目录不依赖它们。GoLand 的受管多仓库视图需要另行从本仓库构建并通过磁盘安装 ReqWS 插件。
+- 从源码构建 GoLand 插件还需要 JDK 21；首次构建和兼容验证会下载 Gradle、GoLand SDK 与 verifier IDE，需预留网络和磁盘空间。
 
 Git 认证由系统 Git、SSH Agent、macOS Keychain 或 Git credential helper 完成。ReqWS 不保存账号、密码、Token 或私钥。
 
@@ -81,6 +82,8 @@ git@example.com:team/repository.git
 
 本地路径、`file://`、明文 HTTP、Git remote-helper 语法及带凭据的地址会被拒绝。
 
+升级后若旧目录中存在只符合早期校验规则的地址，ReqWS 会保留并展示该记录，不会因此重置整份状态；但在把地址改成上述当前格式前，不能将它写入新的 workspace manifest。
+
 ## 5. 设置语言和默认目录
 
 打开一级导航中的“设置”：
@@ -138,11 +141,28 @@ git@example.com:team/repository.git
 - “VS Code”：打开生成的 `.code-workspace`。
 - “Cursor”：在新的 Cursor IDE 窗口中打开 `.code-workspace`，即使 Cursor 当前显示的是 Agents Window，也会加载全部 workspace root。
 - 详情中的“用 Cursor 打开代码目录”：在新的 Cursor IDE 窗口中直接打开工作区根目录。
+- “GoLand”：重新确认工作区为“就绪”、root 与 manifest 有效后，用经过校验的本机 GoLand app 打开 workspace root。
 - “在 Finder 中显示”：定位代码根目录。
 
 编辑器未安装或工作区不是“就绪”状态时，相应按钮会禁用。
 
 ReqWS 使用 Cursor 应用 bundle 内置的 editor CLI，不要求另外安装 PATH 中的 `cursor` shell command。若旧版或非标准 Cursor bundle 缺少内置 CLI，ReqWS 会回退到 macOS LaunchServices；此时无法保证已经打开的 Agents Window 会正确接收 workspace，建议更新或重新安装官方 Cursor 应用。
+
+### 在 GoLand 中使用受管工作区
+
+当前插件只提供本地磁盘安装，不通过 JetBrains Marketplace、ReqWS Desktop 或自动更新器分发。从可信源码构建 ZIP：
+
+```bash
+npm run package:goland
+```
+
+产物位于 `integrations/goland/build/distributions/`。安装后可从 ReqWS 工作区列表或详情选择“GoLand”，也可以直接在 GoLand 打开含有 `.reqws/workspace.json` 的 workspace root。插件未安装时 Desktop 仍可打开 root，但 GoLand 只按自身默认项目模型处理该目录，ReqWS 不承诺活动/保留 repository 隔离。
+
+插件会自动同步 ReqWS-owned 项目内容，但不会自动增删 Git Roots。Tool Window 显示缺失、VCS 类型冲突或已保留仓库的 mapping 时，请打开 **GoLand Settings → Version Control → Directory Mappings**，为每个活动仓库添加精确目录并选择 `Git`，只按自己的意图移除 retained mapping，然后点击 Apply/OK。配置事件会自动刷新插件状态；必要时使用 `Sync Now` 重新检查。该动作不会修改 Directory Mappings。
+
+完整的磁盘安装、首次信任、界面分区、状态、`Sync Now`、`Open Manifest File`、`Copy Diagnostics`、逻辑移除/重加和故障恢复步骤见[GoLand 插件使用指南](goland-plugin-guide.md)。
+
+当前功能仍处于实现与验证阶段。当前源码候选已通过 GoLand 2026.1.3/2026.2 Plugin Verifier，但真实 GUI 的完整 exact-head 证据尚未形成；本节描述本地操作入口，不代表已有签名插件或公开发布资产。验证状态见 [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
 
 在详情面板中可以：
 
@@ -196,12 +216,16 @@ macOS 上的典型全局状态位置是：
 - 不提供 pull、merge、rebase、push、PR/MR、测试运行器或 Git worktree。
 - `.code-workspace` 由 ReqWS 整体维护，不合并手工 settings。
 - Cursor 正常路径会为每次打开操作新建一个 IDE 窗口；旧版或非标准 bundle 缺少内置 CLI 时只能降级为 LaunchServices 打开。
+- GoLand 插件仅支持本地 macOS GoLand，采用 `since-build: 261`，当前不签名、不发布到 Marketplace，也没有自动安装或更新；当前源码候选的 261/262 Plugin Verifier 均为 `Compatible`，真实 GUI 仍须按 exact commit 验收。
+- GoLand 插件不生成或修改 `go.work`，也不提供从 IDE 回写 ReqWS、仓库增删或分支操作。
+- GoLand 插件只读 VCS Directory Mappings；Git Roots 由用户在 GoLand Settings 中手动维护。旧开发候选留下的 VCS ownership/lock 文件不会自动迁移或清理。
 - 逻辑移除和遗忘操作有意保留磁盘文件；需要删除时由用户在核对路径后自行处理。
 - 本机构建采用 ad-hoc 签名，不含 Developer ID、公证、DMG 或自动更新。
 
 ## 12. 依据与进一步资料
 
 - [Cursor IDE 工作区启动](../changes/cursor-ide-launch/README.md)记录 Agents Window 兼容修复、启动策略和当前验证证据。
+- [GoLand 插件支持](../changes/goland-plugin-support/README.md)记录 manifest 契约、磁盘安装插件、自动项目模型与只读 VCS/手动 Directory Mappings 设计，以及仍待完成的验证。
 - [全局设置需求包](../changes/global-settings/README.md)记录语言和默认目录的当前设计、验收范围与验证证据。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始需求覆盖、交付和验证历史；其状态为 archived，不代替当前代码和测试。
 - [历史参考](../reference/README.md)保存冻结的原始方案与原型，只用于追溯来源。

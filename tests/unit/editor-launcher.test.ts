@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   EditorLauncher,
   type AccessPath,
+  type EditorLauncherDependencies,
   type SpawnOpenProcess,
 } from '../../src/main/services/editor-launcher';
 import { ReqwsError } from '../../src/shared/errors';
@@ -55,12 +56,25 @@ const availableAccess = accessOnly(
   systemCursorCliPath,
 );
 
+const noGoLand: Pick<
+  EditorLauncherDependencies,
+  'inspectPath' | 'realpathPath'
+> = {
+  inspectPath: async () => {
+    throw Object.assign(new Error('not found'), { code: 'ENOENT' });
+  },
+  realpathPath: async () => {
+    throw Object.assign(new Error('not found'), { code: 'ENOENT' });
+  },
+};
+
 describe('EditorLauncher', () => {
   it('detects Git and editor applications in system locations', async () => {
     const launcher = new EditorLauncher(async () => paths, {
       accessPath: availableAccess,
       homeDirectory: '/Users/rose',
       resolveGitPath: async () => '/usr/bin/git',
+      ...noGoLand,
     });
 
     await expect(launcher.getAvailability()).resolves.toEqual({
@@ -70,6 +84,12 @@ describe('EditorLauncher', () => {
         path: '/Applications/Visual Studio Code.app',
       },
       cursor: { available: true, path: systemCursorAppPath },
+      goland: {
+        available: false,
+        reasonCode: 'NOT_FOUND',
+        reason:
+          'GoLand was not found in /Applications, ~/Applications, or JetBrains Toolbox.',
+      },
     });
   });
 
@@ -81,6 +101,7 @@ describe('EditorLauncher', () => {
     const launcher = new EditorLauncher(async () => paths, {
       accessPath,
       homeDirectory: '/Users/rose',
+      ...noGoLand,
       resolveGitPath: async () => {
         throw new Error('no git');
       },
@@ -94,6 +115,10 @@ describe('EditorLauncher', () => {
     expect(availability.cursor).toEqual({
       available: true,
       path: userCursorAppPath,
+    });
+    expect(availability.goland).toMatchObject({
+      available: false,
+      reasonCode: 'NOT_FOUND',
     });
   });
 

@@ -1,0 +1,460 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "credential-free HTTPS",
+      "url": "https://example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS with a valid explicit port",
+      "url": "https://example.com:8443/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible long zero-padded port",
+      "url": "https://example.com:00000000000000000000000000000000000000000080/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible HTTPS empty userinfo",
+      "url": "https://@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "conventional IPv4 authority",
+      "url": "https://192.0.2.10/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS with valid escaped path bytes",
+      "url": "https://example.com/team/%E2%9C%93.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS IPv6 authority",
+      "url": "https://[2001:db8::1]/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS IPv4-embedded IPv6 authority",
+      "url": "https://[::ffff:192.0.2.128]/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS IPv4-embedded full IPv6 authority",
+      "url": "https://[0:0:0:0:0:0:192.0.2.1]/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible IPv6 empty port",
+      "url": "https://[2001:db8::1]:/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS internationalized domain",
+      "url": "https://例子.测试/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible percent-encoded authority host",
+      "url": "https://%65xample.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible percent-encoded UTF-8 HTTPS host",
+      "url": "https://%F0%9F%8D%95.example/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible percent-encoded UTF-8 SSH host",
+      "url": "ssh://git@%E4%BE%8B%E5%AD%90.%E6%B5%8B%E8%AF%95/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS authority with a trailing root dot",
+      "url": "https://example.com./team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible interior empty DNS label",
+      "url": "https://example..com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible leading empty DNS label",
+      "url": "https://.example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "IPv4 authority with a trailing root dot",
+      "url": "https://192.0.2.10./team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH authority without userinfo",
+      "url": "ssh://example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH authority with username",
+      "url": "ssh://git@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SSH empty userinfo",
+      "url": "ssh://@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH percent-encoded at-sign username",
+      "url": "ssh://git%40corp@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH authority with internationalized domain",
+      "url": "ssh://git@例子.测试/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH IPv6 authority with username and port",
+      "url": "ssh://git@[2001:db8::1]:22/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH IPv4-embedded IPv6 authority with username and port",
+      "url": "ssh://git@[2001:db8::192.0.2.1]:22/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SSH empty port",
+      "url": "ssh://git@example.com:/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SCP-like SSH",
+      "url": "git@example.com:team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SCP-like SSH with non-sensitive query-like path suffix",
+      "url": "git@example.com:team/order-api.git?ref=main",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SCP-like percent-encoded username",
+      "url": "git%40corp@example.com:team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SCP-like empty DNS label",
+      "url": "git@example..com:team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SCP-like numeric-looking host",
+      "url": "git@999.999.999.999:team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SCP-like percent-encoded UTF-8 host",
+      "url": "git@%F0%9F%8D%95.example:team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "empty input",
+      "url": "",
+      "safe": false
+    },
+    {
+      "name": "option-like input",
+      "url": "--upload-pack=program",
+      "safe": false
+    },
+    {
+      "name": "cleartext HTTP",
+      "url": "http://example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "git protocol",
+      "url": "git://example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "local file URL",
+      "url": "file:///tmp/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "local path",
+      "url": "/tmp/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "remote helper",
+      "url": "ext::program argument",
+      "safe": false
+    },
+    {
+      "name": "control character",
+      "url": "git@example.com:team/order-api.git\n--config=program",
+      "safe": false
+    },
+    {
+      "name": "legacy-compatible backslash path",
+      "url": "https://example.com\\team\\order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible malformed percent path text",
+      "url": "https://example.com/%ZZ",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible truncated percent path text",
+      "url": "https://example.com/team/order-api%",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible multiple fragment separators",
+      "url": "https://example.com/team/order-api.git#one#two",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw pipe in path",
+      "url": "ssh://example.com/team/order|api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw opening bracket in path",
+      "url": "https://example.com/team/order-api[.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw closing bracket in query value",
+      "url": "https://example.com/team/order-api.git?ref=main]",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw braces in path",
+      "url": "https://example.com/team/{order-api}.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw caret in fragment value",
+      "url": "https://example.com/team/order-api.git#ref^main",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw backtick in path",
+      "url": "https://example.com/team/`order-api`.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible raw quote in path",
+      "url": "https://example.com/team/\"order-api\".git",
+      "safe": true
+    },
+    {
+      "name": "out-of-range numeric IPv4 authority",
+      "url": "https://999.999.999.999/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "partially out-of-range IPv4 authority",
+      "url": "https://1.2.3.999/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "legacy-compatible SSH numeric-looking host",
+      "url": "ssh://git@999.999.999.999/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible abbreviated numeric authority",
+      "url": "https://127.1/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible C1 next-line path text",
+      "url": "https://example.com/team/order\u0085api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible byte order mark in path",
+      "url": "https://example.com/team/order\ufeffapi.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible ordinary whitespace in path",
+      "url": "https://example.com/team/order api.git",
+      "safe": true
+    },
+    {
+      "name": "visible Unicode symbol in authority host",
+      "url": "https://🍕.example/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "Unicode dot separators in authority host",
+      "url": "https://例子。测试/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "zero width joiner in authority host",
+      "url": "https://a\u200db.example/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "zero width non-joiner in authority host",
+      "url": "https://a\u200cb.example/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "invalid percent-encoded UTF-8 authority host",
+      "url": "https://%FF.example/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "oversized hexadecimal numeric authority",
+      "url": "https://0x100000000/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "hostname ending in a numeric label",
+      "url": "https://example.1/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "hostname ending in a hexadecimal numeric label",
+      "url": "https://a.0x1/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "HTTPS username",
+      "url": "https://user@example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "HTTPS username and password",
+      "url": "https://user:redacted@example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "HTTPS userinfo on IPv6 authority",
+      "url": "https://user@[2001:db8::1]/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "SSH password",
+      "url": "ssh://git:redacted@example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "SSH password on IPv6 authority",
+      "url": "ssh://git:redacted@[2001:db8::1]/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "SSH percent-encoded colon username",
+      "url": "ssh://git%3Aredacted@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "SSH multiple-at username",
+      "url": "ssh://git@relay@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "encoded credential query key",
+      "url": "https://example.com/team/order-api.git?%61ccess%5Ftoken=redacted",
+      "safe": false
+    },
+    {
+      "name": "encoded credential fragment key",
+      "url": "https://example.com/team/order-api.git#%70rivate%5Fkey=redacted",
+      "safe": false
+    },
+    {
+      "name": "encoded credential key in SCP-like suffix",
+      "url": "git@example.com:team/order-api.git?%61pi%5Fkey=redacted",
+      "safe": false
+    },
+    {
+      "name": "alphabetic port",
+      "url": "https://example.com:not-a-port/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "out-of-range port",
+      "url": "ssh://git@example.com:65536/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "legacy-compatible HTTPS empty port",
+      "url": "https://example.com:/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible HTTPS empty password boundary",
+      "url": "https://:@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible SSH empty password boundary",
+      "url": "ssh://:@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "legacy-compatible named SSH empty password boundary",
+      "url": "ssh://git:@example.com/team/order-api.git",
+      "safe": true
+    },
+    {
+      "name": "HTTPS non-empty username with empty password boundary",
+      "url": "https://user:@example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "SSH non-empty password after an additional colon",
+      "url": "ssh://git::@example.com/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "credential key after empty HTTPS userinfo",
+      "url": "https://@example.com/team/order-api.git?token=redacted",
+      "safe": false
+    },
+    {
+      "name": "credential key after SSH multiple-at username",
+      "url": "ssh://git@relay@example.com/team/order-api.git#secret=redacted",
+      "safe": false
+    },
+    {
+      "name": "IPv4-embedded IPv6 with a leading-zero IPv4 part",
+      "url": "https://[::ffff:192.168.001.1]/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "IPv4-embedded IPv6 with an out-of-range IPv4 part",
+      "url": "https://[::ffff:192.168.0.256]/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "unbracketed IPv6 authority",
+      "url": "https://2001:db8::1/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "malformed IPv6 authority",
+      "url": "https://[2001:db8:::1]/team/order-api.git",
+      "safe": false
+    },
+    {
+      "name": "missing authority host",
+      "url": "ssh:///team/order-api.git",
+      "safe": false
+    }
+  ]
+}

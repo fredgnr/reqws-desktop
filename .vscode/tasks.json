@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ReqWS: start",
+      "type": "npm",
+      "script": "start",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "ReqWS: check",
+      "type": "npm",
+      "script": "check",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ReqWS: test (watch)",
+      "type": "npm",
+      "script": "test:watch",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "ReqWS: check GoLand plugin",
+      "type": "npm",
+      "script": "check:goland",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

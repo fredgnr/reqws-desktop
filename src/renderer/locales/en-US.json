@@ -270,6 +270,7 @@
       "openedVSCode": "Opened the workspace in VS Code.",
       "openedCursor": "Opened the workspace in Cursor.",
       "openedCursorRoot": "Opened the code folder in Cursor.",
+      "openedGoLand": "Workspace opened in GoLand.",
       "revealedFinder": "Revealed the code folder in Finder."
     },
     "confirmations": {

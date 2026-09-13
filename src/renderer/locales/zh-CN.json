@@ -270,6 +270,7 @@
       "openedVSCode": "已在 VS Code 中打开工作区。",
       "openedCursor": "已在 Cursor 中打开工作区。",
       "openedCursorRoot": "已在 Cursor 中打开代码目录。",
+      "openedGoLand": "已在 GoLand 中打开工作区。",
       "revealedFinder": "已在 Finder 中显示代码目录。"
     },
     "confirmations": {

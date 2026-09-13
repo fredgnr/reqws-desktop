@@ -48,6 +48,8 @@ const api: ReqwsAPI = {
       invoke(IPC_CHANNELS.editors.openCursor, workspaceId),
     openCursorRoot: (workspaceId) =>
       invoke(IPC_CHANNELS.editors.openCursorRoot, workspaceId),
+    openGoLand: (workspaceId) =>
+      invoke(IPC_CHANNELS.editors.openGoLand, workspaceId),
     revealInFinder: (workspaceId) =>
       invoke(IPC_CHANNELS.editors.revealInFinder, workspaceId),
   },

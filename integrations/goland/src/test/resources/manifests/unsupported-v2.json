@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "id": "ws_future",
+  "name": "Future workspace",
+  "featureBranch": "feature/future",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/future.code-workspace",
+  "repositories": [],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "\uFEFFws_ecma_trim\uFEFF",
+  "name": "\uFEFFECMA trim workspace\uFEFF",
+  "featureBranch": "\uFEFFfeature/ecma-trim\uFEFF",
+  "rootPath": "\uFEFF/tmp/reqws-golden-workspace\uFEFF",
+  "workspaceFilePath": "\uFEFF/tmp/reqws-files/ecma-trim.code-workspace\uFEFF",
+  "repositories": [
+    {
+      "catalogRepositoryId": "\uFEFFrepo_ecma_trim\uFEFF",
+      "name": "\uFEFFecma-trim\uFEFF",
+      "url": "\uFEFFhttps://example.test/team/ecma-trim.git\uFEFF",
+      "defaultBranch": "\uFEFFmain\uFEFF",
+      "relativePath": "\uFEFFecma-trim\uFEFF"
+    }
+  ],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}

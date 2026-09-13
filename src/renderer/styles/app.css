@@ -105,7 +105,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .status.ready { color: var(--success); background: var(--success-bg); }
 .status.missing { color: var(--warning); background: var(--warning-bg); }
 .status.error { color: var(--danger); background: var(--danger-bg); }
-.row-actions { justify-content: flex-end; }
+.row-actions { flex-wrap: wrap; justify-content: flex-end; }
 .empty-state { padding: 48px 20px; color: var(--muted); text-align: center; }
 .empty-icon { margin-bottom: 10px; color: #98a0ad; }
 .empty-title { margin: 0 0 5px; color: #454a53; font-size: 14px; font-weight: 690; }

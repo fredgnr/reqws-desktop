@@ -22,6 +22,8 @@
     "i18n:check": "node scripts/check-i18n.mjs",
     "docs:check": "node scripts/check-docs.mjs",
     "check": "npm run typecheck && npm run lint && npm run i18n:check && npm run docs:check && npm test",
+    "check:goland": "./integrations/goland/gradlew -p integrations/goland test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin",
+    "package:goland": "./integrations/goland/gradlew -p integrations/goland verifyForbiddenProductionSymbols buildPlugin",
     "package:macos": "node scripts/run-install-macos.mjs --package-only",
     "install:macos": "node scripts/run-install-macos.mjs"
   },

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_unknown_fields",
+  "name": "Forward compatible workspace",
+  "featureBranch": "feature/forward-compatible",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/forward-compatible.code-workspace",
+  "repositories": [
+    {
+      "catalogRepositoryId": "repo_forward_compatible",
+      "name": "forward-compatible",
+      "url": "ssh://git@example.test/team/forward-compatible.git",
+      "defaultBranch": "main",
+      "relativePath": "forward-compatible",
+      "futureRepositoryField": {
+        "enabled": true
+      }
+    }
+  ],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z",
+  "futureTopLevelField": ["ignored", 2, false]
+}

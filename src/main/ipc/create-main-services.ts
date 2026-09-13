@@ -9,7 +9,10 @@ import {
 import { ReqwsError, toReqwsError } from '../../shared/errors';
 import { AppStateStore } from '../services/app-state-store';
 import { BranchService } from '../services/branch-service';
-import { EditorLauncher } from '../services/editor-launcher';
+import {
+  EditorLauncher,
+  type WorkspacePaths,
+} from '../services/editor-launcher';
 import { GitRunner } from '../services/git-runner';
 import { OperationReporter } from '../services/operation-reporter';
 import { RepositoryService } from '../services/repository-service';
@@ -61,6 +64,27 @@ export interface MainServiceFactoryOptions {
   getPreferredSystemLanguages?: () => readonly string[];
 }
 
+export async function resolveReadyWorkspacePaths(
+  workspaceService: Pick<WorkspaceService, 'get'>,
+  workspaceId: string,
+): Promise<WorkspacePaths> {
+  // WorkspaceService.get re-reads and validates the bound manifest instead of
+  // trusting the renderer or the persisted summary paths.
+  const workspace = await workspaceService.get(workspaceId);
+  if (workspace.status !== 'ready') {
+    throw new ReqwsError({
+      code: 'WORKSPACE_PATH_MISSING',
+      message: 'Workspace must be Ready before it can be opened in GoLand.',
+      detail: workspace.statusDetail,
+      stage: 'launching',
+    });
+  }
+  return {
+    workspaceFilePath: workspace.workspaceFilePath,
+    rootPath: workspace.rootPath,
+  };
+}
+
 export async function createMainServices(
   userDataPath: string,
   options: MainServiceFactoryOptions = {},
@@ -103,17 +127,26 @@ export async function createMainServices(
       workspaceMutations,
     );
 
-  const editorLauncher = new EditorLauncher(async (workspaceId) => {
-    const workspace = await buildWorkspaceService(noProgress).get(workspaceId);
+  const editorWorkspaceService = buildWorkspaceService(noProgress);
+  const resolveEditorWorkspacePaths = async (
+    workspaceId: string,
+  ): Promise<WorkspacePaths> => {
+    const workspace = await editorWorkspaceService.get(workspaceId);
     return {
       workspaceFilePath: workspace.workspaceFilePath,
       rootPath: workspace.rootPath,
     };
-  }, {
-    resolveGitPath: git
-      ? async () => git.gitPath
-      : async () => Promise.reject(gitUnavailableError),
-  });
+  };
+  const editorLauncher = new EditorLauncher(
+    resolveEditorWorkspacePaths,
+    {
+      resolveGitPath: git
+        ? async () => git.gitPath
+        : async () => Promise.reject(gitUnavailableError),
+      resolveGoLandWorkspacePaths: (workspaceId) =>
+        resolveReadyWorkspacePaths(editorWorkspaceService, workspaceId),
+    },
+  );
 
   return {
     repositoryService,

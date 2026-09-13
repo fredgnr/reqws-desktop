@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -17,6 +18,13 @@ import {
 } from '../../src/shared/workspace-utils';
 
 const now = '2026-08-12T00:00:00.000Z';
+const repositoryUrlContract = JSON.parse(readFileSync(path.resolve(
+  import.meta.dirname,
+  '../../integrations/goland/src/test/resources/contracts/repository-url-safety.json',
+), 'utf8')) as {
+  schemaVersion: number;
+  cases: Array<{ name: string; url: string; safe: boolean }>;
+};
 
 describe('repository utilities', () => {
   it.each([
@@ -34,32 +42,42 @@ describe('repository utilities', () => {
     expect(repositoryNameKey(' Équipe ')).toBe(repositoryNameKey('E\u0301QUIPE'));
   });
 
-  it.each([
-    'https://example.com/team/order-api.git',
-    'ssh://git@example.com/team/order-api.git',
-    'git@example.com:team/order-api.git',
-  ])('accepts credential-free Git remote %s', (url) => {
-    expect(isSafeRepositoryUrl(url)).toBe(true);
+  it('keeps the shared repository URL contract versioned and complete', () => {
+    expect(repositoryUrlContract.schemaVersion).toBe(1);
+    expect(new Set(repositoryUrlContract.cases.map(({ name }) => name)).size)
+      .toBe(repositoryUrlContract.cases.length);
+    expect(repositoryUrlContract.cases.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        'legacy-compatible malformed percent path text',
+        'legacy-compatible backslash path',
+        'legacy-compatible HTTPS empty port',
+        'legacy-compatible HTTPS empty userinfo',
+        'legacy-compatible percent-encoded UTF-8 HTTPS host',
+        'legacy-compatible interior empty DNS label',
+        'encoded credential query key',
+        'alphabetic port',
+        'HTTPS IPv6 authority',
+        'HTTPS IPv4-embedded IPv6 authority',
+        'HTTPS userinfo on IPv6 authority',
+        'HTTPS internationalized domain',
+        'SSH percent-encoded colon username',
+        'SSH multiple-at username',
+        'legacy-compatible HTTPS empty password boundary',
+        'legacy-compatible SSH empty password boundary',
+        'legacy-compatible named SSH empty password boundary',
+        'zero width joiner in authority host',
+        'invalid percent-encoded UTF-8 authority host',
+        'out-of-range numeric IPv4 authority',
+      ]),
+    );
   });
 
-  it.each([
-    'https://rose:super-secret@example.com/order-api.git',
-    'https://rose@example.com/order-api.git',
-    'ssh://git:super-secret@example.com/order-api.git',
-    'git://rose@example.com/order-api.git',
-    'http://example.com/order-api.git',
-    'file:///tmp/origin.git',
-    '/tmp/origin.git',
-    'https://example.com/order-api.git?access_token=super-secret',
-    'https://example.com/order-api.git#private_token=super-secret',
-    'git@example.com:team/order-api.git\n--upload-pack=evil',
-    'git@example.com:team/order-api.git\0evil',
-    '--upload-pack=evil',
-    'ext::sh -c evil',
-    'user:password@example.com:team/order-api.git',
-  ])('rejects credential-bearing or unsafe Git remote input', (url) => {
-    expect(isSafeRepositoryUrl(url)).toBe(false);
-  });
+  it.each(repositoryUrlContract.cases)(
+    'applies shared repository URL case: $name',
+    ({ url, safe }) => {
+      expect(isSafeRepositoryUrl(url)).toBe(safe);
+    },
+  );
 });
 
 describe('workspace utilities', () => {

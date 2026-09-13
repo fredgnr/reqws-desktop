@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   CreateRepositoryInput,
@@ -72,6 +72,10 @@ export function App({
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [launchingWorkspaceIds, setLaunchingWorkspaceIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const editorActionsInFlight = useRef(new Set<string>());
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const toast = useCallback((
@@ -184,12 +188,22 @@ export function App({
     || !availability?.git.available
     || operationInProgress;
 
-  const runEditorAction = async (action: () => Promise<void>, success: string): Promise<void> => {
+  const runEditorAction = async (
+    workspaceId: string,
+    action: () => Promise<void>,
+    success: string,
+  ): Promise<void> => {
+    if (editorActionsInFlight.current.has(workspaceId)) return;
+    editorActionsInFlight.current.add(workspaceId);
+    setLaunchingWorkspaceIds(new Set(editorActionsInFlight.current));
     try {
       await action();
       toast(success);
     } catch (error) {
       toastError(error);
+    } finally {
+      editorActionsInFlight.current.delete(workspaceId);
+      setLaunchingWorkspaceIds(new Set(editorActionsInFlight.current));
     }
   };
 
@@ -431,16 +445,18 @@ export function App({
               if (!workspaceCreationUnavailable) setCreateWorkspaceOpen(true);
             }}
             onDetails={(id) => void openDetails(id)}
-            onOpenCursor={(id) => void runEditorAction(() => api.editors.openCursor(id), 'app.toasts.openedCursor')}
-            onOpenVSCode={(id) => void runEditorAction(() => api.editors.openVSCode(id), 'app.toasts.openedVSCode')}
+            onOpenCursor={(id) => void runEditorAction(id, () => api.editors.openCursor(id), 'app.toasts.openedCursor')}
+            onOpenGoLand={(id) => void runEditorAction(id, () => api.editors.openGoLand(id), 'app.toasts.openedGoLand')}
+            onOpenVSCode={(id) => void runEditorAction(id, () => api.editors.openVSCode(id), 'app.toasts.openedVSCode')}
             onSearch={setWorkspaceSearch}
             repositoryCount={repositories.length}
             search={workspaceSearch}
+            launchingWorkspaceIds={launchingWorkspaceIds}
             workspaces={workspaces}
           />
         ) : page === 'repositories' ? (
           <RepositoriesPage
-            gitAvailable={availability?.git.available ?? false}
+            gitAvailable={availability?.git.available ?? null}
             loading={loading}
             onCreate={() => { setTestResult(null); setRepositoryDialog('new'); }}
             onEdit={(repository) => { setTestResult(null); setRepositoryDialog(repository); }}
@@ -482,7 +498,7 @@ export function App({
       {repositoryDialog && (
         <RepositoryDialog
           busy={busy}
-          gitAvailable={availability?.git.available ?? false}
+          gitAvailable={availability?.git.available ?? null}
           onClose={() => !busy && (setRepositoryDialog(null), setTestResult(null))}
           onDelete={currentRepository ? () => {
             const item = repositories.find((repository) => repository.id === currentRepository.id);
@@ -506,17 +522,19 @@ export function App({
           )}
           onClose={() => !busy && setDetail(null)}
           onForget={() => setConfirmation({ kind: 'forget-workspace' })}
-          onOpenCursor={() => void runEditorAction(() => api.editors.openCursor(detail.id), 'app.toasts.openedCursor')}
-          onOpenCursorRoot={() => void runEditorAction(() => api.editors.openCursorRoot(detail.id), 'app.toasts.openedCursorRoot')}
-          onOpenVSCode={() => void runEditorAction(() => api.editors.openVSCode(detail.id), 'app.toasts.openedVSCode')}
+          onOpenCursor={() => void runEditorAction(detail.id, () => api.editors.openCursor(detail.id), 'app.toasts.openedCursor')}
+          onOpenCursorRoot={() => void runEditorAction(detail.id, () => api.editors.openCursorRoot(detail.id), 'app.toasts.openedCursorRoot')}
+          onOpenGoLand={() => void runEditorAction(detail.id, () => api.editors.openGoLand(detail.id), 'app.toasts.openedGoLand')}
+          onOpenVSCode={() => void runEditorAction(detail.id, () => api.editors.openVSCode(detail.id), 'app.toasts.openedVSCode')}
           onRemoveRepository={(repository) => setConfirmation({ kind: 'remove-workspace-repository', repository })}
-          onRevealFinder={() => void runEditorAction(() => api.editors.revealInFinder(detail.id), 'app.toasts.revealedFinder')}
+          onRevealFinder={() => void runEditorAction(detail.id, () => api.editors.revealInFinder(detail.id), 'app.toasts.revealedFinder')}
           onSync={() => void mutateWorkspace(
             'sync-workspace',
             () => api.workspaces.sync(detail.id),
             'app.toasts.workspaceSynced',
           )}
           repositories={repositories}
+          editorLaunching={launchingWorkspaceIds.has(detail.id)}
           workspace={detail}
         />
       )}

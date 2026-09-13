@@ -6,7 +6,7 @@ import { matchesRepository } from '../utils';
 
 interface RepositoriesPageProps {
   repositories: RepositoryListItem[];
-  gitAvailable: boolean;
+  gitAvailable: boolean | null;
   search: string;
   loading: boolean;
   testingId: string | null;
@@ -30,6 +30,7 @@ export function RepositoriesPage({
   const { t } = useTranslation();
   const visible = repositories.filter((repository) => matchesRepository(repository, search));
   const inUse = repositories.filter((repository) => repository.workspaceUsageCount > 0).length;
+  const gitUnavailable = gitAvailable === false;
 
   return (
     <section className="page">
@@ -46,13 +47,21 @@ export function RepositoriesPage({
         </div>
         <div className="summary-card">
           <div className="summary-label">Git</div>
-          <div className="summary-value compact">{gitAvailable ? t('common.available') : t('common.unavailable')}</div>
+          <div className="summary-value compact">
+            {gitAvailable === null
+              ? t('common.processing')
+              : t(gitAvailable ? 'common.available' : 'common.unavailable')}
+          </div>
           <div className="summary-foot">
-            {gitAvailable ? t('repositories.summary.git.available') : t('repositories.summary.git.unavailable')}
+            {gitAvailable === null
+              ? '—'
+              : t(gitAvailable
+                ? 'repositories.summary.git.available'
+                : 'repositories.summary.git.unavailable')}
           </div>
         </div>
       </div>
-      {!gitAvailable && <div className="notice warning">{t('repositories.gitUnavailable')}</div>}
+      {gitUnavailable && <div className="notice warning">{t('repositories.gitUnavailable')}</div>}
       <div className="panel">
         <div className="panel-toolbar">
           <SearchField label={t('repositories.search.label')} onChange={onSearch} placeholder={t('repositories.search.placeholder')} value={search} />
@@ -85,9 +94,9 @@ export function RepositoriesPage({
                         <div className="row-actions">
                           <button
                             className="button small"
-                            disabled={!gitAvailable || testingId !== null}
+                            disabled={gitAvailable !== true || testingId !== null}
                             onClick={() => onTest(repository)}
-                            title={!gitAvailable ? t('common.gitNotFound') : undefined}
+                            title={gitUnavailable ? t('common.gitNotFound') : undefined}
                             type="button"
                           >{testingId === repository.id ? t('repositoryDialog.test.testing') : t('repositories.test')}</button>
                           <button aria-label={t('repositories.edit', { name: repository.name })} className="button small icon-only" onClick={() => onEdit(repository)} type="button">

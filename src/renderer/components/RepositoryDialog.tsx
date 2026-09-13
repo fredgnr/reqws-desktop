@@ -8,7 +8,7 @@ import { ErrorNotice } from './ErrorNotice';
 
 interface RepositoryDialogProps {
   repository?: Repository;
-  gitAvailable: boolean;
+  gitAvailable: boolean | null;
   busy: boolean;
   testResult?: TestRepositoryResult | null;
   onClose: () => void;
@@ -59,7 +59,7 @@ export function RepositoryDialog({
   };
 
   const handleTest = async (): Promise<void> => {
-    if (!valid || locked || !gitAvailable) return;
+    if (!valid || locked || gitAvailable !== true) return;
     setError(null);
     setPendingAction('test');
     try {
@@ -99,7 +99,7 @@ export function RepositoryDialog({
               <input aria-label={t('repositoryDialog.defaultBranch')} className="field-input mono" onChange={(event) => setDefaultBranch(event.target.value)} required value={defaultBranch} />
             </label>
           </div>
-          {!gitAvailable && <div className="notice warning">{t('repositoryDialog.gitUnavailable')}</div>}
+          {gitAvailable === false && <div className="notice warning">{t('repositoryDialog.gitUnavailable')}</div>}
           {testResult && (
             <div className={`notice ${testResult.success ? 'success' : 'error'}`} role="status">
               <strong>{t('repositoryDialog.test.resultLabel')}</strong>
@@ -121,7 +121,7 @@ export function RepositoryDialog({
             {repository && onDelete && <button className="button danger" disabled={locked} onClick={onDelete} type="button">{t('repositoryDialog.remove')}</button>}
           </div>
           <div className="dialog-actions">
-            <button className="button" disabled={!gitAvailable || locked || !valid} onClick={() => void handleTest()} type="button">
+            <button className="button" disabled={gitAvailable !== true || locked || !valid} onClick={() => void handleTest()} type="button">
               {pendingAction === 'test'
                 ? t('repositoryDialog.test.testing')
                 : t('repositoryDialog.test.action')}

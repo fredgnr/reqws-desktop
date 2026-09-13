@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_full",
+  "name": "Feature Login",
+  "featureBranch": "feature/login",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/feature-login.code-workspace",
+  "repositories": [
+    {
+      "catalogRepositoryId": "repo_service_a",
+      "name": "service-a",
+      "url": "https://example.test/team/service-a.git",
+      "defaultBranch": "main",
+      "relativePath": "service-a"
+    },
+    {
+      "catalogRepositoryId": "repo_service_b",
+      "name": "service-b",
+      "url": "git@example.test:team/service-b.git",
+      "defaultBranch": "develop",
+      "relativePath": "service-b"
+    }
+  ],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T01:02:03.456Z"
+}

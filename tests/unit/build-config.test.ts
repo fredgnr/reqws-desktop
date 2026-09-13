@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import type { VitePlugin } from '@electron-forge/plugin-vite';
+import type { ResolvedForgeConfig } from '@electron-forge/shared-types';
 import { describe, expect, it } from 'vitest';
 
 import forgeConfig from '../../forge.config';
@@ -34,6 +35,23 @@ describe('Electron build configuration', () => {
       { main: 'src/main/index.ts' },
       { preload: 'src/preload/index.ts' },
     ]);
+  });
+
+  it('lets the Vite plugin exclude Gradle sources and outputs from Electron packages', async () => {
+    expect(forgeConfig.packagerConfig?.ignore).toBeUndefined();
+    const vitePlugin = forgeConfig.plugins?.[0] as VitePlugin;
+    const resolved = await vitePlugin.resolveForgeConfig({
+      packagerConfig: { ...forgeConfig.packagerConfig },
+    } as ResolvedForgeConfig);
+    const ignore = resolved.packagerConfig.ignore;
+
+    expect(ignore).toBeTypeOf('function');
+    if (typeof ignore !== 'function') return;
+    expect(ignore('')).toBe(false);
+    expect(ignore('/.vite/build/main.js')).toBe(false);
+    expect(ignore('/integrations/goland/build/distributions/plugin.zip'))
+      .toBe(true);
+    expect(ignore('/integrations/goland/src/main/plugin.xml')).toBe(true);
   });
 
   it('places renderer output beside the main-process build directory', () => {

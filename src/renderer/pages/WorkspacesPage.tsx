@@ -15,6 +15,8 @@ interface WorkspacesPageProps {
   onDetails: (id: string) => void;
   onOpenVSCode: (id: string) => void;
   onOpenCursor: (id: string) => void;
+  onOpenGoLand: (id: string) => void;
+  launchingWorkspaceIds: ReadonlySet<string>;
 }
 
 export function WorkspacesPage({
@@ -28,18 +30,26 @@ export function WorkspacesPage({
   onDetails,
   onOpenVSCode,
   onOpenCursor,
+  onOpenGoLand,
+  launchingWorkspaceIds,
 }: WorkspacesPageProps): React.JSX.Element {
   const { i18n, t } = useTranslation();
   const visible = workspaces.filter((workspace) => matchesWorkspace(workspace, search));
   const ready = workspaces.filter((workspace) => workspace.status === 'ready').length;
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
+  const golandAvailable = availability?.goland.available ?? false;
+  const vscodeUnavailable = availability !== null && !vscodeAvailable;
+  const cursorUnavailable = availability !== null && !cursorAvailable;
+  const golandUnavailable = availability !== null && !golandAvailable;
   const unavailableEditors = [
-    !vscodeAvailable ? 'Visual Studio Code' : undefined,
-    !cursorAvailable ? 'Cursor' : undefined,
+    vscodeUnavailable ? 'Visual Studio Code' : undefined,
+    cursorUnavailable ? 'Cursor' : undefined,
+    golandUnavailable ? 'GoLand' : undefined,
   ].filter((editor): editor is string => Boolean(editor));
   const vscodeReason = t('common.editorNotFound', { editor: 'Visual Studio Code' });
   const cursorReason = t('common.editorNotFound', { editor: 'Cursor' });
+  const golandReason = t('common.editorNotFound', { editor: 'GoLand' });
   const unavailableEditorList = new Intl.ListFormat(
     i18n.resolvedLanguage ?? i18n.language,
   ).format(unavailableEditors);
@@ -87,16 +97,18 @@ export function WorkspacesPage({
             <table className="table">
               <thead>
                 <tr>
-                  <th style={{ width: '23%' }}>{t('workspaces.table.workspace')}</th>
-                  <th style={{ width: '22%' }}>{t('workspaces.table.repositories')}</th>
-                  <th className="hide-compact" style={{ width: '24%' }}>{t('workspaces.table.rootPath')}</th>
-                  <th style={{ width: '10%' }}>{t('workspaces.table.status')}</th>
-                  <th style={{ width: '21%', textAlign: 'right' }}>{t('common.actions')}</th>
+                  <th style={{ width: '21%' }}>{t('workspaces.table.workspace')}</th>
+                  <th style={{ width: '20%' }}>{t('workspaces.table.repositories')}</th>
+                  <th className="hide-compact" style={{ width: '22%' }}>{t('workspaces.table.rootPath')}</th>
+                  <th style={{ width: '9%' }}>{t('workspaces.table.status')}</th>
+                  <th style={{ width: '28%', textAlign: 'right' }}>{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((workspace) => (
-                  <tr key={workspace.id}>
+                {visible.map((workspace) => {
+                  const editorLaunching = launchingWorkspaceIds.has(workspace.id);
+                  return (
+                    <tr key={workspace.id}>
                     <td>
                       <div className="workspace-name">{workspace.name}</div>
                       <div className="workspace-branch">{workspace.featureBranch}</div>
@@ -117,27 +129,39 @@ export function WorkspacesPage({
                       <div className="row-actions">
                         <button
                           className="button small"
-                          aria-describedby={!vscodeAvailable ? 'workspace-editor-availability' : undefined}
-                          disabled={workspace.status !== 'ready' || !vscodeAvailable}
+                          aria-describedby={vscodeUnavailable ? 'workspace-editor-availability' : undefined}
+                          aria-busy={editorLaunching}
+                          disabled={editorLaunching || workspace.status !== 'ready' || !vscodeAvailable}
                           onClick={() => onOpenVSCode(workspace.id)}
-                          title={!vscodeAvailable ? vscodeReason : workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : undefined}
+                          title={workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : vscodeUnavailable ? vscodeReason : undefined}
                           type="button"
                         >VS Code</button>
                         <button
                           className="button small"
-                          aria-describedby={!cursorAvailable ? 'workspace-editor-availability' : undefined}
-                          disabled={workspace.status !== 'ready' || !cursorAvailable}
+                          aria-describedby={cursorUnavailable ? 'workspace-editor-availability' : undefined}
+                          aria-busy={editorLaunching}
+                          disabled={editorLaunching || workspace.status !== 'ready' || !cursorAvailable}
                           onClick={() => onOpenCursor(workspace.id)}
-                          title={!cursorAvailable ? cursorReason : workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : undefined}
+                          title={workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : cursorUnavailable ? cursorReason : undefined}
                           type="button"
                         >Cursor</button>
+                        <button
+                          className="button small"
+                          aria-describedby={golandUnavailable ? 'workspace-editor-availability' : undefined}
+                          aria-busy={editorLaunching}
+                          disabled={editorLaunching || workspace.status !== 'ready' || !golandAvailable}
+                          onClick={() => onOpenGoLand(workspace.id)}
+                          title={workspace.status !== 'ready' ? t('workspaces.pathIncomplete') : golandUnavailable ? golandReason : undefined}
+                          type="button"
+                        >GoLand</button>
                         <button aria-label={t('workspaces.viewDetails', { name: workspace.name })} className="button small icon-only" onClick={() => onDetails(workspace.id)} type="button">
                           <MoreHorizontal aria-hidden="true" size={16} />
                         </button>
                       </div>
                     </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

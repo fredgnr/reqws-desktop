@@ -4,12 +4,58 @@ import {
   createRepositoryInputSchema,
   createWorkspaceInputSchema,
   globalSettingsSchema,
+  systemAvailabilitySchema,
   testRepositoryInputSchema,
   workspaceSummarySchema,
   workspaceManifestSchema,
 } from '../../src/shared/schemas';
 
 describe('IPC and state schemas', () => {
+  it('validates the complete editor availability response contract', () => {
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: false, reasonCode: 'NOT_FOUND' },
+      cursor: { available: true, path: '/Applications/Cursor.app' },
+      goland: {
+        available: true,
+        path: '/Users/rose/Applications/GoLand.app',
+      },
+    }).success).toBe(true);
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: false },
+      cursor: { available: false },
+    }).success).toBe(false);
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: 'relative/git' },
+      vscode: { available: false },
+      cursor: { available: false },
+      goland: { available: false },
+    }).success).toBe(false);
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: true },
+      cursor: { available: false },
+      goland: { available: false },
+    }).success).toBe(false);
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: { available: false, path: '/Applications/Code.app' },
+      cursor: { available: false },
+      goland: { available: false },
+    }).success).toBe(false);
+    expect(systemAvailabilitySchema.safeParse({
+      git: { available: true, path: '/usr/bin/git' },
+      vscode: {
+        available: true,
+        path: '/Applications/Visual Studio Code.app',
+        reasonCode: 'NOT_FOUND',
+      },
+      cursor: { available: false },
+      goland: { available: false },
+    }).success).toBe(false);
+  });
+
   it('rejects unsafe repository names', () => {
     expect(
       createRepositoryInputSchema.safeParse({
@@ -110,6 +156,44 @@ describe('IPC and state schemas', () => {
       workspaceParentDirectory: null,
       workspaceFileDirectory: null,
     });
+  });
+
+  it('quarantines legacy-only repository URLs to persisted state reads', () => {
+    const timestamp = '2026-08-12T00:00:00.000Z';
+    const legacyUrl = 'ssh://git@a%ZZb.example/team/order-api.git';
+    const repository = {
+      id: 'repo_legacy',
+      name: 'order-api',
+      url: legacyUrl,
+      defaultBranch: 'main',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    expect(createRepositoryInputSchema.safeParse(repository).success).toBe(false);
+    expect(appStateSchema.parse({
+      schemaVersion: 1,
+      settings: {},
+      repositories: [repository],
+      workspaces: [],
+    }).repositories[0]?.url).toBe(legacyUrl);
+    expect(workspaceManifestSchema.safeParse({
+      schemaVersion: 1,
+      id: 'ws_legacy',
+      name: 'Legacy URL workspace',
+      featureBranch: 'feature/legacy-url',
+      rootPath: '/tmp/legacy-url',
+      workspaceFilePath: '/tmp/legacy-url.code-workspace',
+      repositories: [{
+        catalogRepositoryId: repository.id,
+        name: repository.name,
+        url: repository.url,
+        defaultBranch: repository.defaultBranch,
+        relativePath: repository.name,
+      }],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }).success).toBe(false);
   });
 
   it('accepts only stable missing-workspace artifact identifiers', () => {
@@ -252,6 +336,22 @@ describe('IPC and state schemas', () => {
     expect(workspaceManifestSchema.safeParse({
       ...manifest,
       repositories: [{ ...repository, relativePath: 'other-path' }],
+    }).success).toBe(false);
+    expect(workspaceManifestSchema.safeParse({
+      ...manifest,
+      repositories: [{
+        ...repository,
+        name: 'order\0api',
+        relativePath: 'order\0api',
+      }],
+    }).success).toBe(false);
+    expect(workspaceManifestSchema.safeParse({
+      ...manifest,
+      rootPath: '/tmp/workspace\0other',
+    }).success).toBe(false);
+    expect(workspaceManifestSchema.safeParse({
+      ...manifest,
+      workspaceFilePath: '/tmp/workspace\0other.code-workspace',
     }).success).toBe(false);
   });
 });

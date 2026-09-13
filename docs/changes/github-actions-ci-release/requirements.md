@@ -2,7 +2,7 @@
 title: GitHub Actions CI 与 Release 需求说明
 type: requirements
 status: active
-updated: 2026-08-13
+updated: 2026-08-17
 ---
 
 # GitHub Actions CI 与 Release 需求说明
@@ -18,20 +18,22 @@ updated: 2026-08-13
 范围包括：
 
 - 所有 branch push、`pull_request` 和 `workflow_dispatch` 的 CI。
+- 独立的 GoLand 插件测试、项目/结构检查、261/262 Plugin Verifier 和 ZIP build 质量门禁。
 - 默认分支有效语义化版本 tag 的双架构 macOS package 与 GitHub Release。
 - Release ZIP 的 SHA-256 清单、最小权限和失败清理。
 
-本需求不包括 Developer ID 签名、Apple 公证、DMG、自动更新、Windows/Linux 构建，也不自动配置 GitHub branch protection。必需检查是否阻止合并仍由仓库规则管理。
+本需求不包括 Developer ID 签名、Apple 公证、DMG、自动更新、Windows/Linux 构建，也不自动配置 GitHub branch protection。GoLand plugin ZIP 只在 CI 中构建验证，不进入 tag Release，不签名、不上传 Marketplace。必需检查是否阻止合并仍由仓库规则管理。
 
 ## 触发与质量规则
 
-1. 所有 branch push、所有 `pull_request` 和人工 `workflow_dispatch` 均在 `macos-15`、Node.js 24 上依次执行 `npm ci`、`npm run check` 和 arm64 package smoke。
-2. CI 的 package smoke 复用已安装依赖和已完成的检查，不安装应用、不创建 Release，也不上传长期交付资产。
-3. Release 工作流由 `v*` tag push 触发，但只接受无前导零的 `vMAJOR.MINOR.PATCH`；其版本必须同时等于 `package.json` 与 `package-lock.json` 的项目版本。
-4. tag 指向的 commit 必须可从仓库默认分支到达。仅创建于功能分支或游离提交上的 tag 必须失败且不得发布。
-5. Release 的 validate 阶段重新执行 `npm ci` 与 `npm run check`，成功后分别在 `macos-15` 构建 arm64、在 `macos-15-intel` 构建 x64。
-6. 每次发布必须产出 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-macos-x64.zip` 和覆盖两份 ZIP 的 `SHA256SUMS`。
-7. 发布阶段先创建带本次运行标识的 draft Release，下载并验证两个架构 job 的资产与校验和后才转为公开；任何一步失败时，工作流尝试清理仅由本次运行创建的 draft，不覆盖既有 Release 或 tag。
+1. 所有 branch push、所有 `pull_request` 和人工 `workflow_dispatch` 均运行两个独立 job：Desktop `checks` 与 `goland-plugin`。
+2. Desktop `checks` 在 `macos-15`、Node.js 24 上依次执行 `npm ci`、`npm run check` 和 arm64 package smoke；package smoke 复用依赖和检查，不安装应用、不创建 Release，也不上传长期交付资产。
+3. `goland-plugin` 在 `macos-15`、JDK 21 上校验 Gradle wrapper，并执行 `test`、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、对 GoLand 2026.1.3/2026.2 的 `verifyPlugin` 和 `buildPlugin`。它不依赖 Desktop `node_modules`，也不上传发布资产。
+4. Release 工作流由 `v*` tag push 触发，但只接受无前导零的 `vMAJOR.MINOR.PATCH`；其版本必须同时等于 `package.json` 与 `package-lock.json` 的项目版本。
+5. tag 指向的 commit 必须可从仓库默认分支到达。仅创建于功能分支或游离提交上的 tag 必须失败且不得发布。
+6. Release 的 validate 阶段重新执行 `npm ci` 与 `npm run check`，成功后分别在 `macos-15` 构建 arm64、在 `macos-15-intel` 构建 x64。GoLand plugin job 不加入 tag Release DAG。
+7. 每次发布仍只产出 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-macos-x64.zip` 和覆盖两份 ZIP 的 `SHA256SUMS`；不发布 GoLand plugin ZIP。
+8. 发布阶段先创建带本次运行标识的 draft Release，下载并验证两个架构 job 的资产与校验和后才转为公开；任何一步失败时，工作流尝试清理仅由本次运行创建的 draft，不覆盖既有 Release 或 tag。
 
 ## 安全与失败语义
 
@@ -44,6 +46,7 @@ updated: 2026-08-13
 ## 验收条件
 
 - branch push、pull request 和人工触发均可看到同名 CI 检查，且任一命令失败会使检查失败。
+- 同一事件可独立看到 GoLand plugin 检查；任一 plugin test、项目/结构校验、261/262 verifier 或 ZIP build 失败时该 job 失败。
 - CI 能从干净依赖安装完成 arm64 package smoke，且不会产生 GitHub Release。
 - 非法 tag、三个版本不一致或 tag commit 不属于默认分支时，Release 运行在创建 Release 前失败。
 - 合法 tag 只有在重跑检查和两种架构 package 均成功后才发布，资产名称、数量和 SHA-256 清单符合契约。

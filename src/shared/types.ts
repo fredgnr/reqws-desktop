@@ -115,17 +115,25 @@ export interface SelectDirectoryInput {
   createDirectory?: boolean;
 }
 
-export interface AvailabilityItem {
-  available: boolean;
-  path?: string;
-  reason?: string;
-  reasonCode?: 'NOT_FOUND';
-}
+export type AvailabilityItem =
+  | {
+    available: true;
+    path: string;
+    reason?: never;
+    reasonCode?: never;
+  }
+  | {
+    available: false;
+    path?: never;
+    reason?: string;
+    reasonCode?: 'NOT_FOUND';
+  };
 
 export interface SystemAvailability {
   git: AvailabilityItem;
   vscode: AvailabilityItem;
   cursor: AvailabilityItem;
+  goland: AvailabilityItem;
 }
 
 export type EditorAvailability = SystemAvailability;
@@ -238,6 +246,7 @@ export interface ReqwsAPI {
     openVSCode(workspaceId: string): Promise<void>;
     openCursor(workspaceId: string): Promise<void>;
     openCursorRoot(workspaceId: string): Promise<void>;
+    openGoLand(workspaceId: string): Promise<void>;
     revealInFinder(workspaceId: string): Promise<void>;
   };
   operations: {

@@ -52,3 +52,32 @@ jobs:
 
       - name: Package and verify the arm64 app
         run: npm run package:macos -- --skip-ci --skip-check --arch arm64
+
+  goland-plugin:
+    name: GoLand plugin checks
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CI: 'true'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      - name: Test, verify, and package the plugin
+        working-directory: integrations/goland
+        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon

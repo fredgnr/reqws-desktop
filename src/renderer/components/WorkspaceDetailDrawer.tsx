@@ -21,10 +21,12 @@ interface WorkspaceDetailDrawerProps {
   repositories: Repository[];
   availability: EditorAvailability | null;
   busy: boolean;
+  editorLaunching: boolean;
   onClose: () => void;
   onOpenVSCode: () => void;
   onOpenCursor: () => void;
   onOpenCursorRoot: () => void;
+  onOpenGoLand: () => void;
   onRevealFinder: () => void;
   onAddRepository: (repositoryId: string) => void;
   onRemoveRepository: (repository: WorkspaceDetail['repositories'][number]) => void;
@@ -37,10 +39,12 @@ export function WorkspaceDetailDrawer({
   repositories,
   availability,
   busy,
+  editorLaunching,
   onClose,
   onOpenVSCode,
   onOpenCursor,
   onOpenCursorRoot,
+  onOpenGoLand,
   onRevealFinder,
   onAddRepository,
   onRemoveRepository,
@@ -51,19 +55,38 @@ export function WorkspaceDetailDrawer({
   const availableRepositories = repositories.filter((repository) => (
     !workspace.repositories.some((item) => item.catalogRepositoryId === repository.id)
   ));
-  const [repositoryId, setRepositoryId] = useState(availableRepositories[0]?.id ?? '');
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
+  const repositoryId = availableRepositories.some((repository) => repository.id === selectedRepositoryId)
+    ? selectedRepositoryId
+    : availableRepositories[0]?.id ?? '';
   const ready = workspace.status === 'ready';
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
+  const golandAvailable = availability?.goland.available ?? false;
+  const gitAvailable = availability?.git.available ?? false;
+  const vscodeUnavailable = availability !== null && !vscodeAvailable;
+  const cursorUnavailable = availability !== null && !cursorAvailable;
+  const golandUnavailable = availability !== null && !golandAvailable;
+  const gitUnavailable = availability !== null && !gitAvailable;
   const vscodeReason = !ready
     ? t('workspaces.pathIncomplete')
-    : t('common.editorNotFound', { editor: 'Visual Studio Code' });
+    : vscodeUnavailable
+      ? t('common.editorNotFound', { editor: 'Visual Studio Code' })
+      : undefined;
   const cursorReason = !ready
     ? t('workspaces.pathIncomplete')
-    : t('common.editorNotFound', { editor: 'Cursor' });
+    : cursorUnavailable
+      ? t('common.editorNotFound', { editor: 'Cursor' })
+      : undefined;
+  const golandReason = !ready
+    ? t('workspaces.pathIncomplete')
+    : golandUnavailable
+      ? t('common.editorNotFound', { editor: 'GoLand' })
+      : undefined;
   const unavailableEditors = [
-    !vscodeAvailable ? 'Visual Studio Code' : undefined,
-    !cursorAvailable ? 'Cursor' : undefined,
+    vscodeUnavailable ? 'Visual Studio Code' : undefined,
+    cursorUnavailable ? 'Cursor' : undefined,
+    golandUnavailable ? 'GoLand' : undefined,
   ].filter((editor): editor is string => Boolean(editor));
   const unavailableEditorList = new Intl.ListFormat(
     i18n.resolvedLanguage ?? i18n.language,
@@ -92,12 +115,13 @@ export function WorkspaceDetailDrawer({
       </div>
       <div className="drawer-body">
         <div className="detail-actions">
-          <button aria-describedby={!ready || !vscodeAvailable ? 'workspace-editor-status' : undefined} className="button primary" disabled={!ready || !vscodeAvailable} onClick={onOpenVSCode} title={!ready || !vscodeAvailable ? vscodeReason : undefined} type="button">VS Code</button>
-          <button aria-describedby={!ready || !cursorAvailable ? 'workspace-editor-status' : undefined} className="button" disabled={!ready || !cursorAvailable} onClick={onOpenCursor} title={!ready || !cursorAvailable ? cursorReason : undefined} type="button">Cursor</button>
-          <button aria-describedby={!ready || !cursorAvailable ? 'workspace-editor-status' : undefined} className="button" disabled={!ready || !cursorAvailable} onClick={onOpenCursorRoot} title={!ready || !cursorAvailable ? cursorReason : undefined} type="button">{t('workspaceDetail.openCursorRoot')}</button>
-          <button className="button" onClick={onRevealFinder} type="button">{t('workspaceDetail.revealInFinder')}</button>
+          <button aria-busy={editorLaunching} aria-describedby={!ready || vscodeUnavailable ? 'workspace-editor-status' : undefined} className="button primary" disabled={editorLaunching || !ready || !vscodeAvailable} onClick={onOpenVSCode} title={vscodeReason} type="button">VS Code</button>
+          <button aria-busy={editorLaunching} aria-describedby={!ready || cursorUnavailable ? 'workspace-editor-status' : undefined} className="button" disabled={editorLaunching || !ready || !cursorAvailable} onClick={onOpenCursor} title={cursorReason} type="button">Cursor</button>
+          <button aria-busy={editorLaunching} aria-describedby={!ready || cursorUnavailable ? 'workspace-editor-status' : undefined} className="button" disabled={editorLaunching || !ready || !cursorAvailable} onClick={onOpenCursorRoot} title={cursorReason} type="button">{t('workspaceDetail.openCursorRoot')}</button>
+          <button aria-busy={editorLaunching} aria-describedby={!ready || golandUnavailable ? 'workspace-editor-status' : undefined} className="button" disabled={editorLaunching || !ready || !golandAvailable} onClick={onOpenGoLand} title={golandReason} type="button">GoLand</button>
+          <button aria-busy={editorLaunching} className="button" disabled={editorLaunching} onClick={onRevealFinder} type="button">{t('workspaceDetail.revealInFinder')}</button>
         </div>
-        {(!ready || !vscodeAvailable || !cursorAvailable) && (
+        {(!ready || vscodeUnavailable || cursorUnavailable || golandUnavailable) && (
           <p className="muted" id="workspace-editor-status">
             {!ready
               ? t('workspaceDetail.editorDisabledPathIncomplete')
@@ -155,12 +179,12 @@ export function WorkspaceDetailDrawer({
         </div>
         <div className="add-inline">
           <label className="sr-only" htmlFor="add-workspace-repository">{t('workspaceDetail.addRepository.label')}</label>
-          <select className="field-select" disabled={busy || availableRepositories.length === 0} id="add-workspace-repository" onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
+          <select className="field-select" disabled={busy || availableRepositories.length === 0} id="add-workspace-repository" onChange={(event) => setSelectedRepositoryId(event.target.value)} value={repositoryId}>
             {availableRepositories.length > 0
               ? availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.defaultBranch}</option>)
               : <option value="">{t('workspaceDetail.addRepository.empty')}</option>}
           </select>
-          <button className="button" disabled={busy || !repositoryId || !availability?.git.available} onClick={() => onAddRepository(repositoryId)} title={!availability?.git.available ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
+          <button className="button" disabled={busy || !repositoryId || !gitAvailable} onClick={() => { if (repositoryId) onAddRepository(repositoryId); }} title={gitUnavailable ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
         </div>
 
         <div className="danger-zone">

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "ws_unsafe_path",
+  "name": "Unsafe path workspace",
+  "featureBranch": "feature/unsafe-path",
+  "rootPath": "/tmp/reqws-golden-workspace",
+  "workspaceFilePath": "/tmp/reqws-files/unsafe-path.code-workspace",
+  "repositories": [
+    {
+      "catalogRepositoryId": "repo_unsafe",
+      "name": "service-a",
+      "url": "https://example.test/team/service-a.git",
+      "defaultBranch": "main",
+      "relativePath": "../outside"
+    }
+  ],
+  "createdAt": "2026-08-14T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z"
+}
