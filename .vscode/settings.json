@@ -1,0 +1,27 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "editor.formatOnSave": false,
+  "eslint.useFlatConfig": true,
+  "files.exclude": {
+    "**/.vite": true,
+    "**/coverage": true,
+    "**/dist": true,
+    "**/out": true
+  },
+  "search.exclude": {
+    "**/.gradle": true,
+    "**/.intellijPlatform": true,
+    "**/.kotlin": true,
+    "**/.vite": true,
+    "**/coverage": true,
+    "**/dist": true,
+    "**/integrations/goland/build": true,
+    "**/node_modules": true,
+    "**/out": true
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "vitest.commandLine": "npm test --"
+}

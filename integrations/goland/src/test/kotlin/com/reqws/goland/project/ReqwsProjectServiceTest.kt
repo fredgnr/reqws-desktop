@@ -1,14 +1,22 @@
 package com.reqws.goland.project
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.manifest.ManifestSnapshot
+import com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard
 import com.reqws.goland.sync.SyncCandidateApplier
+import com.reqws.goland.sync.SyncTrigger
 import com.reqws.goland.ui.ReqwsToolWindowAvailabilityController
 import com.reqws.goland.ui.ReqwsToolWindowViewModel
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
+import com.reqws.goland.vcs.VcsRepositoryInspection
+import com.reqws.goland.vcs.VcsRepositoryStatus
 import com.reqws.goland.vcs.VcsRootInspection
 import java.nio.file.Files
 import java.nio.file.Path
@@ -26,6 +34,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -291,7 +301,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     verifyInitialSafeModeSnapshotStillStartsDelayedVcsMonitoring()
 
   private fun verifyInitialSafeModeSnapshotStillStartsDelayedVcsMonitoring() {
-    writeValidManifest()
+    val root = writeValidManifest()
+    val persistedDigest = com.reqws.goland.manifest.ManifestReader().read(root).digestSha256
+    project.service<ReqwsSyncPersistence>().markApplied(persistedDigest)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val registrationCount = AtomicInteger(0)
     val inspectionCount = AtomicInteger(0)
@@ -326,6 +338,8 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       )
 
       assertEquals(ReqwsLifecycleState.SAFE_MODE_BLOCKED, service.state.lifecycle)
+      assertEquals(persistedDigest, service.state.lastAppliedDigest)
+      assertNull(service.state.validatedProjectionDigest)
       assertEquals(1, registrationCount.get())
       assertEquals(2, inspectionCount.get())
       assertFalse(
@@ -1090,6 +1104,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       }
       val previousSnapshot = requireNotNull(service.state.snapshot)
       val previousDigest = requireNotNull(service.state.lastAppliedDigest)
+      val previousValidatedDigest = requireNotNull(service.state.validatedProjectionDigest)
 
       failInspection.set(true)
       val failure = awaitFailedCompletion(
@@ -1105,9 +1120,252 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(ReqwsLifecycleState.ERROR, service.state.lifecycle)
       assertSame(previousSnapshot, service.state.snapshot)
       assertEquals(previousDigest, service.state.lastAppliedDigest)
+      assertEquals(previousValidatedDigest, service.state.validatedProjectionDigest)
       assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
       assertEquals(previousSnapshot.digestSha256, service.state.lastError?.digestSha256)
+      assertTrue(ReqwsToolWindowViewModel.from(service.state).preservedSnapshot)
       assertEquals(1, applyCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testProjectionFailureInvalidatesLiveProofAcrossALaterManifestReadError() =
+    verifyProjectionFailureInvalidatesLiveProofAcrossALaterManifestReadError()
+
+  private fun verifyProjectionFailureInvalidatesLiveProofAcrossALaterManifestReadError() {
+    val root = writeValidManifestWithRepository()
+    val manifest = ReqwsProjectDetector.manifestPath(root)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failProjection = AtomicBoolean(false)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (failProjection.get()) {
+            throw ReqwsProjectionApplyException(
+              stableCode = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+              degraded = true,
+              field = "PROJECT_FILE_INDEX",
+            )
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(
+            repositoryStatuses = listOf(
+              VcsRepositoryInspection(0, VcsRepositoryStatus.CONFIGURED),
+            ),
+            workspaceDiagnostics = emptyList(),
+          )
+        },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before proof invalidation",
+      )
+      awaitCondition("initial validated projection") {
+        service.state.validatedProjectionDigest != null &&
+          ReqwsToolWindowViewModel.from(service.state).repositories.single().statusKey ==
+          "repository.active"
+      }
+
+      failProjection.set(true)
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refresh()),
+        "forced projection failure",
+      )
+      awaitCondition("projection failure invalidated live proof") {
+        service.state.lifecycle == ReqwsLifecycleState.DEGRADED &&
+          service.state.lastError?.code == ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED
+      }
+      assertNull(service.state.validatedProjectionDigest)
+      assertEquals(
+        "repository.projectContentUnavailable",
+        ReqwsToolWindowViewModel.from(service.state).repositories.single().statusKey,
+      )
+
+      Files.writeString(manifest, "{")
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "manifest read error after projection failure",
+      )
+      awaitCondition("manifest read error after proof invalidation") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR &&
+          service.state.lastError?.code == "MANIFEST_INVALID_JSON"
+      }
+
+      val readErrorView = ReqwsToolWindowViewModel.from(service.state)
+      assertNull(service.state.validatedProjectionDigest)
+      assertEquals(
+        "repository.projectContentUnavailable",
+        readErrorView.repositories.single().statusKey,
+      )
+      assertFalse(readErrorView.preservedSnapshot)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testQueuedReadFailureCannotResurrectProofInvalidatedByAnOlderApplyFailure() =
+    verifyQueuedReadFailureCannotResurrectProofInvalidatedByAnOlderApplyFailure()
+
+  private fun verifyQueuedReadFailureCannotResurrectProofInvalidatedByAnOlderApplyFailure() {
+    val root = writeValidManifestWithRepository()
+    val manifest = ReqwsProjectDetector.manifestPath(root)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failProjection = AtomicBoolean(false)
+    val failingApplyEntered = CountDownLatch(1)
+    val allowFailingApply = CountDownLatch(1)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (failProjection.get()) {
+            failingApplyEntered.countDown()
+            check(allowFailingApply.await(5, TimeUnit.SECONDS)) {
+              "test did not release the failing projection"
+            }
+            throw ReqwsProjectionApplyException(
+              stableCode = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+              degraded = true,
+              field = "PROJECT_FILE_INDEX",
+            )
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(
+            repositoryStatuses = listOf(
+              VcsRepositoryInspection(0, VcsRepositoryStatus.CONFIGURED),
+            ),
+            workspaceDiagnostics = emptyList(),
+          )
+        },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before queued read failure",
+      )
+      awaitCondition("initial proof before queued read failure") {
+        service.state.validatedProjectionDigest != null
+      }
+
+      failProjection.set(true)
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refresh()),
+        "manual read before blocked projection failure",
+      )
+      assertTrue(
+        "failing projection did not enter its barrier",
+        failingApplyEntered.await(5, TimeUnit.SECONDS),
+      )
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZING, service.state.lifecycle)
+      assertNull(service.state.validatedProjectionDigest)
+
+      Files.writeString(manifest, "{")
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "malformed read queued behind projection failure",
+      )
+      allowFailingApply.countDown()
+      awaitCondition("queued malformed read published after projection failure") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR &&
+          service.state.lastError?.code == "MANIFEST_INVALID_JSON"
+      }
+
+      val finalView = ReqwsToolWindowViewModel.from(service.state)
+      assertNull(service.state.validatedProjectionDigest)
+      assertEquals(
+        "repository.projectContentUnavailable",
+        finalView.repositories.single().statusKey,
+      )
+      assertFalse(finalView.preservedSnapshot)
+    } finally {
+      allowFailingApply.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testApplyCancellationInvalidatesLiveProofUntilARecoveryProjectionSucceeds() =
+    verifyApplyCancellationInvalidatesLiveProofUntilARecoveryProjectionSucceeds()
+
+  private fun verifyApplyCancellationInvalidatesLiveProofUntilARecoveryProjectionSucceeds() {
+    writeValidManifestWithRepository()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val cancelNextApply = AtomicBoolean(false)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          if (cancelNextApply.compareAndSet(true, false)) throw ProcessCanceledException()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          VcsRootInspection(
+            repositoryStatuses = listOf(
+              VcsRepositoryInspection(0, VcsRepositoryStatus.CONFIGURED),
+            ),
+            workspaceDiagnostics = emptyList(),
+          )
+        },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before apply cancellation",
+      )
+      awaitCondition("initial projection proof before apply cancellation") {
+        service.state.validatedProjectionDigest != null && applyCount.get() == 1
+      }
+
+      cancelNextApply.set(true)
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refresh()),
+        "manual read before apply cancellation",
+      )
+      awaitCondition("apply cancellation rollback") {
+        applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
+          service.state.validatedProjectionDigest == null
+      }
+      val cancelledView = ReqwsToolWindowViewModel.from(service.state)
+      assertNull(service.state.lastError)
+      assertEquals("state.degraded", cancelledView.statusKey)
+      assertEquals(
+        "repository.projectContentUnavailable",
+        cancelledView.repositories.single().statusKey,
+      )
+
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refresh()),
+        "manual projection recovery after cancellation",
+      )
+      awaitCondition("projection proof recovery after cancellation") {
+        applyCount.get() == 3 && service.state.validatedProjectionDigest != null
+      }
+      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      assertEquals("state.synchronized", recoveredView.statusKey)
+      assertEquals("repository.active", recoveredView.repositories.single().statusKey)
     } finally {
       service.dispose()
       scope.cancel()
@@ -1258,6 +1516,36 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       cancellationDescription = "coroutine cancellation",
     )
 
+  fun testTracePreservesProcessCancellationAndManualRecoveryAcrossReadAndVcsSpans() =
+    verifyTracedRefreshCancellation(ProcessCanceledException())
+
+  fun testTracePreservesCoroutineCancellationAndManualRecoveryAcrossReadAndVcsSpans() =
+    verifyTracedRefreshCancellation(CancellationException("synthetic traced cancellation"))
+
+  private fun verifyTracedRefreshCancellation(expectedCancellation: Throwable) {
+    val traceLines = CopyOnWriteArrayList<String>()
+    verifyLatestRefreshCancellationRestoresManualSync(
+      expectedCancellation = expectedCancellation,
+      cancellationDescription = "traced cancellation",
+      trace = ReqwsSyncTrace.testing(sink = { traceLines += it }),
+    )
+
+    val cancelledRead = traceEvents(traceLines, SyncTraceEvent.READ_END)
+      .single { it.contains("outcome=CANCELLED") }
+    val cancelledVcs = traceEvents(traceLines, SyncTraceEvent.PROJECTION_STAGE_END)
+      .single { it.contains("stage=VCS") && it.contains("outcome=CANCELLED") }
+    assertEquals(traceField(cancelledRead, "source_id"), traceField(cancelledVcs, "source_id"))
+    assertTrue(traceField(cancelledRead, "source_id").toLong() > 0L)
+    assertTrue(traceField(cancelledRead, "elapsed_nanos").toLong() >= 0L)
+    assertTrue(traceField(cancelledVcs, "elapsed_nanos").toLong() >= 0L)
+    assertTrue(
+      traceEvents(traceLines, SyncTraceEvent.READ_END).any {
+        it.contains("trigger=MANUAL") && it.contains("outcome=COMPLETED")
+      },
+    )
+    assertEquals(1, traceEvents(traceLines, SyncTraceEvent.SERVICE_DISPOSE_END).size)
+  }
+
   fun testStartupReadProcessCancellationRetriesAutomatically() =
     verifyStartupReadCancellationRetriesAutomatically(
       expectedCancellation = ProcessCanceledException(),
@@ -1332,6 +1620,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
   private fun verifyLatestRefreshCancellationRestoresManualSync(
     expectedCancellation: Throwable,
     cancellationDescription: String,
+    trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
   ) {
     writeValidManifest()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1341,6 +1630,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trace = trace,
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -1387,6 +1677,762 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           applyCount.get() == 2
       }
       assertNull(service.state.lastError)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testStartupProjectMetadataReadinessRecoversWhenMetadataAppears() =
+    verifyStartupProjectMetadataReadinessRecoversWhenMetadataAppears()
+
+  private fun verifyStartupProjectMetadataReadinessRecoversWhenMetadataAppears() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val waitEntered = CountDownLatch(1)
+    val allowWait = CompletableDeferred<Unit>()
+    val metadataReady = AtomicBoolean(false)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 1) throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitCount.incrementAndGet()
+          waitEntered.countDown()
+          allowWait.await()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          metadataReady.get()
+        },
+        projectMetadataReadinessMaxPolls = 3,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "project metadata readiness monitor did not enter its wait",
+        waitEntered.await(5, TimeUnit.SECONDS),
+      )
+      assertEquals(1, applyCount.get())
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZING, service.state.lifecycle)
+      assertNull(service.state.lastError)
+
+      metadataReady.set(true)
+      allowWait.complete(Unit)
+      awaitCondition("project metadata readiness recovery") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      assertEquals(1, waitCount.get())
+      assertEquals(1, probeCount.get())
+      assertNull(service.state.lastError)
+      assertNotNull(service.state.lastAppliedDigest)
+    } finally {
+      allowWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testStartupProjectMetadataReadinessTimeoutPublishesStableError() =
+    verifyStartupProjectMetadataReadinessTimeoutPublishesStableError()
+
+  private fun verifyStartupProjectMetadataReadinessTimeoutPublishesStableError() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val failApply = AtomicBoolean(true)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val appliedDigestBefore = project.service<ReqwsSyncPersistence>().lastAppliedDigest()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          if (failApply.get()) throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitCount.incrementAndGet()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          false
+        },
+        projectMetadataReadinessMaxPolls = 2,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      awaitCondition("project metadata readiness timeout") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR &&
+          service.state.lastError?.code == ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED
+      }
+
+      assertEquals(1, applyCount.get())
+      assertEquals(2, waitCount.get())
+      assertEquals(2, probeCount.get())
+      assertEquals(appliedDigestBefore, project.service<ReqwsSyncPersistence>().lastAppliedDigest())
+      assertTrue(ReqwsToolWindowViewModel.from(service.state).syncEnabled)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(1, applyCount.get())
+      assertEquals(2, probeCount.get())
+
+      failApply.set(false)
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refresh()),
+        description = "manual sync after project metadata readiness timeout",
+      )
+      awaitCondition("manual recovery after project metadata readiness timeout") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testProjectMetadataTimeoutConsumesStartupLineageBeforeErrorDelivery() =
+    verifyProjectMetadataTimeoutConsumesStartupLineageBeforeErrorDelivery()
+
+  private fun verifyProjectMetadataTimeoutConsumesStartupLineageBeforeErrorDelivery() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val refreshTriggered = AtomicBoolean(false)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitCount.incrementAndGet()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          false
+        },
+        projectMetadataReadinessMaxPolls = 1,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    val listener = service.addListener { state ->
+      if (
+        state.lifecycle == ReqwsLifecycleState.ERROR &&
+        refreshTriggered.compareAndSet(false, true)
+      ) {
+        service.refreshAutomatically()
+      }
+    }
+    try {
+      executeStartupActivity(service)
+      awaitCondition("non-startup refresh triggered from metadata timeout delivery") {
+        refreshTriggered.get() &&
+          applyCount.get() == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, waitCount.get())
+      assertEquals(1, probeCount.get())
+      assertEquals(2, applyCount.get())
+      assertEquals(ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED, service.state.lastError?.code)
+    } finally {
+      listener.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testNonStartupProjectMetadataFailureDoesNotStartReadinessMonitor() =
+    verifyNonStartupProjectMetadataFailureDoesNotStartReadinessMonitor()
+
+  private fun verifyNonStartupProjectMetadataFailureDoesNotStartReadinessMonitor() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitCount.incrementAndGet()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          true
+        },
+        projectMetadataReadinessMaxPolls = 1,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "non-startup metadata failure read",
+      )
+      awaitCondition("non-startup metadata failure publication") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+
+      assertEquals(1, applyCount.get())
+      assertEquals(0, waitCount.get())
+      assertEquals(0, probeCount.get())
+      assertEquals(ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED, service.state.lastError?.code)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testNewerRefreshSupersedesPendingStartupProjectMetadataRetry() =
+    verifyNewerRefreshSupersedesPendingStartupProjectMetadataRetry()
+
+  private fun verifyNewerRefreshSupersedesPendingStartupProjectMetadataRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val waitEntered = CountDownLatch(1)
+    val allowWait = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() == 1) throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitEntered.countDown()
+          allowWait.await()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          true
+        },
+        projectMetadataReadinessMaxPolls = 2,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "project metadata readiness retry did not reach its delay",
+        waitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer refresh superseding project metadata readiness retry",
+      )
+      awaitCondition("newer project metadata refresh synchronization") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      allowWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(2, applyCount.get())
+      assertEquals(0, probeCount.get())
+    } finally {
+      allowWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testSameDigestApplyingEventKeepsItsOriginalReadinessSource() =
+    verifySameDigestApplyingEventKeepsItsOriginalReadinessSource()
+
+  private fun verifySameDigestApplyingEventKeepsItsOriginalReadinessSource() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val beforeApplyingCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val readinessWaitCount = AtomicInteger(0)
+    val firstSubmissionDequeued = CountDownLatch(1)
+    val allowFirstApplyingEvent = CountDownLatch(1)
+    val secondApplyStarted = CountDownLatch(1)
+    val allowSecondApply = CountDownLatch(1)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          when (applyCount.incrementAndGet()) {
+            1 -> throw projectMetadataReadinessFailure()
+            2 -> {
+              secondApplyStarted.countDown()
+              check(allowSecondApply.await(5, TimeUnit.SECONDS)) {
+                "test did not release the newer same-digest apply"
+              }
+            }
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        beforeCoordinatorApplying = {
+          if (beforeApplyingCount.incrementAndGet() == 1) {
+            firstSubmissionDequeued.countDown()
+            check(allowFirstApplyingEvent.await(5, TimeUnit.SECONDS)) {
+              "test did not release the first same-digest Applying event"
+            }
+          }
+        },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          readinessWaitCount.incrementAndGet()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe { true },
+        projectMetadataReadinessMaxPolls = 1,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "first same-digest submission was not dequeued",
+        firstSubmissionDequeued.await(5, TimeUnit.SECONDS),
+      )
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer same-digest read",
+      )
+      allowFirstApplyingEvent.countDown()
+      assertTrue(
+        "newer same-digest apply did not start",
+        secondApplyStarted.await(5, TimeUnit.SECONDS),
+      )
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(0, readinessWaitCount.get())
+      assertEquals(2, applyCount.get())
+
+      allowSecondApply.countDown()
+      awaitCondition("newer same-digest projection completion") {
+        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertNull(service.state.lastError)
+    } finally {
+      allowFirstApplyingEvent.countDown()
+      allowSecondApply.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testSupersededRefreshCannotCancelNewerProjectMetadataMonitor() =
+    verifySupersededRefreshCannotCancelNewerProjectMetadataMonitor()
+
+  private fun verifySupersededRefreshCannotCancelNewerProjectMetadataMonitor() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val selectionCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val olderSelected = CountDownLatch(1)
+    val allowOlderInvalidation = CountDownLatch(1)
+    val firstWaitEntered = CountDownLatch(1)
+    val newerWaitEntered = CountDownLatch(1)
+    val allowMetadataReady = CompletableDeferred<Unit>()
+    val newerMonitor = AtomicReference<Job?>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          if (applyCount.incrementAndGet() <= 2) throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        beforeInitialRetryInvalidation = {
+          if (selectionCount.incrementAndGet() == 2) {
+            olderSelected.countDown()
+            check(allowOlderInvalidation.await(5, TimeUnit.SECONDS)) {
+              "test did not release the older retry invalidation"
+            }
+          }
+        },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          if (waitCount.incrementAndGet() == 1) {
+            firstWaitEntered.countDown()
+          } else {
+            newerMonitor.set(requireNotNull(currentCoroutineContext()[Job]))
+            newerWaitEntered.countDown()
+          }
+          allowMetadataReady.await()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe { true },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue("startup monitor did not start", firstWaitEntered.await(5, TimeUnit.SECONDS))
+      val olderCaller = scope.launch { service.refreshAutomatically() }
+      assertTrue("older read was not selected", olderSelected.await(5, TimeUnit.SECONDS))
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer refresh before older timer invalidation",
+      )
+      assertTrue("newer monitor did not start", newerWaitEntered.await(5, TimeUnit.SECONDS))
+      allowOlderInvalidation.countDown()
+      awaitSuccessfulCompletion(olderCaller, "superseded retry invalidation caller")
+
+      assertTrue(
+        "older refresh cancelled the newer monitor",
+        requireNotNull(newerMonitor.get()).isActive,
+      )
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZING, service.state.lifecycle)
+      allowMetadataReady.complete(Unit)
+      awaitCondition("newer metadata monitor recovery") {
+        applyCount.get() == 3 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(2, waitCount.get())
+    } finally {
+      allowOlderInvalidation.countDown()
+      allowMetadataReady.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testNewerRefreshCannotResetStartupProjectMetadataDeadline() =
+    verifyNewerRefreshCannotResetStartupProjectMetadataDeadline()
+
+  private fun verifyNewerRefreshCannotResetStartupProjectMetadataDeadline() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val firstWaitEntered = CountDownLatch(1)
+    val allowFirstWait = CompletableDeferred<Unit>()
+    val nanoTime = AtomicReference(0L)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          if (waitCount.incrementAndGet() == 1) {
+            firstWaitEntered.countDown()
+            allowFirstWait.await()
+          }
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          false
+        },
+        projectMetadataReadinessMaxPolls = 10,
+        projectMetadataReadinessNanoTime = nanoTime::get,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "first project metadata wait did not start",
+        firstWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+      nanoTime.set(TimeUnit.MINUTES.toNanos(11))
+
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "newer refresh after metadata deadline",
+      )
+      awaitCondition("shared project metadata deadline timeout") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+
+      assertEquals(1, waitCount.get())
+      assertEquals(0, probeCount.get())
+      assertEquals(ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED, service.state.lastError?.code)
+    } finally {
+      allowFirstWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testProjectMetadataDeadlineExpiresDuringWaitWithoutProbe() =
+    verifyProjectMetadataDeadlineExpiresBeforeSuccessor(expireDuringProbe = false)
+
+  fun testProjectMetadataDeadlineExpiresDuringProbeWithoutSuccessor() =
+    verifyProjectMetadataDeadlineExpiresBeforeSuccessor(expireDuringProbe = true)
+
+  private fun verifyProjectMetadataDeadlineExpiresBeforeSuccessor(expireDuringProbe: Boolean) {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val waitCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val nanoTime = AtomicReference(0L)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitCount.incrementAndGet()
+          if (!expireDuringProbe) nanoTime.set(TimeUnit.MINUTES.toNanos(11))
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          nanoTime.set(TimeUnit.MINUTES.toNanos(11))
+          true
+        },
+        projectMetadataReadinessNanoTime = nanoTime::get,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      awaitCondition("metadata timeout before successor") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      assertEquals(1, applyCount.get())
+      assertEquals(1, waitCount.get())
+      assertEquals(if (expireDuringProbe) 1 else 0, probeCount.get())
+      assertEquals(ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED, service.state.lastError?.code)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testDisposeCancelsPendingStartupProjectMetadataRetry() =
+    verifyDisposeCancelsPendingStartupProjectMetadataRetry()
+
+  private fun verifyDisposeCancelsPendingStartupProjectMetadataRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val waitEntered = CountDownLatch(1)
+    val allowWait = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitEntered.countDown()
+          allowWait.await()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          true
+        },
+        projectMetadataReadinessMaxPolls = 2,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "project metadata readiness retry did not enter its wait before dispose",
+        waitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      service.dispose()
+      allowWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, applyCount.get())
+      assertEquals(0, probeCount.get())
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+    } finally {
+      allowWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testOwnerScopeCancellationDoesNotPublishProjectMetadataFallback() =
+    verifyOwnerScopeCancellationDoesNotPublishProjectMetadataFallback()
+
+  private fun verifyOwnerScopeCancellationDoesNotPublishProjectMetadataFallback() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val waitEntered = CountDownLatch(1)
+    val allowWait = CompletableDeferred<Unit>()
+    val observed = CopyOnWriteArrayList<ReqwsLifecycleState>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          waitEntered.countDown()
+          allowWait.await()
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          true
+        },
+        projectMetadataReadinessMaxPolls = 2,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    val listener = service.addListener { state -> observed += state.lifecycle }
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "project metadata readiness wait did not start before owner cancellation",
+        waitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      scope.cancel()
+      allowWait.complete(Unit)
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+
+      assertEquals(1, applyCount.get())
+      assertEquals(0, probeCount.get())
+      assertFalse(observed.contains(ReqwsLifecycleState.ERROR))
+      assertEquals(ReqwsLifecycleState.SYNCHRONIZING, service.state.lifecycle)
+    } finally {
+      listener.close()
+      allowWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testProjectMetadataReadinessProbeProcessCancellationPropagatesWithoutSuccessor() =
+    verifyProjectMetadataReadinessProbeCancellation(
+      expectedCancellation = ProcessCanceledException(),
+      description = "process cancellation",
+    )
+
+  fun testProjectMetadataReadinessProbeCoroutineCancellationPropagatesWithoutSuccessor() =
+    verifyProjectMetadataReadinessProbeCancellation(
+      expectedCancellation = CancellationException("cancel metadata readiness probe"),
+      description = "coroutine cancellation",
+    )
+
+  private fun verifyProjectMetadataReadinessProbeCancellation(
+    expectedCancellation: Throwable,
+    description: String,
+  ) {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val applyCount = AtomicInteger(0)
+    val probeCount = AtomicInteger(0)
+    val monitorCompletion = CountDownLatch(1)
+    val monitorFailure = AtomicReference<Throwable?>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {
+          applyCount.incrementAndGet()
+          throw projectMetadataReadinessFailure()
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+          requireNotNull(currentCoroutineContext()[Job]).invokeOnCompletion { cause ->
+            monitorFailure.set(cause)
+            monitorCompletion.countDown()
+          }
+        },
+        projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+          probeCount.incrementAndGet()
+          throw expectedCancellation
+        },
+        projectMetadataReadinessMaxPolls = 2,
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      executeStartupActivity(service)
+      assertTrue(
+        "metadata readiness monitor did not finish after $description",
+        monitorCompletion.await(5, TimeUnit.SECONDS),
+      )
+
+      assertSame(expectedCancellation, monitorFailure.get())
+      assertEquals(1, applyCount.get())
+      assertEquals(1, probeCount.get())
+      awaitCondition("metadata readiness fallback after $description") {
+        service.state.lifecycle == ReqwsLifecycleState.ERROR
+      }
+      assertEquals(
+        ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
+        service.state.lastError?.code,
+      )
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(1, applyCount.get())
     } finally {
       service.dispose()
       scope.cancel()
@@ -1755,6 +2801,97 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertNull(service.state.lastError)
     } finally {
       allowRetryWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testStaleReadCompletionCannotReplaceNewerStartupCancellationRetry() =
+    verifyStaleReadCompletionCannotReplaceNewerStartupCancellationRetry()
+
+  private fun verifyStaleReadCompletionCannotReplaceNewerStartupCancellationRetry() {
+    writeValidManifest()
+    val scope = CoroutineScope(
+      SupervisorJob() +
+        Dispatchers.Default +
+        CoroutineExceptionHandler { _, _ -> },
+    )
+    val holdFirstRollback = AtomicBoolean(false)
+    val firstRollbackEntered = CountDownLatch(1)
+    val allowFirstRollback = CountDownLatch(1)
+    val newerRetryWaitEntered = CountDownLatch(1)
+    val allowNewerRetry = CompletableDeferred<Unit>()
+    val newerRetry = AtomicReference<Job?>()
+    val inspectionCount = AtomicInteger(0)
+    val retryWaitCount = AtomicInteger(0)
+    val applyCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector {
+          if (inspectionCount.incrementAndGet() <= 2) throw ProcessCanceledException()
+          VcsRootInspection(emptyList(), emptyList())
+        },
+        initialCancellationRetryWaiter = InitialCancellationRetryWaiter {
+          retryWaitCount.incrementAndGet()
+          newerRetry.set(requireNotNull(currentCoroutineContext()[Job]))
+          newerRetryWaitEntered.countDown()
+          allowNewerRetry.await()
+        },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    val listener = service.addListener { state ->
+      if (
+        state.lifecycle == ReqwsLifecycleState.INACTIVE &&
+        holdFirstRollback.compareAndSet(true, false)
+      ) {
+        firstRollbackEntered.countDown()
+        check(allowFirstRollback.await(5, TimeUnit.SECONDS)) {
+          "test did not release the first cancellation rollback delivery"
+        }
+      }
+    }
+    try {
+      holdFirstRollback.set(true)
+      val olderRead = requireNotNull(service.refreshOnStartup())
+      assertTrue(
+        "first read did not pause after committing its rollback",
+        firstRollbackEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      val newerRead = requireNotNull(service.refreshAutomatically())
+      assertTrue(
+        awaitFailedCompletion(newerRead, "newer cancelled read") is ProcessCanceledException,
+      )
+      assertTrue(
+        "newer read did not install its cancellation retry",
+        newerRetryWaitEntered.await(5, TimeUnit.SECONDS),
+      )
+      allowFirstRollback.countDown()
+      assertTrue(
+        awaitFailedCompletion(olderRead, "stale cancelled read completion") is ProcessCanceledException,
+      )
+
+      assertTrue(
+        "stale read completion cancelled the newer retry",
+        requireNotNull(newerRetry.get()).isActive,
+      )
+      assertEquals(1, retryWaitCount.get())
+      allowNewerRetry.complete(Unit)
+      awaitCondition("newer cancellation retry after stale completion") {
+        applyCount.get() == 1 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(1, retryWaitCount.get())
+      assertNull(service.state.lastError)
+    } finally {
+      allowFirstRollback.countDown()
+      allowNewerRetry.complete(Unit)
+      listener.close()
       service.dispose()
       scope.cancel()
     }
@@ -2374,6 +3511,819 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
   fun testDisposeClosesRegistrationThatReturnsAfterTerminalState() =
     verifyDisposeClosesRegistrationThatReturnsAfterTerminalState()
 
+  fun testExternalProjectModelChangeForcesSameDigestReplay() =
+    verifyExternalProjectModelChangeForcesSameDigestReplay()
+
+  private fun verifyExternalProjectModelChangeForcesSameDigestReplay() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val appliedDigests = CopyOnWriteArrayList<String>()
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val closeCount = AtomicInteger(0)
+    val debounceEntered = CountDownLatch(1)
+    val releaseDebounce = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { candidate ->
+          appliedDigests += candidate.digestSha256
+        },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable { closeCount.incrementAndGet() }
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter { delayMillis ->
+          assertEquals(250L, delayMillis)
+          debounceEntered.countDown()
+          releaseDebounce.await()
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial project-model projection",
+      )
+      awaitCondition("initial project-model apply") { appliedDigests.size == 1 }
+      val digest = appliedDigests.single()
+
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      assertTrue(
+        "project-model change did not enter debounce",
+        debounceEntered.await(5, TimeUnit.SECONDS),
+      )
+      releaseDebounce.complete(Unit)
+      awaitCondition("same-digest project-model replay") {
+        appliedDigests.size == 2 &&
+          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      assertEquals(listOf(digest, digest), appliedDigests.toList())
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "automatic same-digest no-op after project-model replay",
+      )
+      assertEquals(2, appliedDigests.size)
+    } finally {
+      releaseDebounce.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+    assertEquals(1, closeCount.get())
+  }
+
+  fun testGuardedOwnedProjectModelChangeIsIgnored() =
+    verifyGuardedOwnedProjectModelChangeIsIgnored()
+
+  fun testTraceRecordsGuardedWorkspaceAndOrdinaryRootsWithoutSelfReplay() {
+    val traceLines = CopyOnWriteArrayList<String>()
+    verifyGuardedOwnedProjectModelChangeIsIgnored(
+      trace = ReqwsSyncTrace.testing(sink = { traceLines += it }),
+    )
+
+    val received = traceEvents(traceLines, SyncTraceEvent.ROOTS_RECEIVED)
+    assertEquals(2, received.size)
+    assertEquals(
+      setOf("WORKSPACE_MODEL_ONLY", "ORDINARY"),
+      received.map { traceField(it, "kind") }.toSet(),
+    )
+    val decisions = traceEvents(traceLines, SyncTraceEvent.ROOTS_DECISION)
+    assertEquals(2, decisions.size)
+    assertTrue(decisions.all { it.contains("reason=GUARDED") && it.contains("guarded=1") })
+    assertEquals(
+      received.map { traceField(it, "span_id") }.toSet(),
+      decisions.map { traceField(it, "span_id") }.toSet(),
+    )
+    assertTrue(traceEvents(traceLines, SyncTraceEvent.ROOTS_DEBOUNCE_DISPATCH).isEmpty())
+    assertEquals(1, traceEvents(traceLines, SyncTraceEvent.READ_START).size)
+  }
+
+  private fun verifyGuardedOwnedProjectModelChangeIsIgnored(
+    trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
+  ) {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val debounceCount = AtomicInteger(0)
+    val debounceStarted = CountDownLatch(1)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable {}
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceCount.incrementAndGet()
+          debounceStarted.countDown()
+        },
+      ).copy(trace = trace),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial guarded-event projection",
+      )
+      awaitCondition("initial guarded-event apply") { applyCount.get() == 1 }
+
+      project.service<ReqwsProjectModelMutationGuard>().withMutation {
+        requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+        requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      }
+
+      assertFalse(
+        "guarded project-model event started a debounce",
+        debounceStarted.await(NO_CHURN_WINDOW_MILLIS, TimeUnit.MILLISECONDS),
+      )
+      assertEquals(0, debounceCount.get())
+      assertEquals(1, applyCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testProjectModelChangeWithoutValidSnapshotIsIgnored() =
+    verifyProjectModelChangeWithoutValidSnapshotIsIgnored()
+
+  private fun verifyProjectModelChangeWithoutValidSnapshotIsIgnored() {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val debounceStarted = CountDownLatch(1)
+    val closeCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier {
+          fail("a project-model event without a valid snapshot reached apply")
+        },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable { closeCount.incrementAndGet() }
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceStarted.countDown()
+        },
+      ),
+    )
+    try {
+      assertNull(service.state.snapshot)
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      assertFalse(
+        "project-model event without a snapshot started a debounce",
+        debounceStarted.await(NO_CHURN_WINDOW_MILLIS, TimeUnit.MILLISECONDS),
+      )
+      assertEquals(ReqwsLifecycleState.INACTIVE, service.state.lifecycle)
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+    assertEquals(1, closeCount.get())
+  }
+
+  fun testProjectModelChangeBurstDebouncesToOneForcedReplay() =
+    verifyProjectModelChangeBurstDebouncesToOneForcedReplay()
+
+  fun testTraceSeparatesEightRootCallbacksFromOneForcedReplay() {
+    val traceLines = CopyOnWriteArrayList<String>()
+    verifyProjectModelChangeBurstDebouncesToOneForcedReplay(
+      trace = ReqwsSyncTrace.testing(sink = { traceLines += it }),
+    )
+
+    assertEquals(8, traceEvents(traceLines, SyncTraceEvent.ROOTS_RECEIVED).size)
+    val decisions = traceEvents(traceLines, SyncTraceEvent.ROOTS_DECISION)
+    assertEquals(8, decisions.size)
+    assertTrue(decisions.all { it.contains("reason=QUEUED") && it.contains("guarded=0") })
+    assertEquals(
+      (1L..8L).toList(),
+      decisions.map { traceField(it, "event_epoch").toLong() },
+    )
+    val dispatch = traceEvents(traceLines, SyncTraceEvent.ROOTS_DEBOUNCE_DISPATCH).single()
+    assertEquals("PROJECT_MODEL_CHANGE", traceField(dispatch, "trigger"))
+    assertEquals("8", traceField(dispatch, "event_epoch"))
+    assertEquals(2, traceEvents(traceLines, SyncTraceEvent.READ_START).size)
+    assertEquals(2, traceEvents(traceLines, SyncTraceEvent.READ_END).size)
+  }
+
+  private fun verifyProjectModelChangeBurstDebouncesToOneForcedReplay(
+    trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
+  ) {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val debounceEntered = CountDownLatch(1)
+    val releaseDebounce = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable {}
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceEntered.countDown()
+          releaseDebounce.await()
+        },
+      ).copy(trace = trace),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial burst projection",
+      )
+      awaitCondition("initial burst apply") { applyCount.get() == 1 }
+
+      repeat(8) {
+        requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      }
+      assertTrue(
+        "project-model burst did not enter debounce",
+        debounceEntered.await(5, TimeUnit.SECONDS),
+      )
+      releaseDebounce.complete(Unit)
+      awaitCondition("debounced project-model replay") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(2, applyCount.get())
+    } finally {
+      releaseDebounce.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testDisposeCancelsProjectModelDebounceAndClosesRegistration() =
+    verifyDisposeCancelsProjectModelDebounceAndClosesRegistration()
+
+  private fun verifyDisposeCancelsProjectModelDebounceAndClosesRegistration() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val closeCount = AtomicInteger(0)
+    val debounceEntered = CountDownLatch(1)
+    val debounceCancelled = CountDownLatch(1)
+    val neverRelease = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable { closeCount.incrementAndGet() }
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceEntered.countDown()
+          try {
+            neverRelease.await()
+          } finally {
+            debounceCancelled.countDown()
+          }
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial dispose-debounce projection",
+      )
+      awaitCondition("initial dispose-debounce apply") { applyCount.get() == 1 }
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      assertTrue(
+        "dispose test debounce did not start",
+        debounceEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      service.dispose()
+
+      assertTrue(
+        "dispose did not cancel project-model debounce",
+        debounceCancelled.await(5, TimeUnit.SECONDS),
+      )
+      assertEquals(1, closeCount.get())
+      assertEquals(1, applyCount.get())
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      assertEquals(1, applyCount.get())
+      service.dispose()
+      assertEquals(1, closeCount.get())
+    } finally {
+      neverRelease.complete(Unit)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testLateOrdinaryProjectModelCallbackRacingDisposeIsDroppedWithoutFailure() =
+    verifyLateOrdinaryProjectModelCallbackRacingDisposeIsDroppedWithoutFailure()
+
+  private fun verifyLateOrdinaryProjectModelCallbackRacingDisposeIsDroppedWithoutFailure() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val applyCount = AtomicInteger(0)
+    val debounceCount = AtomicInteger(0)
+    val intentGateEntered = CountDownLatch(1)
+    val allowIntentCapture = CountDownLatch(1)
+    val callbackFailure = AtomicReference<Throwable?>()
+    val disposeFailure = AtomicReference<Throwable?>()
+    val baseOverrides = projectModelChangeRuntimeOverrides(
+      candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
+      registrar = ReqwsProjectModelChangeRegistrar { callback ->
+        listener.set(callback)
+        AutoCloseable {}
+      },
+      debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+        debounceCount.incrementAndGet()
+      },
+    )
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = baseOverrides.copy(
+        beforeProjectModelIntentCapture = {
+          intentGateEntered.countDown()
+          check(allowIntentCapture.await(5, TimeUnit.SECONDS)) {
+            "test did not release project-model intent capture"
+          }
+        },
+      ),
+    )
+    val callbackThread = Thread({
+      try {
+        requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      } catch (failure: Throwable) {
+        callbackFailure.set(failure)
+      }
+    }, "reqws-late-project-model-callback")
+    val disposeThread = Thread({
+      try {
+        service.dispose()
+      } catch (failure: Throwable) {
+        disposeFailure.set(failure)
+      }
+    }, "reqws-dispose-during-project-model-callback")
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before late project-model callback",
+      )
+      awaitCondition("initial apply before late project-model callback") {
+        applyCount.get() == 1
+      }
+
+      callbackThread.start()
+      assertTrue(
+        "project-model callback did not pass the initial schedule gate",
+        intentGateEntered.await(5, TimeUnit.SECONDS),
+      )
+      disposeThread.start()
+      awaitCondition("terminal state before project-model intent capture") {
+        service.state.lifecycle == ReqwsLifecycleState.DISPOSED
+      }
+      allowIntentCapture.countDown()
+      callbackThread.join(5_000)
+      disposeThread.join(5_000)
+
+      assertFalse(callbackThread.isAlive)
+      assertFalse(disposeThread.isAlive)
+      assertNull(callbackFailure.get())
+      assertNull(disposeFailure.get())
+      assertEquals(0, debounceCount.get())
+      assertEquals(1, applyCount.get())
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+    } finally {
+      allowIntentCapture.countDown()
+      callbackThread.join(5_000)
+      disposeThread.join(5_000)
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testThrowingProjectModelRegistrationCloseDoesNotSkipLaterCleanup() =
+    verifyThrowingProjectModelRegistrationCloseDoesNotSkipLaterCleanup()
+
+  private fun verifyThrowingProjectModelRegistrationCloseDoesNotSkipLaterCleanup() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val registrationFailure = IllegalStateException("synthetic project-model registration failure")
+    val watcherFailure = IllegalArgumentException("synthetic watcher cleanup failure")
+    val registrationCloseCount = AtomicInteger(0)
+    val watcherCloseCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {},
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        projectModelChangeRegistrar = ReqwsProjectModelChangeRegistrar {
+          AutoCloseable {
+            registrationCloseCount.incrementAndGet()
+            throw registrationFailure
+          }
+        },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ ->
+          Disposable {
+            watcherCloseCount.incrementAndGet()
+            throw watcherFailure
+          }
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "projection installing throwing cleanup resources",
+      )
+
+      val failure = captureFailure(service::dispose)
+
+      assertSame(registrationFailure, failure)
+      assertEquals(listOf(watcherFailure), failure.suppressed.toList())
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+      assertNull(service.refreshAutomatically())
+      assertEquals(1, registrationCloseCount.get())
+      assertEquals(1, watcherCloseCount.get())
+    } finally {
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping() =
+    verifyVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping()
+
+  private fun verifyVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyCount = AtomicInteger(0)
+    val applyTriggers = CopyOnWriteArrayList<SyncTrigger>()
+    val debounceCount = AtomicInteger(0)
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val debounceReleases = Channel<Unit>(Channel.UNLIMITED)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { candidate ->
+          applyCount.incrementAndGet()
+          applyTriggers.add(candidate.trigger)
+        },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable {}
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceCount.incrementAndGet()
+          debounceReleases.receive()
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "initial Vgo-follow-up projection",
+      )
+      awaitCondition("initial Vgo-follow-up apply") { applyCount.get() == 1 }
+
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      awaitCondition("external project-model debounce") { debounceCount.get() == 1 }
+      assertTrue(debounceReleases.trySend(Unit).isSuccess)
+      awaitCondition("primary project-model replay") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      // Deliver the language plugin's ordinary event only after the primary replay has fully
+      // completed. Event classification, not timing overlap, must make this verify-only.
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      awaitCondition("Vgo-only follow-up debounce") { debounceCount.get() == 2 }
+      assertTrue(debounceReleases.trySend(Unit).isSuccess)
+      awaitCondition("bounded Vgo-only follow-up replay") {
+        applyCount.get() == 3 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(2, debounceCount.get())
+      assertEquals(3, applyCount.get())
+      assertEquals(
+        listOf(
+          SyncTrigger.AUTOMATIC,
+          SyncTrigger.PROJECT_MODEL_CHANGE,
+          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+        ),
+        applyTriggers,
+      )
+    } finally {
+      debounceReleases.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage() =
+    verifyOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage()
+
+  private fun verifyOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyTriggers = CopyOnWriteArrayList<SyncTrigger>()
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val debounceCount = AtomicInteger(0)
+    val debounceReleases = Channel<Unit>(Channel.UNLIMITED)
+    val candidateOfferCount = AtomicInteger(0)
+    val firstFollowUpOfferEntered = CountDownLatch(1)
+    val allowFirstFollowUpOffer = CountDownLatch(1)
+    val baseOverrides = projectModelChangeRuntimeOverrides(
+      candidateApplier = SyncCandidateApplier { candidate ->
+        applyTriggers.add(candidate.trigger)
+      },
+      registrar = ReqwsProjectModelChangeRegistrar { callback ->
+        listener.set(callback)
+        AutoCloseable {}
+      },
+      debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+        debounceCount.incrementAndGet()
+        debounceReleases.receive()
+      },
+    )
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = baseOverrides.copy(
+        beforeCandidateOffer = {
+          if (candidateOfferCount.incrementAndGet() == 2) {
+            firstFollowUpOfferEntered.countDown()
+            check(allowFirstFollowUpOffer.await(5, TimeUnit.SECONDS)) {
+              "test did not release the first follow-up candidate"
+            }
+          }
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before overlapping project-model events",
+      )
+      awaitCondition("initial projection apply") { applyTriggers.size == 1 }
+
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      awaitCondition("first ordinary-event debounce") { debounceCount.get() == 1 }
+      assertTrue(debounceReleases.trySend(Unit).isSuccess)
+      assertTrue(
+        "first follow-up read did not reach candidate selection",
+        firstFollowUpOfferEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      // The second event is accepted while the first read is still the latest generation. Its
+      // immutable origin must not be consumed by the first read before this debounce is released.
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      awaitCondition("second ordinary-event debounce") { debounceCount.get() == 2 }
+      allowFirstFollowUpOffer.countDown()
+      awaitCondition("first verify-only follow-up apply") { applyTriggers.size == 2 }
+      assertTrue(debounceReleases.trySend(Unit).isSuccess)
+      awaitCondition("second verify-only follow-up apply") { applyTriggers.size == 3 }
+
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(
+        listOf(
+          SyncTrigger.AUTOMATIC,
+          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+        ),
+        applyTriggers,
+      )
+      assertEquals(2, debounceCount.get())
+    } finally {
+      allowFirstFollowUpOffer.countDown()
+      debounceReleases.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest() =
+    verifyFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest()
+
+  private fun verifyFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest() {
+    val root = writeValidManifest()
+    val manifest = ReqwsProjectDetector.manifestPath(root)
+    val originalManifest = Files.readString(manifest)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applyTriggers = CopyOnWriteArrayList<SyncTrigger>()
+    val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
+    val debounceReleases = Channel<Unit>(Channel.UNLIMITED)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = projectModelChangeRuntimeOverrides(
+        candidateApplier = SyncCandidateApplier { candidate ->
+          applyTriggers.add(candidate.trigger)
+        },
+        registrar = ReqwsProjectModelChangeRegistrar { callback ->
+          listener.set(callback)
+          AutoCloseable {}
+        },
+        debounceWaiter = ReqwsProjectModelChangeDebounceWaiter {
+          debounceReleases.receive()
+        },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "initial projection before failed follow-up read",
+      )
+      awaitCondition("initial apply before failed follow-up read") { applyTriggers.size == 1 }
+
+      Files.writeString(manifest, "{")
+      requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
+      assertTrue(debounceReleases.trySend(Unit).isSuccess)
+      awaitStableLifecycle(
+        service,
+        ReqwsLifecycleState.ERROR,
+        "failed verify-only follow-up read",
+      )
+
+      Files.writeString(
+        manifest,
+        originalManifest.replace(
+          "2026-08-14T00:00:00.000Z",
+          "2026-08-15T00:00:00.000Z",
+        ),
+      )
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "automatic recovery with a newer manifest digest",
+      )
+      awaitCondition("newer manifest apply") { applyTriggers.size == 2 }
+
+      assertEquals(
+        listOf(SyncTrigger.AUTOMATIC, SyncTrigger.AUTOMATIC),
+        applyTriggers,
+      )
+    } finally {
+      debounceReleases.close()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testDisposeWinningBeforeCandidateCommitPreventsDurableDigestAdvance() =
+    verifyDisposeWinningBeforeCandidateCommitPreventsDurableDigestAdvance()
+
+  private fun verifyDisposeWinningBeforeCandidateCommitPreventsDurableDigestAdvance() {
+    writeValidManifest()
+    val rootJob = SupervisorJob()
+    val scope = CoroutineScope(rootJob + Dispatchers.Default)
+    val commitEntered = CountDownLatch(1)
+    val allowCommitGate = CountDownLatch(1)
+    val persistence = project.service<ReqwsSyncPersistence>()
+    persistence.loadState(ReqwsSyncPersistence.Data())
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        trustGate = ReqwsTrustGate { true },
+        candidateApplier = SyncCandidateApplier {},
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        projectModelChangeRegistrar = ReqwsProjectModelChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+        beforeCandidateCommit = {
+          commitEntered.countDown()
+          check(allowCommitGate.await(5, TimeUnit.SECONDS)) {
+            "test did not release the candidate commit gate"
+          }
+        },
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(
+        requireNotNull(service.refreshAutomatically()),
+        "refresh racing dispose at the candidate commit boundary",
+      )
+      assertTrue(
+        "candidate did not reach the commit boundary",
+        commitEntered.await(5, TimeUnit.SECONDS),
+      )
+
+      service.dispose()
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+      allowCommitGate.countDown()
+      runBlocking {
+        rootJob.children.forEach { child -> child.join() }
+      }
+
+      assertNull(persistence.lastAppliedDigest())
+    } finally {
+      allowCommitGate.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+  }
+
+  fun testWatcherThatFinishesConstructionAfterDisposeIsClosed() {
+    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+    Files.createDirectories(configuredRoot)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val factoryEntered = CountDownLatch(1)
+    val allowFactoryReturn = CountDownLatch(1)
+    val closeCount = AtomicInteger(0)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ ->
+          factoryEntered.countDown()
+          check(allowFactoryReturn.await(5, TimeUnit.SECONDS)) {
+            "test did not release manifest watcher construction"
+          }
+          Disposable { closeCount.incrementAndGet() }
+        },
+      ),
+    )
+    val refresh = requireNotNull(service.refreshAutomatically())
+
+    try {
+      assertTrue(
+        "manifest watcher construction did not start",
+        factoryEntered.await(5, TimeUnit.SECONDS),
+      )
+      service.dispose()
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+
+      allowFactoryReturn.countDown()
+      awaitSuccessfulCompletion(
+        job = refresh,
+        description = "refresh racing manifest watcher construction with dispose",
+      )
+
+      assertEquals(1, closeCount.get())
+      assertNull(service.refreshAutomatically())
+    } finally {
+      allowFactoryReturn.countDown()
+      service.dispose()
+      scope.cancel()
+    }
+    assertEquals(1, closeCount.get())
+  }
+
+  fun testThrowingWatcherDoesNotPreventTerminalDisposeOrRepeatDispose() {
+    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+    Files.createDirectories(configuredRoot)
+    val expectedFailure = IllegalStateException("synthetic watcher dispose failure")
+    val closeCount = AtomicInteger(0)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ ->
+          Disposable {
+            closeCount.incrementAndGet()
+            throw expectedFailure
+          }
+        },
+      ),
+    )
+
+    try {
+      awaitSuccessfulCompletion(
+        job = requireNotNull(service.refreshAutomatically()),
+        description = "refresh installing a throwing watcher",
+      )
+
+      val failure = captureFailure(service::dispose)
+      assertSame(expectedFailure, failure)
+      assertSame(ReqwsProjectState.DISPOSED, service.state)
+      assertNull(service.refresh())
+      assertNull(service.refreshAutomatically())
+      assertEquals(1, closeCount.get())
+
+      service.dispose()
+      assertEquals(1, closeCount.get())
+    } finally {
+      try {
+        service.dispose()
+      } finally {
+        scope.cancel()
+      }
+    }
+  }
+
   private fun verifyDisposeClosesRegistrationThatReturnsAfterTerminalState() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val service = ReqwsProjectService(project, scope)
@@ -2459,8 +4409,11 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     assertSame(ReqwsProjectState.DISPOSED, service.state)
     assertNull(service.refresh())
     assertNull(service.refreshAutomatically())
-    assertEquals(ReqwsLifecycleState.INACTIVE, observed.first())
+    // The production manifest watcher can legitimately move the pooled platform-test project out
+    // of INACTIVE before this test attaches. This test owns only the terminal publication contract.
+    assertTrue(observed.first() != ReqwsLifecycleState.DISPOSED)
     assertEquals(ReqwsLifecycleState.DISPOSED, observed.last())
+    assertEquals(1, observed.count { it == ReqwsLifecycleState.DISPOSED })
     handle.close()
   }
 
@@ -2474,6 +4427,18 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     assertTrue("$description did not complete", completion.await(5, TimeUnit.SECONDS))
     failure.get()?.let { throw AssertionError("$description failed", it) }
   }
+
+  private fun traceEvents(lines: List<String>, event: SyncTraceEvent): List<String> =
+    lines.filter { it.contains(" event=${event.name} ") }
+
+  private fun traceField(line: String, field: String): String =
+    line.split(' ').single { it.startsWith("$field=") }.substringAfter('=')
+
+  private fun projectMetadataReadinessFailure() = ReqwsProjectionApplyException(
+    stableCode = ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
+    degraded = false,
+    retryKind = ReqwsProjectionRetryKind.PROJECT_METADATA_READINESS,
+  )
 
   /** Exercises the production startup trigger once without calling either refresh API in tests. */
   private fun executeStartupActivity(
@@ -2507,6 +4472,16 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     return requireNotNull(failure.get()) { "$description unexpectedly succeeded" }
   }
 
+  private fun captureFailure(action: () -> Unit): Throwable {
+    var captured: Throwable? = null
+    try {
+      action()
+    } catch (failure: Throwable) {
+      captured = failure
+    }
+    return requireNotNull(captured) { "expected action to fail" }
+  }
+
   private fun awaitCondition(description: String, condition: () -> Boolean) {
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while (System.nanoTime() < deadline) {
@@ -2538,6 +4513,22 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     )
   }
 
+  private fun projectModelChangeRuntimeOverrides(
+    candidateApplier: SyncCandidateApplier<ManifestSnapshot>,
+    registrar: ReqwsProjectModelChangeRegistrar,
+    debounceWaiter: ReqwsProjectModelChangeDebounceWaiter,
+    beforeCandidateOffer: (() -> Unit)? = null,
+  ): ReqwsProjectServiceRuntimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+    trustGate = ReqwsTrustGate { true },
+    candidateApplier = candidateApplier,
+    vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+    projectModelChangeRegistrar = registrar,
+    projectModelChangeDebounceWaiter = debounceWaiter,
+    beforeCandidateOffer = beforeCandidateOffer,
+    vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+    manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+  )
+
   private fun writeValidManifest(): Path {
     val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
     Files.createDirectories(configuredRoot)
@@ -2559,6 +4550,29 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           "updatedAt": "2026-08-14T00:00:00.000Z"
         }
       """.trimIndent(),
+    )
+    return root
+  }
+
+  private fun writeValidManifestWithRepository(): Path {
+    val root = writeValidManifest()
+    val repositoryPath = root.resolve("repo-a")
+    Files.createDirectories(repositoryPath)
+    val manifest = ReqwsProjectDetector.manifestPath(root)
+    val repositoryJson = """
+      [
+        {
+          "catalogRepositoryId": "service_repo_a",
+          "name": "repo-a",
+          "url": "https://example.test/team/repo-a.git",
+          "defaultBranch": "main",
+          "relativePath": "repo-a"
+        }
+      ]
+    """.trimIndent()
+    Files.writeString(
+      manifest,
+      Files.readString(manifest).replace("\"repositories\": []", "\"repositories\": $repositoryJson"),
     )
     return root
   }

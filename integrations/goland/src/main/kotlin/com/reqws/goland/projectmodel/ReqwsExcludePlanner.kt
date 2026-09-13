@@ -85,7 +85,7 @@ internal object ReqwsExcludePlanner {
     }
     if (
       relevantUrls.any { relevant ->
-        currentExcludes.count { current -> urlsEquivalent(current.url, relevant) } > 1
+        preferredMatches(relevant, currentExcludes, urlsEquivalent).size > 1
       }
     ) {
       throw conflict("Duplicate exclude URLs make ReqWS ownership ambiguous.")
@@ -109,7 +109,7 @@ internal object ReqwsExcludePlanner {
 
     val persistedByRelative = allPersistedClaims.groupBy(RecoveryExcludeClaim::relativePath)
     val proofs = persistedByRelative.mapValues { (_, claims) ->
-      proofFor(claims, currentExcludes, urlsEquivalent)
+      proofFor(claims, currentExcludes)
     }
     val retainedRecovery = linkedMapOf<Pair<String, String>, ManagedExcludeOwnership>()
     recoveryClaims.forEach { persisted ->
@@ -199,7 +199,7 @@ internal object ReqwsExcludePlanner {
     val remainingExcludes = currentExcludes.filter { current -> current.url !in removableUrls }
     if (
       activeUrls.any { active ->
-        remainingExcludes.any { current -> urlsEquivalent(current.url, active) }
+        remainingExcludes.any { current -> current.url == active }
       }
     ) {
       throw conflict("An active repository remains excluded by an entry ReqWS cannot remove.")
@@ -223,16 +223,14 @@ internal object ReqwsExcludePlanner {
   private fun proofFor(
     persistedClaims: List<RecoveryExcludeClaim>,
     currentExcludes: List<CurrentExclude>,
-    urlsEquivalent: (String, String) -> Boolean,
   ): RelativeProof {
     val targetUrl = persistedClaims.first().claim.targetUrl
-    val targetMatches = currentExcludes.filter { current ->
-      urlsEquivalent(current.url, targetUrl)
-    }
+    // Filesystem identity is useful for active/retained classification, but it cannot transfer
+    // destructive ownership to a different Project Model URL. Only the exact serialized target
+    // and marker pair can authorize removal; an equivalent alias remains user-owned.
+    val targetMatches = currentExcludes.filter { current -> current.url == targetUrl }
     val presentMarkers = persistedClaims.mapNotNull { persisted ->
-      val matches = currentExcludes.filter { current ->
-        urlsEquivalent(current.url, persisted.claim.markerUrl)
-      }
+      val matches = currentExcludes.filter { current -> current.url == persisted.claim.markerUrl }
       if (matches.size > 1) throw conflict("A ReqWS ownership marker is duplicated.")
       matches.singleOrNull()?.let { current -> persisted to current.url }
     }
@@ -255,7 +253,9 @@ internal object ReqwsExcludePlanner {
     urlsEquivalent: (String, String) -> Boolean,
   ): RelativeProof {
     if (targetUrl == null) return RelativeProof.Absent
-    val targets = currentExcludes.filter { current -> urlsEquivalent(current.url, targetUrl) }
+    // An alias that reaches the same inode does not make the exact target excluded in
+    // ProjectFileIndex. Borrow only an exact user entry; otherwise add an owned exact target.
+    val targets = currentExcludes.filter { current -> current.url == targetUrl }
     return when (targets.size) {
       0 -> RelativeProof.Absent
       1 -> RelativeProof.Borrowed(targets.single().url)
@@ -265,6 +265,17 @@ internal object ReqwsExcludePlanner {
 
   private fun conflict(message: String) =
     ProjectModelApplyException(ProjectModelErrorCode.OWNERSHIP_CONFLICT, message)
+
+  private fun preferredMatches(
+    targetUrl: String,
+    currentExcludes: List<CurrentExclude>,
+    urlsEquivalent: (String, String) -> Boolean,
+  ): List<CurrentExclude> {
+    val exact = currentExcludes.filter { current -> current.url == targetUrl }
+    return exact.ifEmpty {
+      currentExcludes.filter { current -> urlsEquivalent(current.url, targetUrl) }
+    }
+  }
 
   private sealed interface RelativeProof {
     data object Absent : RelativeProof

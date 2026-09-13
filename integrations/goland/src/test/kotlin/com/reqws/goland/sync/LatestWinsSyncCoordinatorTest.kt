@@ -1,6 +1,9 @@
 package com.reqws.goland.sync
 
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.diagnostics.traceRecords
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -11,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -73,6 +77,61 @@ class LatestWinsSyncCoordinatorTest {
     assertEquals("a", projection)
     assertEquals("a", coordinator.lastAppliedDigest)
     coordinator.close()
+  }
+
+  @Test
+  fun `project model change same digest reapplies and restores a drifted projection`() = runBlocking {
+    val attempts = mutableListOf<String>()
+    var projection = ""
+    val events = eventChannel()
+    val coordinator = coordinator(
+      scope = this,
+      events = events,
+      apply = {
+        attempts += it.value
+        projection = it.value
+      },
+    )
+
+    assertTrue(coordinator.offer(candidate("a")))
+    assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+    projection = "drifted"
+    assertTrue(coordinator.offer(candidate("a"), SyncTrigger.PROJECT_MODEL_CHANGE))
+    val reapplied = assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+
+    assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, reapplied.trigger)
+    assertEquals(listOf("a", "a"), attempts)
+    assertEquals("a", projection)
+    assertEquals("a", coordinator.lastAppliedDigest)
+    coordinator.close()
+  }
+
+  @Test
+  fun `reconciliation trigger priority is manual trust project-model then automatic`() {
+    assertEquals(
+      SyncTrigger.PROJECT_MODEL_CHANGE,
+      mergeReconcileTrigger(null, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
+    assertEquals(
+      SyncTrigger.PROJECT_MODEL_CHANGE,
+      mergeReconcileTrigger(SyncTrigger.PROJECT_MODEL_CHANGE, SyncTrigger.AUTOMATIC),
+    )
+    assertEquals(
+      SyncTrigger.TRUST_TRANSITION,
+      mergeReconcileTrigger(SyncTrigger.PROJECT_MODEL_CHANGE, SyncTrigger.TRUST_TRANSITION),
+    )
+    assertEquals(
+      SyncTrigger.TRUST_TRANSITION,
+      mergeReconcileTrigger(SyncTrigger.TRUST_TRANSITION, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
+    assertEquals(
+      SyncTrigger.MANUAL,
+      mergeReconcileTrigger(SyncTrigger.TRUST_TRANSITION, SyncTrigger.MANUAL),
+    )
+    assertEquals(
+      SyncTrigger.MANUAL,
+      mergeReconcileTrigger(SyncTrigger.MANUAL, SyncTrigger.PROJECT_MODEL_CHANGE),
+    )
   }
 
   @Test
@@ -218,6 +277,90 @@ class LatestWinsSyncCoordinatorTest {
       assertEquals(listOf("base", "base"), applied)
       coordinator.close()
   }
+
+  @Test
+  fun `a same-digest automatic candidate cannot replace a queued verify-only follow-up`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applyTriggers = mutableListOf<Pair<String, SyncTrigger>>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base") {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applyTriggers += candidate.value to candidate.trigger
+        },
+      )
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      firstApplyStarted.await()
+      coordinator.offer(candidate("stable"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("stable"), SyncTrigger.AUTOMATIC)
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val followUp = assertEvent<SyncCoordinatorEvent.Applied>(events, "stable")
+
+      assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, followUp.trigger)
+      assertEquals(
+        listOf(
+          "base" to SyncTrigger.AUTOMATIC,
+          "stable" to SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+        ),
+        applyTriggers,
+      )
+
+      coordinator.offer(candidate("stable"), SyncTrigger.AUTOMATIC)
+      val noOp = assertEvent<SyncCoordinatorEvent.NoOp>(events, "stable")
+      assertEquals(SyncTrigger.AUTOMATIC, noOp.trigger)
+
+      coordinator.offer(candidate("new-digest"), SyncTrigger.AUTOMATIC)
+      val newer = assertEvent<SyncCoordinatorEvent.Applied>(events, "new-digest")
+      assertEquals(SyncTrigger.AUTOMATIC, newer.trigger)
+      coordinator.close()
+    }
+
+  @Test
+  fun `a different-digest automatic candidate supersedes a queued verify-only follow-up`() =
+    runBlocking {
+      val firstApplyStarted = CompletableDeferred<Unit>()
+      val releaseFirstApply = CompletableDeferred<Unit>()
+      val applyTriggers = mutableListOf<Pair<String, SyncTrigger>>()
+      val events = eventChannel()
+      val coordinator = coordinator(
+        scope = this,
+        events = events,
+        apply = { candidate ->
+          if (candidate.value == "base") {
+            firstApplyStarted.complete(Unit)
+            releaseFirstApply.await()
+          }
+          applyTriggers += candidate.value to candidate.trigger
+        },
+      )
+
+      coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
+      firstApplyStarted.await()
+      coordinator.offer(candidate("old-digest"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("new-digest"), SyncTrigger.AUTOMATIC)
+      releaseFirstApply.complete(Unit)
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
+      val newer = assertEvent<SyncCoordinatorEvent.Applied>(events, "new-digest")
+
+      assertEquals(SyncTrigger.AUTOMATIC, newer.trigger)
+      assertEquals(
+        listOf(
+          "base" to SyncTrigger.AUTOMATIC,
+          "new-digest" to SyncTrigger.AUTOMATIC,
+        ),
+        applyTriggers,
+      )
+      coordinator.close()
+    }
 
   @Test
   fun `a newer automatic digest keeps its content while inheriting pending manual intent`() = runBlocking {
@@ -542,6 +685,33 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
+  fun `worker cancellation before the accepted-success boundary cannot commit a digest`() = runBlocking {
+    val ownerJob = SupervisorJob()
+    val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+    val commits = AtomicInteger(0)
+    val events = CopyOnWriteArrayList<SyncCoordinatorEvent>()
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = owner,
+      applier = SyncCandidateApplier<String> {
+        requireNotNull(currentCoroutineContext()[Job]).cancel()
+      },
+      committer = SyncCandidateCommitter { commits.incrementAndGet() },
+      observer = SyncCoordinatorObserver(events::add),
+    )
+    try {
+      assertTrue(coordinator.offer(candidate("cancel-before-commit")))
+      withTimeout(5_000) { coordinator.awaitClosed() }
+
+      assertEquals(0, commits.get())
+      assertNull(coordinator.lastAppliedDigest)
+      assertFalse(events.any { event -> event is SyncCoordinatorEvent.Applied })
+    } finally {
+      coordinator.close()
+      ownerJob.cancel()
+    }
+  }
+
+  @Test
   fun `an observer exception cannot terminate synchronization`() = runBlocking {
     val applied = Channel<String>(Channel.UNLIMITED)
     val coordinator = LatestWinsSyncCoordinator(
@@ -555,6 +725,117 @@ class LatestWinsSyncCoordinatorTest {
     coordinator.offer(candidate("second"))
     assertEquals("second", applied.receive())
     coordinator.close()
+  }
+
+  @Test
+  fun `trace sink failures preserve apply no-op digest and cancellation ownership`() = runBlocking {
+    for (sinkFailure in listOf(IllegalStateException("sink"), ProcessCanceledException(), CancellationException("sink"))) {
+      val trace = ReqwsSyncTrace.testing(sink = { throw sinkFailure })
+      val events = eventChannel()
+      val applied = mutableListOf<String>()
+      val coordinator = LatestWinsSyncCoordinator(
+        scope = this,
+        applier = SyncCandidateApplier<String> { applied += it.value },
+        observer = SyncCoordinatorObserver { events.trySend(it) },
+        trace = trace,
+      )
+      try {
+        coordinator.offer(candidate("a"))
+        withTimeout(5_000) { assertEvent<SyncCoordinatorEvent.Applied>(events, "a") }
+        coordinator.offer(candidate("a"))
+        withTimeout(5_000) { assertEvent<SyncCoordinatorEvent.NoOp>(events, "a") }
+        assertEquals(listOf("a"), applied)
+        assertEquals("a", coordinator.lastAppliedDigest)
+      } finally { coordinator.close() }
+      assertRecoverableApplierCancellation(ProcessCanceledException(), trace)
+      assertRecoverableApplierCancellation(CancellationException("apply"), trace)
+      assertTerminalObserverCancellation(ProcessCanceledException(), trace)
+      assertTerminalObserverCancellation(CancellationException("observer"), trace)
+    }
+  }
+
+  @Test
+  fun `enabled trace preserves cancellation of the worker from inside the applier`() = runBlocking {
+    val lines = CopyOnWriteArrayList<String>()
+    val ownerJob = SupervisorJob()
+    val commits = AtomicInteger()
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = CoroutineScope(ownerJob + Dispatchers.Default),
+      applier = SyncCandidateApplier<String> { requireNotNull(currentCoroutineContext()[Job]).cancel() },
+      committer = SyncCandidateCommitter { commits.incrementAndGet() },
+      trace = ReqwsSyncTrace.testing(sink = lines::add),
+    )
+    try {
+      coordinator.offer(candidate("cancel"))
+      withTimeout(5_000) { coordinator.awaitClosed() }
+      assertTrue(coordinator.isClosed)
+      assertEquals(0, commits.get())
+      assertNull(coordinator.lastAppliedDigest)
+      assertEquals("CANCELLED", traceRecords(lines, SyncTraceEvent.COORDINATOR_APPLY_END).single()["outcome"])
+    } finally { coordinator.close(); ownerJob.cancel() }
+  }
+
+  @Test
+  fun `trace distinguishes successful apply from clean same digest no-op and retains identity`() = runBlocking {
+    val lines = CopyOnWriteArrayList<String>()
+    val trace = ReqwsSyncTrace.testing(sink = lines::add)
+    val events = eventChannel()
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = this,
+      applier = SyncCandidateApplier<String> { trace.record(SyncTraceEvent.REGISTRY_START) },
+      observer = SyncCoordinatorObserver { events.trySend(it) },
+      trace = trace,
+    )
+    try {
+      coordinator.offer(candidate("a").copy(sourceId = 42))
+      assertEvent<SyncCoordinatorEvent.Applied>(events, "a")
+      coordinator.offer(candidate("a").copy(sourceId = 43))
+      assertEvent<SyncCoordinatorEvent.NoOp>(events, "a")
+      val starts = traceRecords(lines, SyncTraceEvent.COORDINATOR_APPLY_START)
+      val ends = traceRecords(lines, SyncTraceEvent.COORDINATOR_APPLY_END)
+      assertEquals(1, starts.size)
+      assertEquals(1, ends.size)
+      assertEquals("APPLIED", ends.single()["outcome"])
+      assertEquals("1", ends.single()["accepted"])
+      assertEquals(starts.single()["request_id"], ends.single()["request_id"])
+      assertEquals("42", traceRecords(lines, SyncTraceEvent.REGISTRY_START).single()["source_id"])
+      assertEquals("43", traceRecords(lines, SyncTraceEvent.COORDINATOR_NO_OP).single()["source_id"])
+      assertEquals(2, traceRecords(lines, SyncTraceEvent.COORDINATOR_SUBMIT).size)
+      assertEquals(2, traceRecords(lines, SyncTraceEvent.COORDINATOR_DEQUEUE).size)
+    } finally { coordinator.close() }
+  }
+
+  @Test
+  fun `trace sink failure preserves the accepted digest when an applied observer cancels`() = runBlocking {
+    for (cancellation in listOf(ProcessCanceledException(), CancellationException("applied observer"))) {
+      val events = eventChannel()
+      val applied = AtomicInteger()
+      val committed = AtomicInteger()
+      val coordinator = LatestWinsSyncCoordinator(
+        scope = this,
+        applier = SyncCandidateApplier<String> { applied.incrementAndGet() },
+        committer = SyncCandidateCommitter { committed.incrementAndGet() },
+        observer = SyncCoordinatorObserver { event ->
+          events.trySend(event)
+          if (event is SyncCoordinatorEvent.Applied) throw cancellation
+        },
+        trace = ReqwsSyncTrace.testing(sink = { error("sink") }),
+      )
+      try {
+        coordinator.offer(candidate("a"))
+        val cancelled = withTimeout(5_000) {
+          assertEvent<SyncCoordinatorEvent.Cancelled>(events, "a")
+        }
+        assertSame(cancellation, cancelled.cause)
+        assertEquals("a", coordinator.lastAppliedDigest)
+        coordinator.offer(candidate("a"))
+        withTimeout(5_000) { assertEvent<SyncCoordinatorEvent.NoOp>(events, "a") }
+        assertEquals(1, applied.get())
+        assertEquals(1, committed.get())
+      } finally {
+        coordinator.close()
+      }
+    }
   }
 
   private fun candidate(value: String) = SyncCandidate(digestSha256 = value, value = value)
@@ -575,6 +856,7 @@ class LatestWinsSyncCoordinatorTest {
 
   private suspend fun assertRecoverableApplierCancellation(
     cancellation: Throwable,
+    trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
   ) {
     val events = CopyOnWriteArrayList<SyncCoordinatorEvent>()
     val eventSignal = eventChannel()
@@ -583,6 +865,7 @@ class LatestWinsSyncCoordinatorTest {
     val owner = CoroutineScope(ownerJob + Dispatchers.Default)
     val coordinator = LatestWinsSyncCoordinator(
       scope = owner,
+      trace = trace,
       applier = SyncCandidateApplier<String> { candidate ->
         attempts += candidate.value
         if (candidate.value == "cancelled") throw cancellation
@@ -616,14 +899,20 @@ class LatestWinsSyncCoordinatorTest {
 
   private suspend fun assertTerminalObserverCancellation(
     cancellation: Throwable,
+    trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
   ) {
     val ownerJob = SupervisorJob()
     val owner = CoroutineScope(ownerJob + Dispatchers.Default)
     val applyCount = AtomicInteger(0)
     val coordinator = LatestWinsSyncCoordinator(
       scope = owner,
+      trace = trace,
       applier = SyncCandidateApplier<String> { applyCount.incrementAndGet() },
-      observer = SyncCoordinatorObserver { throw cancellation },
+      observer = SyncCoordinatorObserver { event ->
+        // A terminal signal from Applying must escape directly. Throwing again from Cancelled
+        // would hide accidental conversion into a recoverable applier cancellation.
+        if (event is SyncCoordinatorEvent.Applying) throw cancellation
+      },
     )
     try {
       assertTrue(coordinator.offer(candidate("cancelled")))

@@ -1,9 +1,14 @@
-# GoLand Tool Window 界面设计
+# GoLand 界面设计与交付截图
 
-本目录保存 ReqWS Tool Window 的视觉实施依据和真实 GoLand 候选截图；图片只说明界面形态，不替代按次 GUI 验收结论。
+本目录保留布局依据及六张真实隔离测试截图；图片只证明其注明的可见状态，候选归属与完整结论见测试报告。
 
-| 材料 | 状态 | 说明 |
+| 文档或资产 | 状态 | 说明 |
 |---|---|---|
-| [Tool Window 视觉设计与实现对照](tool-window-visual-design.md) | active | 固化视觉层级、状态表达、交互规则，并在实现后对照原型与真实界面。 |
-| [Tool Window 同步态原型图](tool-window-prototype.png) | active | 作为本轮界面优化的视觉实施基线。 |
-| [Tool Window 同步态实现截图](tool-window-implementation-2026-08-17.png) | draft | 记录日常 GoLand 中按原型收口后的真实实现候选，等待后续完整 GUI 验收。 |
+| [Tool Window 界面设计](tool-window-visual-design.md) | active | 定义当前布局、状态文字、提示、键盘与无障碍约束。 |
+| [布局原型](tool-window-prototype.png) | active | 提供原生面板信息层级的设计参考，不作为运行证据。 |
+| [tool-window-synchronized-dark.jpg](tool-window-synchronized-dark.jpg) | active | 修复候选的六仓深色同步态；未捕获悬浮提示，不证明长提示通过。 |
+| [tool-window-synchronized-light.jpg](tool-window-synchronized-light.jpg) | active | 提示修复前的浅色三仓布局及原 PACKAGE 结果；用于界面导览。 |
+| [tool-window-registry-failure.jpg](tool-window-registry-failure.jpg) | active | registry 失败时的降级、稳定错误详情与独立复制反馈。 |
+| [desktop-repository-readded.jpg](desktop-repository-readded.jpg) | active | 同一详情抽屉移除后重新添加 B 的实际完成结果。 |
+| [仓库长名称悬浮提示](repository-tooltip-dark.png) | active | 当前修复候选的深色真实提示完整换行，末尾 abcdefghi 与 Active 可见，由用户现场截图确认。 |
+| [浅色仓库长名称悬浮提示](repository-tooltip-light.png) | active | 当前修复候选的浅色真实提示完整换行，末尾 abcdefghi 与 Active 可见，由用户现场截图确认。 |

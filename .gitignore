@@ -14,3 +14,4 @@ coverage/
 /integrations/goland/build/
 /integrations/goland/local.properties
 /integrations/goland/*.iml
+/.idea/

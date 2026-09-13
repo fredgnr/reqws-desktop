@@ -47,7 +47,9 @@ class ReqwsProjectLoadEngineTest {
   fun `preserves the previous valid snapshot after a redacted validation error`() {
     val root = createWorkspace("recovery", listOf("api"))
     val engine = ReqwsProjectLoadEngine(ManifestReader(), ReqwsTrustGate { true })
-    val valid = engine.load(root, ReqwsProjectState.INACTIVE)
+    val valid = engine.load(root, ReqwsProjectState.INACTIVE).afterSuccessfulProjection(
+      "a".repeat(64),
+    )
     val manifest = ReqwsProjectDetector.manifestPath(root)
     Files.writeString(manifest, "{")
 
@@ -57,6 +59,7 @@ class ReqwsProjectLoadEngineTest {
     assertEquals(ManifestErrorCode.MANIFEST_INVALID_JSON.name, failed.lastError?.code)
     assertNotNull(failed.lastError?.digestSha256)
     assertEquals(valid.snapshot, failed.snapshot)
+    assertEquals(valid.validatedProjectionDigest, failed.validatedProjectionDigest)
   }
 
   @Test
@@ -94,6 +97,7 @@ class ReqwsProjectLoadEngineTest {
 
     assertEquals(ReqwsLifecycleState.DEGRADED, applied.lifecycle)
     assertEquals("d".repeat(64), applied.lastAppliedDigest)
+    assertEquals("d".repeat(64), applied.validatedProjectionDigest)
     assertNull(applied.lastError)
     assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, applied.vcsInspection?.repositoryStatuses?.single()?.status)
   }

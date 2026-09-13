@@ -20,6 +20,7 @@ import {
   type RealpathPath,
   type SpawnOpenProcess,
 } from '../../src/main/services/editor-launcher';
+import { workspaceManifestSchema } from '../../src/shared/schemas';
 
 interface ProcessCall {
   command: string;
@@ -419,6 +420,49 @@ describe('EditorLauncher GoLand support', () => {
     await expect(launcher.getAvailability()).resolves.toMatchObject({
       goland: { available: false, reasonCode: 'NOT_FOUND' },
     });
+  });
+
+  it('rejects an invalid app bundle before spawning from a valid GoLand workspace', async () => {
+    const directory = await sandbox();
+    const homeDirectory = path.join(directory, 'home');
+    const applicationPath = path.join(homeDirectory, 'Applications', 'GoLand.app');
+    await createGoLandBundle(applicationPath, {
+      bundleIdentifier: 'example.attacker.goland',
+    });
+    const rootPath = path.join(directory, 'workspace');
+    const workspaceFilePath = path.join(directory, 'workspace.code-workspace');
+    const manifest = workspaceManifestSchema.parse({
+      schemaVersion: 1,
+      id: 'ws_1',
+      name: 'S10 launch validation',
+      featureBranch: 'feature/s10-launch-validation',
+      rootPath,
+      workspaceFilePath,
+      repositories: [],
+      createdAt: '2026-09-12T00:00:00.000Z',
+      updatedAt: '2026-09-12T00:00:00.000Z',
+    });
+    await mkdir(path.join(rootPath, '.reqws'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.reqws', 'workspace.json'),
+      `${JSON.stringify(manifest)}\n`,
+      'utf8',
+    );
+    const spawnProcess = vi.fn<SpawnOpenProcess>();
+    const launcher = new EditorLauncher(async () => ({
+      rootPath,
+      workspaceFilePath,
+    }), {
+      homeDirectory,
+      systemApplicationsDirectory: path.join(directory, 'Applications'),
+      spawnProcess,
+    });
+
+    await expect(launcher.openGoLand('ws_1')).rejects.toMatchObject({
+      code: 'EDITOR_NOT_FOUND',
+      stage: 'launching',
+    });
+    expect(spawnProcess).not.toHaveBeenCalled();
   });
 
   it.each(['Info.plist', 'executable'] as const)(

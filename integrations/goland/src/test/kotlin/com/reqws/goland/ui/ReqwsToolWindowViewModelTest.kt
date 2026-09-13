@@ -30,6 +30,7 @@ class ReqwsToolWindowViewModelTest {
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = snapshot(),
         lastAppliedDigest = snapshot().digestSha256,
+        validatedProjectionDigest = snapshot().digestSha256,
       ),
     )
 
@@ -55,6 +56,7 @@ class ReqwsToolWindowViewModelTest {
         lifecycle = ReqwsLifecycleState.ERROR,
         snapshot = snapshot(),
         lastAppliedDigest = snapshot().digestSha256,
+        validatedProjectionDigest = snapshot().digestSha256,
         lastError = ReqwsProjectError(ManifestErrorCode.MANIFEST_INVALID_JSON.name),
       ),
     )
@@ -63,6 +65,10 @@ class ReqwsToolWindowViewModelTest {
     assertEquals(ReqwsStatusTone.ERROR, model.statusTone)
     assertEquals("MANIFEST_INVALID_JSON", model.errorCode)
     assertTrue(model.preservedSnapshot)
+    assertEquals(
+      listOf("repository.active", "repository.missing"),
+      model.repositories.map { it.statusKey },
+    )
     assertTrue(model.copyDiagnosticsEnabled)
     val details = formatDetailsText(model)
     assertTrue(details.orEmpty().contains("MANIFEST_INVALID_JSON"))
@@ -123,6 +129,77 @@ class ReqwsToolWindowViewModelTest {
   }
 
   @Test
+  fun `does not trust a persisted digest as cold-service live projection proof`() {
+    val snapshot = snapshot()
+
+    listOf(
+      ReqwsLifecycleState.SAFE_MODE_BLOCKED,
+      ReqwsLifecycleState.READING,
+      ReqwsLifecycleState.SYNCHRONIZING,
+    ).forEach { lifecycle ->
+      val model = ReqwsToolWindowViewModel.from(
+        ReqwsProjectState(
+          lifecycle = lifecycle,
+          snapshot = snapshot,
+          lastAppliedDigest = snapshot.digestSha256,
+        ),
+      )
+
+      assertEquals(
+        lifecycle.name,
+        listOf("repository.projectContentUnavailable", "repository.missing"),
+        model.repositories.map { it.statusKey },
+      )
+      assertFalse(lifecycle.name, model.preservedSnapshot)
+    }
+  }
+
+  @Test
+  fun `does not render a stable lifecycle as synced without current-service projection proof`() {
+    val snapshot = snapshot()
+
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
+        snapshot = snapshot,
+        lastAppliedDigest = snapshot.digestSha256,
+      ),
+    )
+
+    assertEquals("state.degraded", model.statusKey)
+    assertEquals(ReqwsStatusTone.WARNING, model.statusTone)
+    assertEquals(
+      listOf("repository.projectContentUnavailable", "repository.missing"),
+      model.repositories.map { it.statusKey },
+    )
+  }
+
+  @Test
+  fun `hides a previously validated projection while a new read or apply is in progress`() {
+    val snapshot = snapshot()
+
+    listOf(
+      ReqwsLifecycleState.READING,
+      ReqwsLifecycleState.SYNCHRONIZING,
+    ).forEach { lifecycle ->
+      val model = ReqwsToolWindowViewModel.from(
+        ReqwsProjectState(
+          lifecycle = lifecycle,
+          snapshot = snapshot,
+          lastAppliedDigest = snapshot.digestSha256,
+          validatedProjectionDigest = snapshot.digestSha256,
+        ),
+      )
+
+      assertEquals(
+        lifecycle.name,
+        "repository.projectContentUnavailable",
+        model.repositories.first().statusKey,
+      )
+    }
+  }
+
+  @Test
   fun `disables every action after disposal`() {
     val model = ReqwsToolWindowViewModel.from(ReqwsProjectState.DISPOSED)
 
@@ -169,6 +246,7 @@ class ReqwsToolWindowViewModelTest {
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot(),
         lastAppliedDigest = snapshot().digestSha256,
+        validatedProjectionDigest = snapshot().digestSha256,
         vcsInspection = VcsRootInspection(
           repositoryStatuses = listOf(
             VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
@@ -193,6 +271,79 @@ class ReqwsToolWindowViewModelTest {
   }
 
   @Test
+  fun `does not label repositories active when the live project content failed to converge`() {
+    listOf(
+      "PROJECT_FILE_INDEX" to "message.projectFileIndexNotConverged",
+      "GO_MODULES_REGISTRY" to "message.goModulesRegistryNotConverged",
+    ).forEach { (field, expectedDetailKey) ->
+      val model = ReqwsToolWindowViewModel.from(
+        ReqwsProjectState(
+          lifecycle = ReqwsLifecycleState.DEGRADED,
+          snapshot = snapshot(),
+          lastError = ReqwsProjectError(
+            code = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+            field = field,
+          ),
+        ),
+      )
+
+      assertEquals(field, "state.degraded", model.statusKey)
+      assertEquals(field, ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, model.errorCode)
+      assertEquals(field, expectedDetailKey, model.errorDetailKey)
+      assertEquals(
+        field,
+        listOf("repository.projectContentUnavailable", "repository.missing"),
+        model.repositories.map { it.statusKey },
+      )
+      assertTrue(field, model.repositories.all { it.statusTone == ReqwsStatusTone.WARNING })
+      val details = formatDetailsText(model).orEmpty()
+      assertTrue(field, details.contains(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED))
+      assertTrue(field, details.contains(ReqwsBundle.message(expectedDetailKey)))
+      assertFalse(field, details.contains("repository.active"))
+    }
+  }
+
+  @Test
+  fun `does not invent a project-content layer for an unknown failure field`() {
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot(),
+        lastError = ReqwsProjectError(
+          code = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+          field = "UNKNOWN_LAYER",
+        ),
+      ),
+    )
+
+    assertEquals(null, model.errorDetailKey)
+    assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, formatDetailsText(model))
+  }
+
+  @Test
+  fun `does not label repositories active when project-model ownership or apply fails`() {
+    listOf(
+      ReqwsLifecycleState.DEGRADED to ReqwsStableErrorCode.OWNERSHIP_CONFLICT,
+      ReqwsLifecycleState.ERROR to ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
+    ).forEach { (lifecycle, errorCode) ->
+      val model = ReqwsToolWindowViewModel.from(
+        ReqwsProjectState(
+          lifecycle = lifecycle,
+          snapshot = snapshot(),
+          lastError = ReqwsProjectError(errorCode),
+        ),
+      )
+
+      assertEquals(
+        listOf("repository.projectContentUnavailable", "repository.missing"),
+        model.repositories.map { it.statusKey },
+      )
+      assertTrue(model.repositories.all { it.statusTone == ReqwsStatusTone.WARNING })
+      assertFalse(model.preservedSnapshot)
+    }
+  }
+
+  @Test
   fun `shows a missing repository when it disappears during the VCS inspection`() {
     val model = ReqwsToolWindowViewModel.from(
       ReqwsProjectState(
@@ -213,10 +364,13 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `shows inspection failures as unavailable instead of active or unconfigured`() {
+    val snapshot = snapshot()
     val model = ReqwsToolWindowViewModel.from(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
-        snapshot = snapshot(),
+        snapshot = snapshot,
+        lastAppliedDigest = snapshot.digestSha256,
+        validatedProjectionDigest = snapshot.digestSha256,
         vcsInspection = VcsRootInspection.inspectionFailed(),
       ),
     )
@@ -229,10 +383,13 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `fails closed when an inspection omits a present repository index`() {
+    val snapshot = snapshot()
     val model = ReqwsToolWindowViewModel.from(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
-        snapshot = snapshot(),
+        snapshot = snapshot,
+        lastAppliedDigest = snapshot.digestSha256,
+        validatedProjectionDigest = snapshot.digestSha256,
         vcsInspection = VcsRootInspection(
           repositoryStatuses = emptyList(),
           workspaceDiagnostics = emptyList(),

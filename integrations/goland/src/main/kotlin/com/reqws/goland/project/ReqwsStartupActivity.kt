@@ -25,7 +25,7 @@ internal class ReqwsStartupActivity(
     if (ReqwsProjectDetector.projectRoot(project) != null) {
       val service = serviceForProject(project)
       bindAvailability(project, service)
-      service.refreshAutomatically()
+      service.refreshOnStartup()
     }
   }
 }

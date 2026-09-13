@@ -1,22 +1,136 @@
 package com.reqws.goland.watch
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
-import com.intellij.util.messages.SimpleMessageBusConnection
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.diagnostics.SyncTraceField
 import com.reqws.goland.sync.DebounceWaiter
 import com.reqws.goland.sync.DebouncedAction
 import com.reqws.goland.sync.LatestDebouncer
 import com.reqws.goland.sync.ManifestVfsEventFilter
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 
 internal fun interface ManifestSyncRequest {
   /** Must enqueue the shared sync pipeline without performing blocking work in this callback. */
   fun requestSync()
+}
+
+internal fun interface ManifestNativeWatch : AutoCloseable {
+  override fun close()
+}
+
+internal fun interface ManifestNativeWatchRegistrar {
+  fun watch(directory: Path): ManifestNativeWatch
+}
+
+internal fun interface ManifestVfsRefresh {
+  fun refresh(path: Path)
+}
+
+internal fun interface ManifestVfsRefreshFactory {
+  fun create(manifestPath: Path): ManifestVfsRefresh
+}
+
+internal fun manifestWatcherFailureLogMessage(failure: Throwable): String =
+  "ReqWS manifest watcher refresh failed; automatic refresh will retry " +
+    "(code=MANIFEST_WATCH_REFRESH_FAILED, type=${failure::class.java.name})."
+
+internal interface ManifestVfsEventConnection : AutoCloseable {
+  fun subscribe(listener: BulkFileListener)
+
+  override fun close()
+}
+
+internal fun interface ManifestVfsEventConnector {
+  fun connect(project: Project, coroutineScope: CoroutineScope): ManifestVfsEventConnection
+}
+
+private object LocalManifestNativeWatchRegistrar : ManifestNativeWatchRegistrar {
+  override fun watch(directory: Path): ManifestNativeWatch {
+    val fileSystem = LocalFileSystem.getInstance()
+    val request = requireNotNull(fileSystem.addRootToWatch(directory.toString(), false)) {
+      "Unable to register the ReqWS manifest directory with the local filesystem watcher."
+    }
+    return ManifestNativeWatch { fileSystem.removeWatchedRoot(request) }
+  }
+}
+
+private object ProjectManifestVfsEventConnector : ManifestVfsEventConnector {
+  override fun connect(
+    project: Project,
+    coroutineScope: CoroutineScope,
+  ): ManifestVfsEventConnection {
+    val connection = project.messageBus.connect(coroutineScope)
+    return object : ManifestVfsEventConnection {
+      override fun subscribe(listener: BulkFileListener) {
+        connection.subscribe(VirtualFileManager.VFS_CHANGES, listener)
+      }
+
+      override fun close() {
+        connection.disconnect()
+      }
+    }
+  }
+}
+
+private class LocalManifestVfsRefresh(
+  private val manifestPath: Path,
+) : ManifestVfsRefresh {
+  private val fileSystem = LocalFileSystem.getInstance()
+  private val manifestDirectory = requireNotNull(manifestPath.parent)
+  // Watcher construction runs on the shared refresh pipeline and must not synchronously wait for
+  // an IDE VFS refresh. The lifecycle-owned pump performs the first active refresh on its tick.
+  private var manifestFile = fileSystem.findFileByNioFile(manifestPath)
+  private var manifestDirectoryFile = fileSystem.findFileByNioFile(manifestDirectory)
+
+  override fun refresh(path: Path) {
+    check(path == manifestPath) { "The ReqWS VFS refresh target changed unexpectedly." }
+    manifestFile?.refresh(false, false)
+    manifestDirectoryFile?.refresh(false, false)
+    manifestDirectoryFile = fileSystem.refreshAndFindFileByNioFile(manifestDirectory)
+    manifestFile = fileSystem.refreshAndFindFileByNioFile(manifestPath)
+  }
+}
+
+private object LocalManifestVfsRefreshFactory : ManifestVfsRefreshFactory {
+  override fun create(manifestPath: Path): ManifestVfsRefresh =
+    LocalManifestVfsRefresh(manifestPath)
+}
+
+/** Runs every cleanup exactly once and retains later failures as suppressed exceptions. */
+private fun cleanupResources(
+  primaryFailure: Throwable? = null,
+  vararg cleanups: () -> Unit,
+): Throwable? {
+  var firstFailure = primaryFailure
+  cleanups.forEach { cleanup ->
+    try {
+      cleanup()
+    } catch (cleanupFailure: Throwable) {
+      val currentFailure = firstFailure
+      if (currentFailure == null) {
+        firstFailure = cleanupFailure
+      } else if (currentFailure !== cleanupFailure) {
+        currentFailure.addSuppressed(cleanupFailure)
+      }
+    }
+  }
+  return firstFailure
 }
 
 /**
@@ -31,9 +145,19 @@ internal class ManifestVfsWatcher(
   coroutineScope: CoroutineScope,
   private val syncRequest: ManifestSyncRequest,
   debounceWaiter: DebounceWaiter? = null,
-  onFailure: (Throwable) -> Unit = {},
+  private val onFailure: (Throwable) -> Unit = { failure ->
+    // Throwable messages and stack frames may contain full workspace/home paths. The default log
+    // carries only a stable code and exception type; tests may still inject onFailure directly.
+    LOG.warn(manifestWatcherFailureLogMessage(failure))
+  },
+  nativeWatchRegistrar: ManifestNativeWatchRegistrar = LocalManifestNativeWatchRegistrar,
+  refreshWaiter: DebounceWaiter? = null,
+  vfsRefreshFactory: ManifestVfsRefreshFactory = LocalManifestVfsRefreshFactory,
+  vfsEventConnector: ManifestVfsEventConnector = ProjectManifestVfsEventConnector,
+  private val trace: ReqwsSyncTrace = project.service(),
 ) : Disposable {
   private val disposed = AtomicBoolean(false)
+  private val refreshFailureReported = AtomicBoolean(false)
   private val callbackLock = Any()
   private val filter = ManifestVfsEventFilter(manifestPath)
   private val debouncer = LatestDebouncer(
@@ -42,27 +166,112 @@ internal class ManifestVfsWatcher(
     action = DebouncedAction<Unit> { dispatchSyncRequest() },
     onFailure = onFailure,
   )
-  private val connection: SimpleMessageBusConnection = project.messageBus
-    .connect(coroutineScope)
-    .also { connection ->
-      connection.subscribe(
-        VirtualFileManager.VFS_CHANGES,
+  private val nativeWatch: ManifestNativeWatch
+  private val connection: ManifestVfsEventConnection
+  private val refreshJob: Job
+
+  init {
+    var pendingNativeWatch: ManifestNativeWatch? = null
+    var pendingConnection: ManifestVfsEventConnection? = null
+    var pendingRefreshJob: Job? = null
+    try {
+      val installedNativeWatch = nativeWatchRegistrar.watch(
+        requireNotNull(manifestPath.toAbsolutePath().normalize().parent) {
+          "The ReqWS manifest path must have a parent directory."
+        },
+      )
+      pendingNativeWatch = installedNativeWatch
+
+      val installedConnection = vfsEventConnector.connect(project, coroutineScope)
+      pendingConnection = installedConnection
+      installedConnection.subscribe(
         object : BulkFileListener {
           override fun after(events: List<VFileEvent>) {
             handleAfterEvents(events)
           }
         },
       )
+
+      val effectiveVfsRefresh = vfsRefreshFactory.create(manifestPath)
+      val waiter = refreshWaiter ?: DebounceWaiter { kotlinx.coroutines.delay(it) }
+      val installedRefreshJob = coroutineScope.launch(Dispatchers.IO) {
+        while (!disposed.get()) {
+          waiter.await(VFS_REFRESH_INTERVAL_MILLIS)
+          currentCoroutineContext().ensureActive()
+          if (disposed.get()) return@launch
+          val spanId = trace.nextSpanId()
+          val started = trace.nanoTime()
+          var outcome = WatchRefreshOutcome.ABORTED
+          if (trace.enabled) {
+            trace.record(
+              SyncTraceEvent.WATCH_REFRESH_START,
+              SyncTraceField.SPAN_ID(spanId),
+              SyncTraceField.TARGET_SCOPE(WatchRefreshTarget.FIXED_MANIFEST_AND_PARENT),
+            )
+          }
+          try {
+            effectiveVfsRefresh.refresh(manifestPath)
+            refreshFailureReported.set(false)
+            outcome = WatchRefreshOutcome.COMPLETED
+          } catch (failure: CancellationException) {
+            outcome = WatchRefreshOutcome.CANCELLED
+            throw failure
+          } catch (failure: Exception) {
+            outcome = WatchRefreshOutcome.FAILED
+            if (refreshFailureReported.compareAndSet(false, true)) {
+              notifyFailure(failure)
+            }
+          } finally {
+            if (trace.enabled) {
+              trace.record(
+                SyncTraceEvent.WATCH_REFRESH_END,
+                SyncTraceField.SPAN_ID(spanId),
+                SyncTraceField.OUTCOME(outcome),
+                SyncTraceField.ELAPSED_NANOS(trace.elapsedNanos(started)),
+              )
+            }
+          }
+        }
+      }
+      pendingRefreshJob = installedRefreshJob
+
+      nativeWatch = installedNativeWatch
+      connection = installedConnection
+      refreshJob = installedRefreshJob
+      if (trace.enabled) trace.record(SyncTraceEvent.WATCHER_STARTED)
+    } catch (failure: Throwable) {
+      cleanupResources(
+        failure,
+        { pendingRefreshJob?.cancel() },
+        { pendingConnection?.close() },
+        { pendingNativeWatch?.close() },
+        { debouncer.close() },
+      )
+      throw failure
     }
+  }
 
   val isDisposed: Boolean
     get() = disposed.get()
 
   private fun handleAfterEvents(events: List<VFileEvent>) {
     if (disposed.get()) return
-    val manifestMayHaveChanged = events.asSequence()
-      .mapNotNull(PlatformVfsEventTranslator::translate)
-      .any(filter::accepts)
+    val manifestMayHaveChanged = if (trace.enabled) {
+      val matchedCount = events.asSequence()
+        .mapNotNull(PlatformVfsEventTranslator::translate)
+        .count(filter::accepts)
+      trace.record(
+        SyncTraceEvent.VFS_BATCH,
+        SyncTraceField.RECEIVED_COUNT(events.size),
+        SyncTraceField.MATCHED_COUNT(matchedCount),
+      )
+      matchedCount > 0
+    } else {
+      // Normal operation retains the original first-match short circuit.
+      events.asSequence()
+        .mapNotNull(PlatformVfsEventTranslator::translate)
+        .any(filter::accepts)
+    }
     if (manifestMayHaveChanged) {
       debouncer.submit(Unit)
     }
@@ -71,16 +280,56 @@ internal class ManifestVfsWatcher(
   private fun dispatchSyncRequest() {
     synchronized(callbackLock) {
       if (!disposed.get()) {
+        LOG.info("ReqWS manifest change detected; scheduling automatic synchronization.")
+        if (trace.enabled) trace.record(SyncTraceEvent.WATCH_DISPATCH)
         syncRequest.requestSync()
       }
     }
   }
 
-  override fun dispose() {
-    synchronized(callbackLock) {
-      if (!disposed.compareAndSet(false, true)) return
-      debouncer.close()
+  private fun notifyFailure(failure: Throwable) {
+    try {
+      onFailure(failure)
+    } catch (_: Exception) {
+      // A reporting failure must not terminate future targeted refreshes.
     }
-    connection.disconnect()
   }
+
+  override fun dispose() {
+    val debounceFailure = synchronized(callbackLock) {
+      if (!disposed.compareAndSet(false, true)) return
+      cleanupResources(null, { debouncer.close() })
+    }
+    val failure = cleanupResources(
+      debounceFailure,
+      { refreshJob.cancel() },
+      { connection.close() },
+      { nativeWatch.close() },
+    )
+    if (trace.enabled) {
+      trace.record(
+        SyncTraceEvent.WATCHER_DISPOSED,
+        SyncTraceField.OUTCOME(
+          if (failure == null) WatchRefreshOutcome.COMPLETED else WatchRefreshOutcome.FAILED,
+        ),
+      )
+    }
+    failure?.let { throw it }
+  }
+
+  internal companion object {
+    const val VFS_REFRESH_INTERVAL_MILLIS = 1_000L
+    val LOG: Logger = Logger.getInstance(ManifestVfsWatcher::class.java)
+  }
+}
+
+private enum class WatchRefreshTarget {
+  FIXED_MANIFEST_AND_PARENT,
+}
+
+private enum class WatchRefreshOutcome {
+  COMPLETED,
+  CANCELLED,
+  FAILED,
+  ABORTED,
 }

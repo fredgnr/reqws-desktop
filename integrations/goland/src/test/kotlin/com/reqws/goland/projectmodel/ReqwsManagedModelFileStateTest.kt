@@ -133,6 +133,36 @@ class ReqwsManagedModelFileStateTest {
   }
 
   @Test
+  fun `treats only a never-observed missing idea directory as initial metadata readiness`() {
+    val root = temporaryFolder.newFolder("missing-idea").toPath().toRealPath()
+    val binding = managedModelStateBinding(WORKSPACE_ID, root)
+    val observation = ProjectMetadataObservation()
+    val repository = VerifiedManagedModelStateRepository(
+      workspaceRoot = root,
+      projectMetadataObservation = observation,
+    )
+
+    val initialFailure = assertThrows(ProjectModelApplyException::class.java) {
+      repository.read(binding)
+    }
+
+    assertEquals(ProjectModelErrorCode.PROJECT_METADATA_NOT_READY, initialFailure.code)
+    assertFalse(observation.hasObservedRealDirectory())
+    assertFalse(Files.exists(root.resolve(".idea"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+
+    Files.createDirectory(root.resolve(".idea"))
+    assertEquals(null, repository.read(binding))
+    assertTrue(observation.hasObservedRealDirectory())
+    Files.delete(root.resolve(".idea"))
+
+    val laterFailure = assertThrows(ProjectModelApplyException::class.java) {
+      repository.read(binding)
+    }
+
+    assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, laterFailure.code)
+  }
+
+  @Test
   fun `rejects a symlinked idea directory`() {
     val root = temporaryFolder.newFolder("symlink-root").toPath().toRealPath()
     val outside = temporaryFolder.newFolder("outside-idea").toPath().toRealPath()

@@ -12,10 +12,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.image.BufferedImage
 import java.awt.event.ActionListener
 import javax.swing.JButton
 import javax.swing.DefaultListModel
 import javax.swing.JComponent
+import javax.swing.JToolTip
+import javax.swing.SwingUtilities
+import javax.swing.plaf.basic.BasicHTML
+import javax.swing.text.ElementIterator
+import javax.swing.text.StyleConstants
+import javax.swing.text.View
+import javax.swing.text.html.HTML
+import com.intellij.util.ui.JBUI
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ScrollPaneConstants
@@ -23,6 +32,51 @@ import javax.swing.border.CompoundBorder
 import javax.swing.border.EmptyBorder
 
 class ReqwsToolWindowPanelTest {
+  @Test
+  fun `long unbroken tooltips wrap within a bounded real Swing layout without losing text`() {
+    SwingUtilities.invokeAndWait {
+      listOf(
+        "UI Acceptance Workspace " + "W".repeat(156),
+        "B".repeat(180),
+        "R".repeat(163),
+        "W".repeat(1024),
+      ).forEach { value ->
+        val tooltip = laidOutTooltip(requireNotNull(safeTextTooltip(value)))
+        assertEquals(value, renderedTooltipText(tooltip.tipText))
+        assertTrue(tooltip.preferredSize.width <= JBUI.scale(320) + 12)
+        assertTrue(tooltip.preferredSize.height > tooltip.getFontMetrics(tooltip.font).height * 2)
+      }
+    }
+  }
+
+  @Test
+  fun `wrapped tooltips preserve literal markup user spaces and whole Unicode graphemes`() {
+    SwingUtilities.invokeAndWait {
+      val value = "  " + "汉字😀e\u0301👩‍💻🇨🇳 <html><img src='x'>&\"'  ".repeat(12)
+      val html = requireNotNull(safeTextTooltip(value))
+      val tooltip = laidOutTooltip(html)
+      assertFalse(html.contains("<img"))
+      assertEquals(value, renderedTooltipText(html))
+      assertTrue(tooltip.preferredSize.width <= JBUI.scale(320) + 12)
+      val document = (tooltip.getClientProperty(BasicHTML.propertyKey) as View).document
+      val iterator = ElementIterator(document)
+      var element = iterator.next()
+      var charactersBeforeBreak = 0
+      val graphemeBoundaries = Regex("\\X").findAll(value).map { it.range.last + 1 }.toSet()
+      while (element != null) {
+        val tag = element.attributes.getAttribute(StyleConstants.NameAttribute)
+        if (element.isLeaf && isInHtmlBody(element)) {
+          if (tag == HTML.Tag.CONTENT) {
+            charactersBeforeBreak += minOf(element.endOffset, document.length) - element.startOffset
+          } else if (tag == HTML.Tag.BR) {
+            assertTrue(charactersBeforeBreak in graphemeBoundaries)
+          }
+        }
+        element = iterator.next()
+      }
+    }
+  }
+
   @Test
   fun `summary and repository groups use the shared card treatment`() {
     val summaryContent = JPanel()
@@ -87,7 +141,7 @@ class ReqwsToolWindowPanelTest {
     label.setAccessibleManifestValue("field.workspace", value)
 
     assertEquals(0, label.minimumSize.width)
-    assertTrue(label.toolTipText.contains(value))
+    assertEquals(value, renderedTooltipText(label.toolTipText))
     assertTrue(label.accessibleContext.accessibleName.contains(value))
     assertEquals(value, label.accessibleContext.accessibleDescription)
   }
@@ -103,6 +157,92 @@ class ReqwsToolWindowPanelTest {
 
     assertEquals(0, status.minimumSize.width)
     assertEquals(0, details.minimumSize.width)
+  }
+
+  @Test
+  fun `copy feedback preserves failure details and their accessible text`() {
+    listOf(
+      "MANIFEST_INVALID_JSON · ${ReqwsBundle.message("message.preservedModel")}",
+      "PROJECT_CONTENT_NOT_CONVERGED · ${ReqwsBundle.message("message.projectFileIndexNotConverged")}",
+      "PROJECT_CONTENT_NOT_CONVERGED · ${ReqwsBundle.message("message.goModulesRegistryNotConverged")}",
+    ).forEach { failureDetails ->
+      val summary = ReqwsDiagnosticsSummary()
+      summary.updateDetails(failureDetails)
+
+      summary.showCopyFeedback()
+
+      val labels = summary.components.filterIsInstance<JBLabel>().filter { it.isVisible }
+      val feedback = ReqwsBundle.message("message.diagnosticsCopied")
+      assertEquals(listOf(failureDetails, feedback), labels.map { it.text })
+      labels.forEach { label ->
+        assertEquals(label.text, label.accessibleContext.accessibleName)
+        assertEquals(label.text, label.accessibleContext.accessibleDescription)
+        assertEquals(label.text, renderedTooltipText(label.toolTipText))
+      }
+    }
+  }
+
+  @Test
+  fun `repeated copy feedback remains a single separate line`() {
+    val summary = ReqwsDiagnosticsSummary()
+    summary.updateDetails("PROJECT_MODEL_APPLY_FAILED")
+
+    repeat(3) { summary.showCopyFeedback() }
+
+    val labels = summary.components.filterIsInstance<JBLabel>().filter { it.isVisible }
+    assertEquals(2, summary.componentCount)
+    assertEquals(
+      listOf("PROJECT_MODEL_APPLY_FAILED", ReqwsBundle.message("message.diagnosticsCopied")),
+      labels.map { it.text },
+    )
+  }
+
+  @Test
+  fun `new state details clear previous copy feedback and accessible hints`() {
+    val summary = ReqwsDiagnosticsSummary()
+    summary.updateDetails("MANIFEST_INVALID_JSON")
+    summary.showCopyFeedback()
+    val feedbackLabel = summary.components.filterIsInstance<JBLabel>().single {
+      it.text == ReqwsBundle.message("message.diagnosticsCopied")
+    }
+    val currentDetails = ReqwsBundle.message("message.currentDigest", "0123456789ab")
+
+    summary.updateDetails(currentDetails)
+
+    val visibleLabels = summary.components.filterIsInstance<JBLabel>().filter { it.isVisible }
+    assertEquals(listOf(currentDetails), visibleLabels.map { it.text })
+    assertFalse(feedbackLabel.isVisible)
+    assertNull(feedbackLabel.text)
+    assertNull(feedbackLabel.toolTipText)
+    assertNull(feedbackLabel.accessibleContext.accessibleDescription)
+  }
+
+  @Test
+  fun `diagnostics and copy feedback fit a narrow summary without losing complete text`() {
+    val failureDetails = "PROJECT_CONTENT_NOT_CONVERGED · " +
+      ReqwsBundle.message("message.goModulesRegistryNotConverged").repeat(8)
+    val summary = ReqwsDiagnosticsSummary()
+    summary.updateDetails(failureDetails)
+    summary.showCopyFeedback()
+
+    summary.setSize(PADDED_NARROW_BODY_WIDTH, summary.preferredSize.height)
+    summary.doLayout()
+
+    val labels = summary.components.filterIsInstance<JBLabel>()
+    assertEquals(0, summary.minimumSize.width)
+    labels.forEach { label ->
+      assertEquals(0, label.minimumSize.width)
+      assertTrue(label.x >= 0)
+      assertTrue(label.x + label.width <= summary.width)
+      assertTrue(label.y >= 0)
+      assertTrue(label.y + label.height <= summary.height)
+      assertTrue(label.getClientProperty("html.disable") == true)
+      assertFalse(label.isFocusable)
+      assertEquals(label.text, label.accessibleContext.accessibleDescription)
+      assertEquals(label.text, renderedTooltipText(label.toolTipText))
+    }
+    assertTrue(labels[0].y + labels[0].height < labels[1].y)
+    assertEquals(failureDetails, labels[0].text)
   }
 
   @Test
@@ -357,5 +497,46 @@ class ReqwsToolWindowPanelTest {
   private companion object {
     const val NARROW_TOOL_WINDOW_WIDTH = 280
     const val PADDED_NARROW_BODY_WIDTH = 256
+  }
+}
+
+private fun laidOutTooltip(html: String): JToolTip = JToolTip().apply {
+  tipText = html
+  setSize(preferredSize)
+  doLayout()
+  val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+  val graphics = image.createGraphics()
+  try {
+    paint(graphics)
+  } finally {
+    graphics.dispose()
+  }
+}
+
+private fun isInHtmlBody(element: javax.swing.text.Element): Boolean {
+  var parent = element.parentElement
+  while (parent != null) {
+    if (parent.attributes.getAttribute(StyleConstants.NameAttribute) == HTML.Tag.BODY) return true
+    parent = parent.parentElement
+  }
+  return false
+}
+
+/** Only BR leaves and the synthetic head newline are omitted; user text is not trimmed. */
+private fun renderedTooltipText(html: String): String {
+  val tooltip = laidOutTooltip(html)
+  val document = (tooltip.getClientProperty(BasicHTML.propertyKey) as View).document
+  val iterator = ElementIterator(document)
+  return buildString {
+    var element = iterator.next()
+    while (element != null) {
+      if (element.isLeaf && isInHtmlBody(element) &&
+        element.attributes.getAttribute(StyleConstants.NameAttribute) == HTML.Tag.CONTENT
+      ) {
+        val end = minOf(element.endOffset, document.length)
+        append(document.getText(element.startOffset, end - element.startOffset))
+      }
+      element = iterator.next()
+    }
   }
 }

@@ -55,7 +55,10 @@ export function WorkspaceDetailDrawer({
   const availableRepositories = repositories.filter((repository) => (
     !workspace.repositories.some((item) => item.catalogRepositoryId === repository.id)
   ));
-  const [repositoryId, setRepositoryId] = useState(availableRepositories[0]?.id ?? '');
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
+  const repositoryId = availableRepositories.some((repository) => repository.id === selectedRepositoryId)
+    ? selectedRepositoryId
+    : availableRepositories[0]?.id ?? '';
   const ready = workspace.status === 'ready';
   const vscodeAvailable = availability?.vscode.available ?? false;
   const cursorAvailable = availability?.cursor.available ?? false;
@@ -176,12 +179,12 @@ export function WorkspaceDetailDrawer({
         </div>
         <div className="add-inline">
           <label className="sr-only" htmlFor="add-workspace-repository">{t('workspaceDetail.addRepository.label')}</label>
-          <select className="field-select" disabled={busy || availableRepositories.length === 0} id="add-workspace-repository" onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
+          <select className="field-select" disabled={busy || availableRepositories.length === 0} id="add-workspace-repository" onChange={(event) => setSelectedRepositoryId(event.target.value)} value={repositoryId}>
             {availableRepositories.length > 0
               ? availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.defaultBranch}</option>)
               : <option value="">{t('workspaceDetail.addRepository.empty')}</option>}
           </select>
-          <button className="button" disabled={busy || !repositoryId || !gitAvailable} onClick={() => onAddRepository(repositoryId)} title={gitUnavailable ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
+          <button className="button" disabled={busy || !repositoryId || !gitAvailable} onClick={() => { if (repositoryId) onAddRepository(repositoryId); }} title={gitUnavailable ? t('common.gitNotFound') : undefined} type="button">＋ {t('common.add')}</button>
         </div>
 
         <div className="danger-zone">

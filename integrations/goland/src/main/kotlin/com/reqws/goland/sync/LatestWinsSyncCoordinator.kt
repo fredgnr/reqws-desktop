@@ -1,6 +1,9 @@
 package com.reqws.goland.sync
 
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.diagnostics.SyncTraceField
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -16,6 +19,8 @@ import kotlinx.coroutines.launch
 
 internal enum class SyncTrigger {
   AUTOMATIC,
+  PROJECT_MODEL_FOLLOW_UP,
+  PROJECT_MODEL_CHANGE,
   TRUST_TRANSITION,
   MANUAL,
 }
@@ -23,22 +28,38 @@ internal enum class SyncTrigger {
 internal val SyncTrigger.requiresReconciliation: Boolean
   get() = this != SyncTrigger.AUTOMATIC
 
-/** Keeps explicit user intent ahead of an automatic trust-transition replay. */
+/** A verify-only language follow-up applies once but must not leak into a later read/digest. */
+private val SyncTrigger.retainsCoordinatorReconcileIntent: Boolean
+  get() = requiresReconciliation && this != SyncTrigger.PROJECT_MODEL_FOLLOW_UP
+
+private val SyncTrigger.reconciliationPriority: Int
+  get() = when (this) {
+    SyncTrigger.AUTOMATIC -> 0
+    SyncTrigger.PROJECT_MODEL_FOLLOW_UP -> 1
+    SyncTrigger.PROJECT_MODEL_CHANGE -> 2
+    SyncTrigger.TRUST_TRANSITION -> 3
+    SyncTrigger.MANUAL -> 4
+  }
+
+/** Retains the strongest pending reconciliation intent while newer reads replace its bytes. */
 internal fun mergeReconcileTrigger(
   current: SyncTrigger?,
   incoming: SyncTrigger,
 ): SyncTrigger? {
   if (!incoming.requiresReconciliation) return current
-  return if (current == SyncTrigger.MANUAL || incoming == SyncTrigger.MANUAL) {
-    SyncTrigger.MANUAL
+  if (current == null || !current.requiresReconciliation) return incoming
+  return if (incoming.reconciliationPriority > current.reconciliationPriority) {
+    incoming
   } else {
-    SyncTrigger.TRUST_TRANSITION
+    current
   }
 }
 
 internal data class SyncCandidate<T>(
   val digestSha256: String,
   val value: T,
+  val trigger: SyncTrigger = SyncTrigger.AUTOMATIC,
+  val sourceId: Long? = null,
 ) {
   init {
     require(digestSha256.isNotBlank()) { "A sync candidate digest must not be blank" }
@@ -54,23 +75,27 @@ internal sealed interface SyncCoordinatorEvent {
   val requestId: Long
   val trigger: SyncTrigger
   val digestSha256: String?
+  val sourceId: Long?
 
   data class Applying(
     override val requestId: Long,
     override val trigger: SyncTrigger,
     override val digestSha256: String,
+    override val sourceId: Long? = null,
   ) : SyncCoordinatorEvent
 
   data class Applied(
     override val requestId: Long,
     override val trigger: SyncTrigger,
     override val digestSha256: String,
+    override val sourceId: Long? = null,
   ) : SyncCoordinatorEvent
 
   data class NoOp(
     override val requestId: Long,
     override val trigger: SyncTrigger,
     override val digestSha256: String,
+    override val sourceId: Long? = null,
   ) : SyncCoordinatorEvent
 
   data class Cancelled(
@@ -78,6 +103,7 @@ internal sealed interface SyncCoordinatorEvent {
     override val trigger: SyncTrigger,
     override val digestSha256: String,
     val cause: Throwable,
+    override val sourceId: Long? = null,
   ) : SyncCoordinatorEvent
 
   data class Failed(
@@ -86,6 +112,7 @@ internal sealed interface SyncCoordinatorEvent {
     override val digestSha256: String?,
     val stage: SyncFailureStage,
     val cause: Throwable,
+    override val sourceId: Long? = null,
   ) : SyncCoordinatorEvent
 }
 
@@ -93,8 +120,20 @@ internal fun interface SyncCandidateApplier<T> {
   suspend fun apply(candidate: SyncCandidate<T>)
 }
 
+internal fun interface SyncCandidateCommitter<T> {
+  fun commit(candidate: SyncCandidate<T>)
+}
+
 internal fun interface SyncCoordinatorObserver {
   fun onEvent(event: SyncCoordinatorEvent)
+}
+
+private enum class CoordinatorTraceOutcome {
+  APPLIED,
+  CANCELLED,
+  FAILED,
+  ABORTED,
+  OBSERVER_CANCELLED_AFTER_COMMIT,
 }
 
 /**
@@ -109,7 +148,10 @@ internal class LatestWinsSyncCoordinator<T>(
   scope: CoroutineScope,
   initialAppliedDigest: String? = null,
   private val applier: SyncCandidateApplier<T>,
+  private val committer: SyncCandidateCommitter<T> = SyncCandidateCommitter {},
   private val observer: SyncCoordinatorObserver = SyncCoordinatorObserver {},
+  private val beforeApplyingNotification: (SyncCandidate<T>) -> Unit = {},
+  private val trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
 ) : AutoCloseable {
   private val closed = AtomicBoolean(false)
   private val nextRequestId = AtomicLong(0)
@@ -117,6 +159,7 @@ internal class LatestWinsSyncCoordinator<T>(
   private val submissionLock = Any()
   private var pendingSubmission: Submission<T>? = null
   private var pendingReconcileTrigger: SyncTrigger? = null
+  private var pendingFollowUpDigest: String? = null
   private val submissionSignal = Channel<Unit>(Channel.CONFLATED)
   private val worker: Job
 
@@ -127,7 +170,7 @@ internal class LatestWinsSyncCoordinator<T>(
     require(initialAppliedDigest == null || initialAppliedDigest.isNotBlank()) {
       "The initial applied digest must not be blank"
     }
-    worker = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+    worker = scope.launch(trace.workerContext(), start = CoroutineStart.UNDISPATCHED) {
       consumeSubmissions()
     }
     worker.invokeOnCompletion {
@@ -135,6 +178,7 @@ internal class LatestWinsSyncCoordinator<T>(
       synchronized(submissionLock) {
         pendingSubmission = null
         pendingReconcileTrigger = null
+        pendingFollowUpDigest = null
       }
       submissionSignal.close()
     }
@@ -172,17 +216,56 @@ internal class LatestWinsSyncCoordinator<T>(
 
   private fun submit(submission: Submission<T>): Boolean {
     if (closed.get() || !worker.isActive) return false
+    var replacedRequestId = 0L
+    var tracedSubmission = submission
     synchronized(submissionLock) {
       if (closed.get() || !worker.isActive) return false
-      pendingReconcileTrigger = mergeReconcileTrigger(
-        pendingReconcileTrigger,
-        submission.trigger,
-      )
-      pendingSubmission = submission.withTrigger(
-        pendingReconcileTrigger ?: submission.trigger,
+      if (trace.enabled) replacedRequestId = pendingSubmission?.requestId ?: 0L
+      if (submission.trigger.retainsCoordinatorReconcileIntent) {
+        pendingReconcileTrigger = mergeReconcileTrigger(
+          pendingReconcileTrigger,
+          submission.trigger,
+        )
+        pendingFollowUpDigest = null
+      }
+      val retainedTrigger = pendingReconcileTrigger
+      pendingSubmission = when (submission) {
+        is CandidateSubmission -> {
+          val digest = submission.candidate.digestSha256
+          val effectiveTrigger = when {
+            retainedTrigger != null -> retainedTrigger
+            submission.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP -> {
+              pendingFollowUpDigest = digest
+              SyncTrigger.PROJECT_MODEL_FOLLOW_UP
+            }
+            pendingFollowUpDigest == digest -> SyncTrigger.PROJECT_MODEL_FOLLOW_UP
+            else -> {
+              // A different manifest supersedes the verify-only event lineage and must retain its
+              // ordinary roots-notification permission.
+              pendingFollowUpDigest = null
+              submission.trigger
+            }
+          }
+          submission.withTrigger(effectiveTrigger)
+        }
+        is ReadFailureSubmission -> submission.withTrigger(
+          retainedTrigger ?: submission.trigger,
+        )
+      }
+      if (trace.enabled) tracedSubmission = requireNotNull(pendingSubmission)
+    }
+    val accepted = submissionSignal.trySend(Unit).isSuccess
+    if (trace.enabled) {
+      trace.record(
+        SyncTraceEvent.COORDINATOR_SUBMIT,
+        SyncTraceField.REQUEST_ID(tracedSubmission.requestId),
+        SyncTraceField.SOURCE_ID(tracedSubmission.traceSourceId),
+        SyncTraceField.TRIGGER(tracedSubmission.trigger),
+        SyncTraceField.REPLACED_REQUEST_ID(replacedRequestId),
+        SyncTraceField.ACCEPTED(accepted),
       )
     }
-    return submissionSignal.trySend(Unit).isSuccess
+    return accepted
   }
 
   private suspend fun consumeSubmissions() {
@@ -192,41 +275,78 @@ internal class LatestWinsSyncCoordinator<T>(
         val next = pendingSubmission ?: return@synchronized null
         pendingSubmission = null
         if (next is CandidateSubmission && next.trigger.requiresReconciliation) {
-          // Manual and trust-transition intents are consumed only when a valid candidate actually
-          // starts apply. A read failure keeps either intent sticky so the next valid automatic
-          // read still reconciles; MANUAL wins when both intents overlap.
+          // Forced intents are consumed only when a valid candidate actually starts apply. A read
+          // failure keeps the strongest intent sticky so the next valid automatic read still
+          // reconciles.
           pendingReconcileTrigger = null
+        }
+        if (
+          next is CandidateSubmission &&
+          next.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP &&
+          pendingFollowUpDigest == next.candidate.digestSha256
+        ) {
+          // The coordinator now owns the accepted verify-only lineage. Consume it only when the
+          // candidate actually leaves the pending slot and starts its bounded replay.
+          pendingFollowUpDigest = null
         }
         next
       } ?: continue
+      if (trace.enabled) {
+        trace.record(
+          SyncTraceEvent.COORDINATOR_DEQUEUE,
+          SyncTraceField.REQUEST_ID(submission.requestId),
+          SyncTraceField.SOURCE_ID(submission.traceSourceId),
+          SyncTraceField.TRIGGER(submission.trigger),
+        )
+      }
       when (submission) {
         is CandidateSubmission -> apply(submission)
-        is ReadFailureSubmission -> notifyObserver(
-          SyncCoordinatorEvent.Failed(
-            requestId = submission.requestId,
-            trigger = submission.trigger,
-            digestSha256 = submission.digestSha256,
-            stage = SyncFailureStage.READ,
-            cause = submission.cause,
-          ),
-        )
+        is ReadFailureSubmission -> {
+          if (trace.enabled) {
+            trace.record(
+              SyncTraceEvent.COORDINATOR_READ_FAILED,
+              SyncTraceField.REQUEST_ID(submission.requestId),
+              SyncTraceField.SOURCE_ID(0L),
+              SyncTraceField.TRIGGER(submission.trigger),
+            )
+          }
+          notifyObserver(
+            SyncCoordinatorEvent.Failed(
+              requestId = submission.requestId,
+              trigger = submission.trigger,
+              digestSha256 = submission.digestSha256,
+              stage = SyncFailureStage.READ,
+              cause = submission.cause,
+              sourceId = null,
+            ),
+          )
+        }
       }
     }
   }
 
   private suspend fun apply(submission: CandidateSubmission<T>) {
-    val candidate = submission.candidate
-    // A manual refresh or Safe Mode -> trusted transition is an explicit reconciliation request:
-    // the live project model may have drifted even when the manifest bytes are unchanged.
+    val candidate = submission.candidate.copy(trigger = submission.trigger)
+    // Manual refresh, Safe Mode -> trusted transition, and external project-model changes are
+    // explicit reconciliation requests: the live model may drift while manifest bytes stay fixed.
     if (
       !submission.trigger.requiresReconciliation &&
       candidate.digestSha256 == appliedDigest.get()
     ) {
+      if (trace.enabled) {
+        trace.record(
+          SyncTraceEvent.COORDINATOR_NO_OP,
+          SyncTraceField.REQUEST_ID(submission.requestId),
+          SyncTraceField.SOURCE_ID(candidate.sourceId ?: 0L),
+          SyncTraceField.TRIGGER(submission.trigger),
+        )
+      }
       notifyObserver(
         SyncCoordinatorEvent.NoOp(
           requestId = submission.requestId,
           trigger = submission.trigger,
           digestSha256 = candidate.digestSha256,
+          sourceId = candidate.sourceId,
         ),
       )
       return
@@ -236,30 +356,66 @@ internal class LatestWinsSyncCoordinator<T>(
     // no-op baseline before every replay so a later submission cannot accept a potentially
     // partial intermediate state, including after a manual same-digest reconciliation.
     appliedDigest.set(null)
+    beforeApplyingNotification(candidate)
     notifyObserver(
       SyncCoordinatorEvent.Applying(
         requestId = submission.requestId,
         trigger = submission.trigger,
         digestSha256 = candidate.digestSha256,
+        sourceId = candidate.sourceId,
       ),
     )
+    var traceStarted = false
+    var startedNanos = 0L
+    var committed = false
+    var traceOutcome = CoordinatorTraceOutcome.ABORTED
     try {
       currentCoroutineContext().ensureActive()
-      applier.apply(candidate)
+      if (trace.enabled) {
+        trace.withAttempt(submission.requestId, candidate.sourceId) {
+          startedNanos = trace.nanoTime()
+          traceStarted = true
+          trace.record(
+            SyncTraceEvent.COORDINATOR_APPLY_START,
+            SyncTraceField.TRIGGER(submission.trigger),
+          )
+          applier.apply(candidate)
+        }
+      } else {
+        applier.apply(candidate)
+      }
+      // This is the accepted-success linearization boundary. Cancellation observed before it
+      // prevents durable/in-memory digest advancement; cancellation arriving after the final gate
+      // is ordered after the synchronous commit and cannot turn the accepted apply into Cancelled.
       currentCoroutineContext().ensureActive()
+      committer.commit(candidate)
       appliedDigest.set(candidate.digestSha256)
+      committed = true
+      traceOutcome = CoordinatorTraceOutcome.APPLIED
       notifyObserver(
         SyncCoordinatorEvent.Applied(
           requestId = submission.requestId,
           trigger = submission.trigger,
           digestSha256 = candidate.digestSha256,
+          sourceId = candidate.sourceId,
         ),
       )
     } catch (exception: ProcessCanceledException) {
+      traceOutcome = if (committed) {
+        CoordinatorTraceOutcome.OBSERVER_CANCELLED_AFTER_COMMIT
+      } else {
+        CoordinatorTraceOutcome.CANCELLED
+      }
       notifySubmissionCancelled(submission, exception)
     } catch (exception: CancellationException) {
+      traceOutcome = if (committed) {
+        CoordinatorTraceOutcome.OBSERVER_CANCELLED_AFTER_COMMIT
+      } else {
+        CoordinatorTraceOutcome.CANCELLED
+      }
       notifySubmissionCancelled(submission, exception)
     } catch (exception: Exception) {
+      traceOutcome = CoordinatorTraceOutcome.FAILED
       notifyObserver(
         SyncCoordinatorEvent.Failed(
           requestId = submission.requestId,
@@ -267,8 +423,21 @@ internal class LatestWinsSyncCoordinator<T>(
           digestSha256 = candidate.digestSha256,
           stage = SyncFailureStage.APPLY,
           cause = exception,
+          sourceId = candidate.sourceId,
         ),
       )
+    } finally {
+      if (traceStarted) {
+        trace.record(
+          SyncTraceEvent.COORDINATOR_APPLY_END,
+          SyncTraceField.REQUEST_ID(submission.requestId),
+          SyncTraceField.SOURCE_ID(candidate.sourceId ?: 0L),
+          SyncTraceField.TRIGGER(submission.trigger),
+          SyncTraceField.OUTCOME(traceOutcome),
+          SyncTraceField.ACCEPTED(committed),
+          SyncTraceField.ELAPSED_NANOS(trace.elapsedNanos(startedNanos)),
+        )
+      }
     }
   }
 
@@ -289,6 +458,7 @@ internal class LatestWinsSyncCoordinator<T>(
         trigger = submission.trigger,
         digestSha256 = submission.candidate.digestSha256,
         cause = cause,
+        sourceId = submission.candidate.sourceId,
       ),
     )
   }
@@ -310,9 +480,11 @@ internal class LatestWinsSyncCoordinator<T>(
     synchronized(submissionLock) {
       pendingSubmission = null
       pendingReconcileTrigger = null
+      pendingFollowUpDigest = null
     }
     submissionSignal.close()
     worker.cancel(CancellationException("ReqWS sync coordinator disposed"))
+    if (trace.enabled) trace.record(SyncTraceEvent.COORDINATOR_CLOSED)
   }
 
   internal suspend fun awaitClosed(): Throwable? {
@@ -326,6 +498,12 @@ private sealed interface Submission<T> {
   val requestId: Long
   val trigger: SyncTrigger
 }
+
+private val Submission<*>.traceSourceId: Long
+  get() = when (this) {
+    is CandidateSubmission -> candidate.sourceId ?: 0L
+    is ReadFailureSubmission -> 0L
+  }
 
 private data class CandidateSubmission<T>(
   override val requestId: Long,

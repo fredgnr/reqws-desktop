@@ -3,6 +3,7 @@ package com.reqws.goland.projectmodel
 import com.intellij.ide.trustedProjects.TrustedProjects
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.platform.backend.workspace.WorkspaceModel
@@ -11,6 +12,9 @@ import com.intellij.platform.workspace.jps.entities.ModuleEntity
 import com.intellij.platform.workspace.jps.entities.ModuleId
 import com.intellij.platform.workspace.jps.entities.modifyContentRootEntity
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.diagnostics.SyncTraceField
 import com.reqws.goland.manifest.ManifestSnapshot
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
@@ -21,6 +25,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 
 private const val REQWS_METADATA_DIRECTORY = ".reqws"
 private const val REQWS_MARKER_DIRECTORY = ".goland-ownership"
@@ -34,10 +39,13 @@ private fun newMarkerToken(): String = ByteArray(16)
 enum class ProjectModelErrorCode {
   PROJECT_DISPOSED,
   UNTRUSTED_PROJECT,
+  PROJECT_METADATA_NOT_READY,
   INVALID_OWNERSHIP_STATE,
   AMBIGUOUS_WORKSPACE_ROOT,
   NESTED_CONTENT_ROOT_CONFLICT,
   OWNERSHIP_CONFLICT,
+  LIVE_FILE_INDEX_NOT_CONVERGED,
+  GO_MODULES_REGISTRY_NOT_CONVERGED,
   RETAINED_REPOSITORY_DISCOVERY_FAILED,
 }
 
@@ -63,10 +71,13 @@ class ReqwsProjectModelAdapter(
   private val project: Project,
 ) {
   private val firstModelSnapshot = AtomicBoolean(true)
+  private val projectMetadataObservation = ProjectMetadataObservation()
+  private val trace = project.service<ReqwsSyncTrace>()
 
   suspend fun apply(
     snapshot: ManifestSnapshot,
     isServiceDisposed: () -> Boolean = { false },
+    allowRootsChangeNotification: Boolean = true,
   ): ProjectModelApplyResult {
     val isColdModelSnapshot = firstModelSnapshot.get()
     val result = WorkspaceExcludeModelAdapter(
@@ -75,7 +86,9 @@ class ReqwsProjectModelAdapter(
       isTrusted = { TrustedProjects.isProjectTrusted(project) },
       isProjectDisposed = { project.isDisposed || isServiceDisposed() },
       isColdModelSnapshot = isColdModelSnapshot,
-    ).apply(snapshot)
+      projectMetadataObservation = projectMetadataObservation,
+      trace = trace,
+    ).apply(snapshot, allowRootsChangeNotification)
     firstModelSnapshot.set(false)
     return result
   }
@@ -87,224 +100,301 @@ internal class WorkspaceExcludeModelAdapter(
   private val isTrusted: () -> Boolean,
   private val isProjectDisposed: () -> Boolean = { project.isDisposed },
   private val markerTokenFactory: () -> String = ::newMarkerToken,
+  private val projectMetadataObservation: ProjectMetadataObservation =
+    ProjectMetadataObservation(),
   private val stateRepositoryFactory: (Path) -> ManagedModelStateRepository =
-    { root -> VerifiedManagedModelStateRepository(root) },
+    { root ->
+      VerifiedManagedModelStateRepository(
+        workspaceRoot = root,
+        projectMetadataObservation = projectMetadataObservation,
+      )
+    },
   private val jvmEpoch: String = currentJvmEpoch(),
   private val isColdModelSnapshot: Boolean = false,
   private val afterDurableStatePersisted: () -> Unit = {},
   private val pathsReferToSameFile: (Path, Path) -> Boolean = { first, second ->
     Files.isSameFile(first, second)
   },
+  private val liveProjectionVerifier: ReqwsLiveProjectionVerifier =
+    PlatformReqwsLiveProjectionVerifier(project),
+  private val projectModelMutationGuard: ReqwsProjectModelMutationGuard = project.service(),
+  private val trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
+  private val goModulesProjection: ReqwsGoModulesProjection = ReqwsGoModulesSynchronizer(
+    project = project,
+    isProjectDisposed = isProjectDisposed,
+    isTrusted = isTrusted,
+    trace = trace,
+  ),
 ) {
-  suspend fun apply(snapshot: ManifestSnapshot): ProjectModelApplyResult {
-    ensureMutationAllowed()
+  suspend fun apply(
+    snapshot: ManifestSnapshot,
+    allowRootsChangeNotification: Boolean = true,
+  ): ProjectModelApplyResult {
+    val stages = if (trace.enabled) ProjectionStagesTrace(trace) else null
+    stages?.start(ProjectionTraceStage.MODEL)
+    try {
+      ensureMutationAllowed()
 
-    val binding = managedModelStateBinding(snapshot.manifest.id, snapshot.canonicalProjectRoot)
-    val stateRepository = stateRepositoryFactory(snapshot.canonicalProjectRoot)
-    val loadedOwnership = loadOwnership(snapshot, stateRepository, binding)
-    if (
-      !isColdModelSnapshot &&
-      !loadedOwnership.requiresInitialWrite &&
-      loadedOwnership.state.writerJvmEpoch != jvmEpoch
-    ) {
-      throw invalidState(
-        "The ReqWS managed-model state was replaced by another GoLand JVM during this session.",
-      )
-    }
-    val ownership = validatedOwnership(snapshot.canonicalProjectRoot, loadedOwnership.state)
-    ensureVirtualMarkerNamespace(snapshot.canonicalProjectRoot)
-    val currentActivePaths = currentActiveRepositoryPaths(snapshot)
-    val desiredRelativePaths = desiredExcludedPaths(snapshot, currentActivePaths.values)
-    val workspaceModel = WorkspaceModel.getInstance(project)
-    val urlManager = workspaceModel.getVirtualFileUrlManager()
-    val workspaceUrl = urlManager.fromPath(snapshot.canonicalProjectRoot.toString())
-    val plannedModelSnapshot = workspaceModel.currentSnapshot
-    val target = selectTarget(plannedModelSnapshot, workspaceUrl, ownership.targetModuleName)
-    val desiredUrls = desiredRelativePaths.associateWith { relative ->
-      urlManager.fromPath(resolveRelative(snapshot.canonicalProjectRoot, relative).toString())
-    }
-    val activeUrls = snapshot.repositories.associate { resolved ->
-      val activePath = currentActivePaths[resolved.repository.relativePath]
-        ?: resolveRelative(snapshot.canonicalProjectRoot, resolved.repository.relativePath)
-      resolved.repository.relativePath to urlManager.fromPath(activePath.toString())
-    }
-    val claimRelativePaths = ownership.managedClaims.keys +
-      ownership.recoveryClaims.map(ManagedExcludeOwnership::relativePath)
-    val claimTargetUrls = claimRelativePaths.distinct().associateWith { relative ->
-      urlManager.fromPath(resolveRelative(snapshot.canonicalProjectRoot, relative).toString())
-    }
-    fun claimsFor(tokens: Map<String, String>): Map<String, ManagedExcludeClaim> =
-      tokens.mapValues { (relative, markerToken) ->
-        ManagedExcludeClaim(
-          targetUrl = claimTargetUrls.getValue(relative).url,
-          markerToken = markerToken,
-          markerUrl = urlManager.fromPath(
-            markerPath(snapshot.canonicalProjectRoot, markerToken).toString(),
-          ).url,
+      val binding = managedModelStateBinding(snapshot.manifest.id, snapshot.canonicalProjectRoot)
+      val stateRepository = stateRepositoryFactory(snapshot.canonicalProjectRoot)
+      val loadedOwnership = withProjectMetadataReadinessClassification {
+        loadOwnership(snapshot, stateRepository, binding)
+      }
+      if (
+        !isColdModelSnapshot &&
+        !loadedOwnership.requiresInitialWrite &&
+        loadedOwnership.state.writerJvmEpoch != jvmEpoch
+      ) {
+        throw invalidState(
+          "The ReqWS managed-model state was replaced by another GoLand JVM during this session.",
         )
       }
-    val managedClaims = claimsFor(ownership.managedClaims)
-    val recoveryClaims = ownership.recoveryClaims.map { persisted ->
-      RecoveryExcludeClaim(
-        relativePath = persisted.relativePath,
-        claim = claimsFor(mapOf(persisted.relativePath to persisted.markerToken))
-          .getValue(persisted.relativePath),
-      )
-    }
-    val persistedTokens = ownership.managedClaims.values +
-      ownership.recoveryClaims.map(ManagedExcludeOwnership::markerToken)
-    val candidateTokens = candidateMarkerTokens(
-      desiredRelativePaths - ownership.managedClaims.keys,
-      persistedTokens.toSet(),
-    )
-    val markerUrlsByToken = (persistedTokens + candidateTokens.values)
-      .associateWith { markerToken ->
-        urlManager.fromPath(markerPath(snapshot.canonicalProjectRoot, markerToken).toString())
+      val ownership = validatedOwnership(snapshot.canonicalProjectRoot, loadedOwnership.state)
+      ensureVirtualMarkerNamespace(snapshot.canonicalProjectRoot)
+      val currentActivePaths = currentActiveRepositoryPaths(snapshot)
+      val desiredRelativePaths = desiredExcludedPaths(snapshot, currentActivePaths.values)
+      val workspaceModel = WorkspaceModel.getInstance(project)
+      val urlManager = workspaceModel.getVirtualFileUrlManager()
+      val workspaceUrl = urlManager.fromPath(snapshot.canonicalProjectRoot.toString())
+      val plannedModelSnapshot = workspaceModel.currentSnapshot
+      val target = selectTarget(plannedModelSnapshot, workspaceUrl, ownership.targetModuleName)
+      val desiredUrls = desiredRelativePaths.associateWith { relative ->
+        urlManager.fromPath(resolveRelative(snapshot.canonicalProjectRoot, relative).toString())
       }
-    val candidateMarkerUrls = candidateTokens.mapValues { (_, markerToken) ->
-      markerUrlsByToken.getValue(markerToken)
-    }
-    val candidateClaims = candidateTokens.mapValues { (relative, markerToken) ->
-      ManagedExcludeClaim(
-        targetUrl = desiredUrls.getValue(relative).url,
-        markerToken = markerToken,
-        markerUrl = candidateMarkerUrls.getValue(relative).url,
-      )
-    }
-    val ownershipProofUrls = buildList {
-      addAll(desiredUrls.values)
-      addAll(claimTargetUrls.values)
-      addAll(markerUrlsByToken.values)
-    }
-    ensureNoNestedContentRootConflict(plannedModelSnapshot, target, ownershipProofUrls)
-    val plannedModule = plannedModelSnapshot.resolve(ModuleId(target.moduleName))
-      ?: throw ownershipConflict("The target module disappeared during planning.")
-    val plannedContentRoot = plannedModule.contentRoots.singleOrNull { it.url.url == target.url.url }
-      ?: throw ownershipConflict("The target workspace Content Root changed during planning.")
-    val plannedExcludedUrls = plannedContentRoot.excludedUrls.map { entity -> entity.url.url }
-    val plan = ReqwsExcludePlanner.plan(
-      desiredUrls = desiredUrls.mapValues { it.value.url },
-      activeUrls = activeUrls.values.mapTo(mutableSetOf()) { it.url },
-      managedClaims = managedClaims,
-      recoveryClaims = recoveryClaims,
-      candidateClaims = candidateClaims,
-      currentExcludes = plannedExcludedUrls.map(::CurrentExclude),
-      markerNamespaceUrlPrefix = urlManager.fromPath(
-        snapshot.canonicalProjectRoot
-          .resolve(REQWS_METADATA_DIRECTORY)
-          .resolve(REQWS_MARKER_DIRECTORY)
-          .toString(),
-      ).url.removeSuffix("/") + "/",
-      canCompactRecoveryClaims = isColdModelSnapshot &&
-        ownership.writerJvmEpoch != jvmEpoch,
-      urlsEquivalent = ::urlsReferToSameFile,
-    )
-    val changesModel = plan.added.isNotEmpty() || plan.removed.isNotEmpty()
-    val expectedExcludedUrls = plannedExcludedUrls.filter { it !in plan.removableUrls } +
-      plan.added.flatMap { relative ->
-        val claim = plan.addedClaims.getValue(relative)
-        listOf(
-          desiredUrls.getValue(relative).url,
-          markerUrlsByToken.getValue(claim.markerToken).url,
-        )
+      val activeUrls = snapshot.repositories.associate { resolved ->
+        val activePath = currentActivePaths[resolved.repository.relativePath]
+          ?: resolveRelative(snapshot.canonicalProjectRoot, resolved.repository.relativePath)
+        resolved.repository.relativePath to urlManager.fromPath(activePath.toString())
       }
-    val nextManagedClaims = plan.nextOwnership.entries
-      .sortedBy(Map.Entry<String, String>::key)
-      .map { (relativePath, markerToken) -> DurableManagedClaim(relativePath, markerToken) }
-    val nextRecoveryClaims = plan.nextRecoveryClaims.map { claim ->
-      DurableManagedClaim(claim.relativePath, claim.markerToken)
-    }
-    val nextState = loadedOwnership.state.copy(
-      writerJvmEpoch = jvmEpoch,
-      targetModuleName = target.moduleName,
-      managedClaims = nextManagedClaims,
-      recoveryClaims = nextRecoveryClaims,
-    )
-    val ownershipChanged = loadedOwnership.requiresInitialWrite ||
-      ownership.targetModuleName != target.moduleName ||
-      ownership.writerJvmEpoch != jvmEpoch ||
-      ownership.managedClaims != plan.nextOwnership ||
-      ownership.recoveryClaims != plan.nextRecoveryClaims
-
-    val persistedState = if (changesModel || ownershipChanged) {
-      ensureMutationAllowed()
-      val persisted = stateRepository.write(
-        binding = binding,
-        expectedGeneration = loadedOwnership.expectedGeneration,
-        nextState = nextState,
-      )
-      ensureMutationAllowed()
-      ownershipState.replaceExternalMirror(
-        moduleName = target.moduleName,
-        managedClaims = persisted.managedClaims,
-        recoveryClaims = persisted.recoveryClaims,
-      )
-      afterDurableStatePersisted()
-      ensureMutationAllowed()
-      persisted
-    } else {
-      ensureMutationAllowed()
-      ownershipState.replaceExternalMirror(
-        moduleName = target.moduleName,
-        managedClaims = loadedOwnership.state.managedClaims,
-        recoveryClaims = loadedOwnership.state.recoveryClaims,
-      )
-      loadedOwnership.state
-    }
-
-    if (changesModel) {
-      ensureMutationAllowed()
-      workspaceModel.update("Synchronize ReqWS project excludes") { storage ->
-        ensureMutationAllowed()
-        val module = storage.resolve(ModuleId(target.moduleName))
-          ?: throw ownershipConflict("The target module disappeared during synchronization.")
-        val contentRoot = module.contentRoots.singleOrNull { it.url.url == target.url.url }
-          ?: throw ownershipConflict("The target workspace Content Root changed during synchronization.")
-        ensureNoNestedContentRootConflict(storage, target, ownershipProofUrls)
-        if (contentRoot.excludedUrls.map { entity -> entity.url.url } != plannedExcludedUrls) {
-          throw ownershipConflict(
-            "The target workspace excludes changed after the ReqWS intent was persisted.",
+      val claimRelativePaths = ownership.managedClaims.keys +
+        ownership.recoveryClaims.map(ManagedExcludeOwnership::relativePath)
+      val claimTargetUrls = claimRelativePaths.distinct().associateWith { relative ->
+        urlManager.fromPath(resolveRelative(snapshot.canonicalProjectRoot, relative).toString())
+      }
+      fun claimsFor(tokens: Map<String, String>): Map<String, ManagedExcludeClaim> =
+        tokens.mapValues { (relative, markerToken) ->
+          ManagedExcludeClaim(
+            targetUrl = claimTargetUrls.getValue(relative).url,
+            markerToken = markerToken,
+            markerUrl = urlManager.fromPath(
+              markerPath(snapshot.canonicalProjectRoot, markerToken).toString(),
+            ).url,
           )
         }
-        storage.modifyContentRootEntity(contentRoot) {
-          val keptEntities = excludedUrls.filter { it.url.url !in plan.removableUrls }
-          val desiredEntities = plan.added.flatMap { relative ->
-            val claim = plan.addedClaims.getValue(relative)
-            listOf(
-              ExcludeUrlEntity(desiredUrls.getValue(relative), contentRoot.entitySource),
-              ExcludeUrlEntity(
-                markerUrlsByToken.getValue(claim.markerToken),
-                contentRoot.entitySource,
-              ),
-            )
-          }
-          // Keep unrelated user entries byte-for-byte, including duplicates. The durable intent
-          // already revoked removed tokens and retained them as recovery-only claims.
-          ensureMutationAllowed()
-          excludedUrls = keptEntities + desiredEntities
-          ensureMutationAllowed()
+      val managedClaims = claimsFor(ownership.managedClaims)
+      val recoveryClaims = ownership.recoveryClaims.map { persisted ->
+        RecoveryExcludeClaim(
+          relativePath = persisted.relativePath,
+          claim = claimsFor(mapOf(persisted.relativePath to persisted.markerToken))
+            .getValue(persisted.relativePath),
+        )
+      }
+      val persistedTokens = ownership.managedClaims.values +
+        ownership.recoveryClaims.map(ManagedExcludeOwnership::markerToken)
+      val candidateTokens = candidateMarkerTokens(
+        desiredRelativePaths - ownership.managedClaims.keys,
+        persistedTokens.toSet(),
+      )
+      val markerUrlsByToken = (persistedTokens + candidateTokens.values)
+        .associateWith { markerToken ->
+          urlManager.fromPath(markerPath(snapshot.canonicalProjectRoot, markerToken).toString())
+        }
+      val candidateMarkerUrls = candidateTokens.mapValues { (_, markerToken) ->
+        markerUrlsByToken.getValue(markerToken)
+      }
+      val candidateClaims = candidateTokens.mapValues { (relative, markerToken) ->
+        ManagedExcludeClaim(
+          targetUrl = desiredUrls.getValue(relative).url,
+          markerToken = markerToken,
+          markerUrl = candidateMarkerUrls.getValue(relative).url,
+        )
+      }
+      val ownershipProofUrls = buildList {
+        addAll(desiredUrls.values)
+        addAll(claimTargetUrls.values)
+        addAll(markerUrlsByToken.values)
+      }
+      ensureNoNestedContentRootConflict(plannedModelSnapshot, target, ownershipProofUrls)
+      val plannedModule = plannedModelSnapshot.resolve(ModuleId(target.moduleName))
+        ?: throw ownershipConflict("The target module disappeared during planning.")
+      val plannedContentRoot = plannedModule.contentRoots.singleOrNull { it.url.url == target.url.url }
+        ?: throw ownershipConflict("The target workspace Content Root changed during planning.")
+      val plannedExcludedUrls = plannedContentRoot.excludedUrls.map { entity -> entity.url.url }
+      val plan = ReqwsExcludePlanner.plan(
+        desiredUrls = desiredUrls.mapValues { it.value.url },
+        activeUrls = activeUrls.values.mapTo(mutableSetOf()) { it.url },
+        managedClaims = managedClaims,
+        recoveryClaims = recoveryClaims,
+        candidateClaims = candidateClaims,
+        currentExcludes = plannedExcludedUrls.map(::CurrentExclude),
+        markerNamespaceUrlPrefix = urlManager.fromPath(
+          snapshot.canonicalProjectRoot
+            .resolve(REQWS_METADATA_DIRECTORY)
+            .resolve(REQWS_MARKER_DIRECTORY)
+            .toString(),
+        ).url.removeSuffix("/") + "/",
+        canCompactRecoveryClaims = isColdModelSnapshot &&
+          ownership.writerJvmEpoch != jvmEpoch,
+        urlsEquivalent = ::urlsReferToSameFile,
+      )
+      val changesModel = plan.added.isNotEmpty() || plan.removed.isNotEmpty()
+      val expectedExcludedUrls = plannedExcludedUrls.filter { it !in plan.removableUrls } +
+        plan.added.flatMap { relative ->
+          val claim = plan.addedClaims.getValue(relative)
+          listOf(
+            desiredUrls.getValue(relative).url,
+            markerUrlsByToken.getValue(claim.markerToken).url,
+          )
+        }
+      val nextManagedClaims = plan.nextOwnership.entries
+        .sortedBy(Map.Entry<String, String>::key)
+        .map { (relativePath, markerToken) -> DurableManagedClaim(relativePath, markerToken) }
+      val nextRecoveryClaims = plan.nextRecoveryClaims.map { claim ->
+        DurableManagedClaim(claim.relativePath, claim.markerToken)
+      }
+      val nextState = loadedOwnership.state.copy(
+        writerJvmEpoch = jvmEpoch,
+        targetModuleName = target.moduleName,
+        managedClaims = nextManagedClaims,
+        recoveryClaims = nextRecoveryClaims,
+      )
+      val ownershipChanged = loadedOwnership.requiresInitialWrite ||
+        ownership.targetModuleName != target.moduleName ||
+        ownership.writerJvmEpoch != jvmEpoch ||
+        ownership.managedClaims != plan.nextOwnership ||
+        ownership.recoveryClaims != plan.nextRecoveryClaims
+
+      val persistedState = if (changesModel || ownershipChanged) {
+        ensureMutationAllowed()
+        val persisted = withProjectMetadataReadinessClassification {
+          stateRepository.write(
+            binding = binding,
+            expectedGeneration = loadedOwnership.expectedGeneration,
+            nextState = nextState,
+          )
         }
         ensureMutationAllowed()
+        ownershipState.replaceExternalMirror(
+          moduleName = target.moduleName,
+          managedClaims = persisted.managedClaims,
+          recoveryClaims = persisted.recoveryClaims,
+        )
+        afterDurableStatePersisted()
+        ensureMutationAllowed()
+        persisted
+      } else {
+        ensureMutationAllowed()
+        ownershipState.replaceExternalMirror(
+          moduleName = target.moduleName,
+          managedClaims = loadedOwnership.state.managedClaims,
+          recoveryClaims = loadedOwnership.state.recoveryClaims,
+        )
+        loadedOwnership.state
+      }
+
+      if (changesModel) {
+        ensureMutationAllowed()
+        projectModelMutationGuard.withSuspendingMutation {
+          workspaceModel.update("Synchronize ReqWS project excludes") { storage ->
+            ensureMutationAllowed()
+            val module = storage.resolve(ModuleId(target.moduleName))
+              ?: throw ownershipConflict("The target module disappeared during synchronization.")
+            val contentRoot = module.contentRoots.singleOrNull { it.url.url == target.url.url }
+              ?: throw ownershipConflict("The target workspace Content Root changed during synchronization.")
+            ensureNoNestedContentRootConflict(storage, target, ownershipProofUrls)
+            if (contentRoot.excludedUrls.map { entity -> entity.url.url } != plannedExcludedUrls) {
+              throw ownershipConflict(
+                "The target workspace excludes changed after the ReqWS intent was persisted.",
+              )
+            }
+            val removableEntities = contentRoot.excludedUrls.filter { entity ->
+              entity.url.url in plan.removableUrls
+            }
+            removableEntities.forEach { entity ->
+              ensureMutationAllowed()
+              if (!storage.removeEntity(entity)) {
+                throw ownershipConflict("A planned ReqWS exclude disappeared during synchronization.")
+              }
+            }
+            if (plan.added.isNotEmpty()) {
+              val updatedModule = storage.resolve(ModuleId(target.moduleName))
+                ?: throw ownershipConflict("The target module disappeared during synchronization.")
+              val updatedContentRoot = updatedModule.contentRoots.singleOrNull {
+                it.url.url == target.url.url
+              } ?: throw ownershipConflict(
+                "The target workspace Content Root changed during synchronization.",
+              )
+              storage.modifyContentRootEntity(updatedContentRoot) {
+                val desiredEntities = plan.added.flatMap { relative ->
+                  val claim = plan.addedClaims.getValue(relative)
+                  listOf(
+                    ExcludeUrlEntity(desiredUrls.getValue(relative), updatedContentRoot.entitySource),
+                    ExcludeUrlEntity(
+                      markerUrlsByToken.getValue(claim.markerToken),
+                      updatedContentRoot.entitySource,
+                    ),
+                  )
+                }
+                // Explicit child-entity removal above ensures the Workspace File Index receives
+                // removal events for reactivated repositories. Keep all unrelated entries untouched.
+                ensureMutationAllowed()
+                excludedUrls = excludedUrls + desiredEntities
+                ensureMutationAllowed()
+              }
+            }
+            ensureMutationAllowed()
+          }
+        }
+        ensureMutationAllowed()
+        requireExpectedModel(
+          workspaceModel = workspaceModel,
+          target = target,
+          ownershipProofUrls = ownershipProofUrls,
+          expectedExcludedUrls = expectedExcludedUrls,
+          changedMessage = "The target workspace excludes changed after ReqWS synchronization.",
+        )
       }
       ensureMutationAllowed()
-      requireExpectedModel(
-        workspaceModel = workspaceModel,
-        target = target,
-        ownershipProofUrls = ownershipProofUrls,
-        expectedExcludedUrls = expectedExcludedUrls,
-        changedMessage = "The target workspace excludes changed after ReqWS synchronization.",
+      stages?.finish(ProjectionTraceOutcome.SUCCESS)
+      stages?.start(ProjectionTraceStage.PFI)
+      liveProjectionVerifier.verify(
+        activeRepositoryPaths = currentActivePaths.values,
+        excludedPaths = desiredRelativePaths.map { relative ->
+          resolveRelative(snapshot.canonicalProjectRoot, relative)
+        },
       )
+      stages?.finish(ProjectionTraceOutcome.SUCCESS)
+      ensureMutationAllowed()
+      stages?.start(ProjectionTraceStage.REGISTRY)
+      goModulesProjection.synchronize(
+        moduleName = target.moduleName,
+        activeRepositoryPaths = currentActivePaths.values,
+        excludedPaths = desiredRelativePaths.map { relative ->
+          resolveRelative(snapshot.canonicalProjectRoot, relative)
+        },
+        allowRootsChangeNotification = allowRootsChangeNotification,
+      )
+      stages?.finish(ProjectionTraceOutcome.SUCCESS)
+      ensureMutationAllowed()
+      return ProjectModelApplyResult(
+        strategy = REQWS_MODEL_STRATEGY,
+        moduleName = target.moduleName,
+        managedExcludes = persistedState.managedClaims.mapTo(linkedSetOf()) { it.relativePath },
+        added = plan.added,
+        removed = plan.removed,
+        kept = plan.kept,
+        borrowed = plan.borrowed,
+        staleOwnership = plan.staleOwnership,
+      )
+    } catch (cancelled: ProcessCanceledException) {
+      stages?.finish(ProjectionTraceOutcome.CANCELLED)
+      throw cancelled
+    } catch (cancelled: CancellationException) {
+      stages?.finish(ProjectionTraceOutcome.CANCELLED)
+      throw cancelled
+    } finally {
+      stages?.finish(ProjectionTraceOutcome.FAILED)
     }
-    return ProjectModelApplyResult(
-      strategy = REQWS_MODEL_STRATEGY,
-      moduleName = target.moduleName,
-      managedExcludes = persistedState.managedClaims.mapTo(linkedSetOf()) { it.relativePath },
-      added = plan.added,
-      removed = plan.removed,
-      kept = plan.kept,
-      borrowed = plan.borrowed,
-      staleOwnership = plan.staleOwnership,
-    )
   }
 
   private fun loadOwnership(
@@ -344,6 +434,7 @@ internal class WorkspaceExcludeModelAdapter(
       }
       REQWS_MODEL_STATE_VERSION -> {
         if (
+          legacy.targetModuleName.isNotEmpty() ||
           legacy.managedExcludes.isNotEmpty() ||
           legacy.pendingAdds.isNotEmpty() ||
           legacy.pendingRemovals.isNotEmpty() ||
@@ -647,6 +738,24 @@ internal class WorkspaceExcludeModelAdapter(
   private fun invalidState(message: String, cause: Throwable? = null) =
     ProjectModelApplyException(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, message, cause)
 
+  private fun <T> withProjectMetadataReadinessClassification(action: () -> T): T = try {
+    action()
+  } catch (exception: ProjectModelApplyException) {
+    if (exception.code != ProjectModelErrorCode.PROJECT_METADATA_NOT_READY) throw exception
+    val ownership = ownershipState.ownership()
+    if (
+      isColdModelSnapshot &&
+      !projectMetadataObservation.hasObservedRealDirectory() &&
+      ownership.isPristineProjectMetadataState()
+    ) {
+      throw exception
+    }
+    throw invalidState(
+      "The GoLand project metadata directory disappeared after ownership state was established.",
+      exception,
+    )
+  }
+
   private fun ownershipConflict(message: String) =
     ProjectModelApplyException(ProjectModelErrorCode.OWNERSHIP_CONFLICT, message)
 
@@ -703,3 +812,54 @@ internal class WorkspaceExcludeModelAdapter(
     val recoveryClaims: List<ManagedExcludeOwnership>,
   )
 }
+
+private enum class ProjectionTraceStage {
+  MODEL,
+  PFI,
+  REGISTRY,
+}
+
+private enum class ProjectionTraceOutcome {
+  SUCCESS,
+  FAILED,
+  CANCELLED,
+}
+
+/** Tracks only the current stage so a failure never invents a later stage or a second ending. */
+private class ProjectionStagesTrace(private val trace: ReqwsSyncTrace) {
+  private var stage: ProjectionTraceStage? = null
+  private var spanId = 0L
+  private var startedAt = 0L
+
+  fun start(next: ProjectionTraceStage) {
+    stage = next
+    spanId = trace.nextSpanId()
+    startedAt = trace.nanoTime()
+    trace.record(
+      SyncTraceEvent.PROJECTION_STAGE_START,
+      SyncTraceField.SPAN_ID(spanId),
+      SyncTraceField.STAGE(next),
+    )
+  }
+
+  fun finish(outcome: ProjectionTraceOutcome) {
+    val completedStage = stage ?: return
+    stage = null
+    trace.record(
+      SyncTraceEvent.PROJECTION_STAGE_END,
+      SyncTraceField.SPAN_ID(spanId),
+      SyncTraceField.STAGE(completedStage),
+      SyncTraceField.OUTCOME(outcome),
+      SyncTraceField.ELAPSED_NANOS(trace.elapsedNanos(startedAt)),
+    )
+  }
+}
+
+private fun ManagedModelOwnership.isPristineProjectMetadataState(): Boolean =
+  stateVersion == REQWS_MODEL_STATE_VERSION &&
+    strategy == REQWS_MODEL_STRATEGY &&
+    targetModuleName.isEmpty() &&
+    managedExcludes.isEmpty() &&
+    pendingAdds.isEmpty() &&
+    pendingRemovals.isEmpty() &&
+    recoveryClaims.isEmpty()

@@ -12,9 +12,11 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal const val REQWS_MODEL_FILE_FORMAT_VERSION = 1
 internal const val REQWS_MODEL_STATE_FILE_NAME = "reqws-managed-project-model.json"
@@ -60,9 +62,21 @@ internal interface ManagedModelStateRepository {
   ): DurableManagedModelState
 }
 
+internal class ProjectMetadataObservation {
+  private val realDirectoryObserved = AtomicBoolean(false)
+
+  fun markRealDirectoryObserved() {
+    realDirectoryObserved.set(true)
+  }
+
+  fun hasObservedRealDirectory(): Boolean = realDirectoryObserved.get()
+}
+
 internal class VerifiedManagedModelStateRepository @JvmOverloads constructor(
   workspaceRoot: Path,
   operations: AtomicFileOperations = NioAtomicFileOperations,
+  private val projectMetadataObservation: ProjectMetadataObservation =
+    ProjectMetadataObservation(),
 ) : ManagedModelStateRepository {
   private val canonicalWorkspaceRoot = workspaceRoot.toAbsolutePath().normalize()
   private val ideaDirectory = canonicalWorkspaceRoot.resolve(".idea")
@@ -156,12 +170,27 @@ internal class VerifiedManagedModelStateRepository @JvmOverloads constructor(
         BasicFileAttributes::class.java,
         LinkOption.NOFOLLOW_LINKS,
       )
+    } catch (exception: NoSuchFileException) {
+      if (
+        exception.file == ideaDirectory.toString() &&
+        !projectMetadataObservation.hasObservedRealDirectory()
+      ) {
+        throw projectMetadataNotReady(
+          "The GoLand project metadata directory has not been created yet.",
+          exception,
+        )
+      }
+      throw stateIoFailure("The GoLand project metadata directory is unavailable.", exception)
     } catch (exception: Exception) {
       throw stateIoFailure("The GoLand project metadata directory is unavailable.", exception)
     }
     if (!ideaAttributes.isDirectory || ideaAttributes.isSymbolicLink) {
       throw stateIoFailure("The GoLand project metadata directory must be a real directory.")
     }
+    // Observation is monotonic and deliberately precedes canonicalization. If the real directory
+    // disappears or is replaced after this successful NOFOLLOW probe, no later attempt may
+    // reinterpret that race as a virgin-project readiness gap.
+    projectMetadataObservation.markRealDirectoryObserved()
     val canonicalIdea = try {
       ideaDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS)
     } catch (exception: Exception) {
@@ -273,6 +302,9 @@ private fun containsUnpairedSurrogate(value: String): Boolean {
 
 private fun stateIoFailure(message: String, cause: Throwable? = null) =
   ProjectModelApplyException(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, message, cause)
+
+private fun projectMetadataNotReady(message: String, cause: Throwable? = null) =
+  ProjectModelApplyException(ProjectModelErrorCode.PROJECT_METADATA_NOT_READY, message, cause)
 
 private object DurableManagedModelStateCodec : AtomicStateCodec<DurableManagedModelState> {
   override fun encode(value: DurableManagedModelState): ByteArray = buildString {

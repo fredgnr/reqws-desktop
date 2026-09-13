@@ -1,5 +1,15 @@
 package com.reqws.goland.projectmodel
 
+import com.reqws.goland.diagnostics.ReqwsSyncTrace
+import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.diagnostics.traceRecords
+import com.intellij.openapi.progress.ProcessCanceledException
+import kotlinx.coroutines.CancellationException
+import com.intellij.openapi.components.service
+import com.intellij.openapi.roots.ProjectFileIndex
+import com.intellij.openapi.roots.ModuleRootEvent
+import com.intellij.openapi.roots.ModuleRootListener
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.platform.backend.workspace.WorkspaceModel
 import com.intellij.platform.workspace.jps.entities.ContentRootEntity
 import com.intellij.platform.workspace.jps.entities.ExcludeUrlEntity
@@ -15,11 +25,13 @@ import com.reqws.goland.manifest.ResolvedRepository
 import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.jetbrains.jps.model.serialization.JpsSerializationManager
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicInteger
 
 class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
   private var localRoot: Path? = null
@@ -54,6 +66,18 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
       isTrusted = { true },
       markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B, TOKEN_C),
     )
+    val rootsChangedCount = AtomicInteger()
+    val guardedRootsChangedCount = AtomicInteger()
+    val mutationGuard = project.service<ReqwsProjectModelMutationGuard>()
+    project.messageBus.connect(testRootDisposable).subscribe(
+      ModuleRootListener.TOPIC,
+      object : ModuleRootListener {
+        override fun rootsChanged(event: ModuleRootEvent) {
+          rootsChangedCount.incrementAndGet()
+          if (mutationGuard.isActive) guardedRootsChangedCount.incrementAndGet()
+        }
+      },
+    )
 
     val first = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
 
@@ -71,6 +95,10 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     assertFalse(targetExcludedRelativePaths(root).contains("ordinary"))
     assertFalse(targetExcludedRelativePaths(root).contains("worktree"))
     assertEquals(beforeDependencies, requireNotNull(workspaceModel.currentSnapshot.resolve(moduleId)).dependencies)
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = setOf("repo-c"))
+    val rootsChangedAfterInitialProjection = rootsChangedCount.get()
+    val guardedRootsChangedAfterInitialProjection = guardedRootsChangedCount.get()
+    assertTrue(guardedRootsChangedAfterInitialProjection > 0)
 
     val second = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
 
@@ -79,6 +107,17 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     assertEquals(mapOf("repo-c" to setOf(TOKEN_B)), recoveryMap(state))
     assertEquals(setOf(".reqws", "user-hidden"), targetExcludedRelativePaths(root))
     assertEquals(setOf(markerRelative(TOKEN_A)), markerRelativePaths(root))
+    assertLiveProjection(root, included = setOf("repo-a", "repo-c"), excluded = emptySet())
+    assertTrue(
+      "removing a ReqWS exclude must publish a roots-changed event",
+      rootsChangedCount.get() > rootsChangedAfterInitialProjection,
+    )
+    val rootsChangedAfterReactivation = rootsChangedCount.get()
+    val guardedRootsChangedAfterReactivation = guardedRootsChangedCount.get()
+    assertTrue(
+      "removing a ReqWS exclude must keep its roots event inside the mutation guard",
+      guardedRootsChangedAfterReactivation > guardedRootsChangedAfterInitialProjection,
+    )
 
     val third = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
 
@@ -97,6 +136,117 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
       ownershipMap(state),
     )
     assertEquals(mapOf("repo-c" to setOf(TOKEN_B)), recoveryMap(state))
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = setOf("repo-c"))
+    assertTrue(
+      "re-adding a ReqWS exclude must publish a roots-changed event",
+      rootsChangedCount.get() > rootsChangedAfterReactivation,
+    )
+    assertTrue(
+      "re-adding a ReqWS exclude must keep its roots event inside the mutation guard",
+      guardedRootsChangedCount.get() > guardedRootsChangedAfterReactivation,
+    )
+  }
+
+  fun testVirginProjectionWaitsWithoutSideEffectsThenConvergesAfterIdeaAppears() {
+    val root = rootPath()
+    Files.delete(root.resolve(".idea"))
+    Files.createDirectories(root.resolve(".reqws"))
+    val state = ReqwsManagedModelState()
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      state,
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_A),
+      isColdModelSnapshot = true,
+    )
+    val before = excludedRelativePathsList(root)
+
+    val initialFailure = expectApplyFailure {
+      adapter.apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.PROJECT_METADATA_NOT_READY, initialFailure.code)
+    assertEquals(before, excludedRelativePathsList(root))
+    assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertFalse(Files.exists(root.resolve(".idea")))
+
+    Files.createDirectory(root.resolve(".idea"))
+    val result = awaitUpdate { adapter.apply(snapshot(root, emptyList())) }
+
+    assertEquals(setOf(".reqws"), result.added)
+    assertEquals(setOf(".reqws"), result.managedExcludes)
+    assertEquals(setOf(markerRelative(TOKEN_A)), markerRelativePaths(root))
+    assertTrue(
+      Files.isRegularFile(root.resolve(".idea").resolve(REQWS_MODEL_STATE_FILE_NAME)),
+    )
+    assertEquals(0L, requireNotNull(
+      VerifiedManagedModelStateRepository(root).read(
+        managedModelStateBinding("ws_test", root),
+      ),
+    ).generation)
+  }
+
+  fun testSynchronizesGoModulesAfterEverySuccessfulLiveProjectionIncludingModelNoOp() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    gitRepository(root, "repo-c")
+    val calls = mutableListOf<Triple<String, Set<Path>, Set<Path>>>()
+    val notificationPolicies = mutableListOf<Boolean>()
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      ReqwsManagedModelState(),
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
+      goModulesProjection = ReqwsGoModulesProjection { moduleName, active, excluded, allowNotification ->
+        calls.add(Triple(moduleName, active.toSet(), excluded.toSet()))
+        notificationPolicies.add(allowNotification)
+      },
+    )
+
+    awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
+    awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+    val noOpModel = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+    awaitUpdate {
+      adapter.apply(
+        snapshot(root, listOf("repo-a", "repo-c")),
+        allowRootsChangeNotification = false,
+      )
+    }
+
+    assertTrue(noOpModel.added.isEmpty())
+    assertTrue(noOpModel.removed.isEmpty())
+    assertEquals(4, calls.size)
+    assertEquals(module.name, calls.last().first)
+    assertEquals(setOf(root.resolve("repo-a"), root.resolve("repo-c")), calls.last().second)
+    assertEquals(setOf(root.resolve(".reqws")), calls.last().third)
+    assertEquals(listOf(true, true, true, false), notificationPolicies)
+  }
+
+  fun testDoesNotSynchronizeGoModulesWhenTheLiveFileIndexVerifierFails() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    var goModuleSyncs = 0
+    val liveFailure = ProjectModelApplyException(
+      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
+      "live projection failed",
+    )
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      ReqwsManagedModelState(),
+      isTrusted = { true },
+      markerTokenFactory = tokenFactory(TOKEN_A),
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { _, _ -> throw liveFailure },
+      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> goModuleSyncs += 1 },
+    )
+
+    val thrown = expectApplyFailure {
+      adapter.apply(snapshot(root, listOf("repo-a")))
+    }
+
+    assertSame(liveFailure, thrown)
+    assertEquals(0, goModuleSyncs)
   }
 
   fun testRemovesOwnedTargetAfterStateReloadWithoutRuntimeEntityTags() {
@@ -355,7 +505,7 @@ $excludeElements
     assertEquals(1, targetExcludedRelativePathsList(root).count { it == "repo-c" })
   }
 
-  fun testBorrowsAnExistingFilesystemAliasWithoutAddingASemanticDuplicate() {
+  fun testAddsAnOwnedExactExcludeWhenAnExistingFilesystemAliasDoesNotAffectTheLiveIndex() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-c")
@@ -372,11 +522,13 @@ $excludeElements
       ).apply(snapshot(root, emptyList()))
     }
 
-    assertTrue(result.borrowed.contains("repo-c"))
-    assertFalse(ownershipMap(state).containsKey("repo-c"))
+    assertTrue(result.added.contains("repo-c"))
+    assertFalse(result.borrowed.contains("repo-c"))
+    assertEquals(TOKEN_B, ownershipMap(state)["repo-c"])
     assertTrue(targetExcludedRelativePaths(root).contains("retained-alias"))
-    assertFalse(targetExcludedRelativePaths(root).contains("repo-c"))
-    assertEquals(1, markerRelativePaths(root).size)
+    assertTrue(targetExcludedRelativePaths(root).contains("repo-c"))
+    assertEquals(2, markerRelativePaths(root).size)
+    assertLiveProjection(root, included = emptySet(), excluded = setOf("repo-c"))
   }
 
   fun testUsesFilesystemIdentityWhenManifestCaseDiffersFromAnActiveRepository() {
@@ -501,16 +653,15 @@ $excludeElements
     assertTrue(state.ownership().managedExcludes.isEmpty())
   }
 
-  fun testRejectsAnActiveRepositoryExcludedThroughAFilesystemAlias() {
+  fun testPreservesFilesystemAliasWithoutTreatingTheActiveRepositoryAsExcluded() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
     Files.createSymbolicLink(root.resolve("active-alias"), root.resolve("repo-a"))
     addExclude("active-alias")
     val state = ReqwsManagedModelState()
-    val before = excludedRelativePathsList(root)
 
-    val failure = expectApplyFailure {
+    val result = awaitUpdate {
       WorkspaceExcludeModelAdapter(
         project,
         state,
@@ -519,9 +670,10 @@ $excludeElements
       ).apply(snapshot(root, listOf("repo-a")))
     }
 
-    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
-    assertEquals(before, excludedRelativePathsList(root))
-    assertTrue(state.ownership().managedExcludes.isEmpty())
+    assertEquals(setOf(".reqws"), result.managedExcludes)
+    assertTrue(targetExcludedRelativePaths(root).contains("active-alias"))
+    assertFalse(targetExcludedRelativePaths(root).contains("repo-a"))
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = emptySet())
   }
 
   fun testFailsClosedWhenAnExistingFilesystemIdentityCannotBeCompared() {
@@ -621,6 +773,7 @@ $excludeElements
   fun testRejectsMalformedAndDuplicateOwnershipClaims() {
     val root = rootPath()
     val malformedStates = listOf(
+      module.name to emptyList(),
       "" to listOf(persistedClaim(".reqws", TOKEN_A)),
       module.name to listOf(persistedClaim(".reqws", "not-a-valid-token")),
       module.name to listOf(
@@ -738,6 +891,69 @@ $excludeElements
     assertEquals(before, excludedRelativePathsList(root))
     assertTrue(state.ownership().managedExcludes.isEmpty())
     assertTrue(state.ownership().recoveryClaims.isEmpty())
+  }
+
+  fun testOnlyPristineColdProjectionCanWaitForProjectMetadata() {
+    val root = rootPath()
+    val state = ReqwsManagedModelState()
+    val observation = ProjectMetadataObservation()
+    val unavailableRepository = object : ManagedModelStateRepository {
+      override fun read(binding: ManagedModelStateBinding): DurableManagedModelState? {
+        throw ProjectModelApplyException(
+          ProjectModelErrorCode.PROJECT_METADATA_NOT_READY,
+          "injected virgin project metadata gap",
+        )
+      }
+
+      override fun write(
+        binding: ManagedModelStateBinding,
+        expectedGeneration: Long?,
+        nextState: DurableManagedModelState,
+      ): DurableManagedModelState = error("write must not be reached")
+    }
+
+    val initialFailure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        projectMetadataObservation = observation,
+        stateRepositoryFactory = { unavailableRepository },
+        isColdModelSnapshot = true,
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.PROJECT_METADATA_NOT_READY, initialFailure.code)
+    assertTrue(state.ownership().managedExcludes.isEmpty())
+
+    observation.markRealDirectoryObserved()
+    val observedFailure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        state,
+        isTrusted = { true },
+        projectMetadataObservation = observation,
+        stateRepositoryFactory = { unavailableRepository },
+        isColdModelSnapshot = true,
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, observedFailure.code)
+
+    val historicalState = ReqwsManagedModelState().also { mirror ->
+      mirror.replaceOwnership(module.name, emptyMap())
+    }
+    val historicalFailure = expectApplyFailure {
+      WorkspaceExcludeModelAdapter(
+        project,
+        historicalState,
+        isTrusted = { true },
+        stateRepositoryFactory = { unavailableRepository },
+        isColdModelSnapshot = true,
+      ).apply(snapshot(root, emptyList()))
+    }
+
+    assertEquals(ProjectModelErrorCode.INVALID_OWNERSHIP_STATE, historicalFailure.code)
   }
 
   fun testRejectsForeignJvmWriterDuringAHotSession() {
@@ -1180,6 +1396,80 @@ $excludeElements
     )
   }
 
+  fun testTraceSpansCoverRealModelPfiAndRegistryAndKeepTheApplyIdentity() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    val lines = mutableListOf<String>()
+    val trace = ReqwsSyncTrace.testing(sink = lines::add)
+    val adapter = WorkspaceExcludeModelAdapter(
+      project, ReqwsManagedModelState(), isTrusted = { true }, trace = trace,
+      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> },
+    )
+    val result = awaitUpdate {
+      withContext(trace.workerContext()) {
+        trace.withAttempt(31, 41) { adapter.apply(snapshot(root, listOf("repo-a"))) }
+      }
+    }
+    assertEquals(setOf(".reqws"), result.added)
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = emptySet())
+    assertProjectionTrace(lines, listOf("MODEL", "PFI", "REGISTRY"), "SUCCESS")
+    assertTrue(traceRecords(lines, SyncTraceEvent.PROJECTION_STAGE_END).all { it["request_id"] == "31" && it["source_id"] == "41" })
+  }
+
+  fun testTraceStopsAtTheFailingProjectionStageWithoutInventingLaterStages() {
+    assertTraceProjectionFailure("MODEL", IllegalStateException("model failure"))
+  }
+
+  fun testTracePfiFailureDoesNotEnterRegistry() {
+    assertTraceProjectionFailure("PFI", IllegalStateException("pfi failure"))
+  }
+
+  fun testTraceRegistryFailureFinishesOnlyTheRegistryStage() {
+    assertTraceProjectionFailure("REGISTRY", IllegalStateException("registry failure"))
+  }
+
+  fun testTracePreservesPfiPlatformCancellation() {
+    assertTraceProjectionFailure("PFI", ProcessCanceledException())
+  }
+
+  fun testTracePreservesRegistryCoroutineCancellation() {
+    assertTraceProjectionFailure("REGISTRY", CancellationException("registry cancellation"))
+  }
+
+  private fun assertTraceProjectionFailure(stage: String, failure: Throwable) {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    val lines = mutableListOf<String>()
+    val adapter = WorkspaceExcludeModelAdapter(
+      project, ReqwsManagedModelState(),
+      isTrusted = { if (stage == "MODEL") throw failure else true },
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { _, _ -> if (stage == "PFI") throw failure },
+      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> if (stage == "REGISTRY") throw failure },
+      trace = ReqwsSyncTrace.testing(sink = lines::add),
+    )
+    // Catch within the worker coroutine to preserve the original exception across the platform future.
+    val caught = awaitUpdate {
+      try { adapter.apply(snapshot(root, listOf("repo-a"))); null } catch (thrown: Throwable) { thrown }
+    }
+    assertSame(failure, caught)
+    val enteredStages = listOf("MODEL", "PFI", "REGISTRY").takeWhile { it != stage } + stage
+    assertProjectionTrace(lines, enteredStages, if (failure is ProcessCanceledException || failure is CancellationException) "CANCELLED" else "FAILED")
+  }
+
+  private fun assertProjectionTrace(lines: List<String>, stages: List<String>, lastOutcome: String) {
+    val starts = traceRecords(lines, SyncTraceEvent.PROJECTION_STAGE_START)
+    val ends = traceRecords(lines, SyncTraceEvent.PROJECTION_STAGE_END)
+    assertEquals(stages, starts.map { it["stage"] })
+    assertEquals(stages, ends.map { it["stage"] })
+    assertEquals(starts.map { it["span_id"] }, ends.map { it["span_id"] })
+    assertEquals(stages.size, starts.map { it["span_id"] }.distinct().size)
+    assertTrue(ends.dropLast(1).all { it["outcome"] == "SUCCESS" })
+    assertEquals(lastOutcome, ends.last()["outcome"])
+    assertTrue(ends.all { requireNotNull(it["elapsed_nanos"]).toLong() >= 0 })
+  }
+
   private fun rootPath(): Path {
     localRoot?.let { return it }
     val root = Files.createTempDirectory("reqws-project-model-test").toRealPath()
@@ -1277,6 +1567,23 @@ $excludeElements
       moduleEntity.contentRoots.singleOrNull { it.url.url == workspaceUrl },
     )
     return contentRoot.excludedUrls.map { it.url.url }.sorted()
+  }
+
+  private fun assertLiveProjection(
+    root: Path,
+    included: Set<String>,
+    excluded: Set<String>,
+  ) {
+    val fileIndex = ProjectFileIndex.getInstance(project)
+    included.forEach { relative ->
+      val file = requireNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve(relative)))
+      assertTrue("$relative should be in project content", fileIndex.isInContent(file))
+      assertFalse("$relative should not be excluded", fileIndex.isExcluded(file))
+    }
+    excluded.forEach { relative ->
+      val file = requireNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root.resolve(relative)))
+      assertTrue("$relative should be excluded", fileIndex.isExcluded(file))
+    }
   }
 
   private fun ownershipMap(state: ReqwsManagedModelState): Map<String, String> =

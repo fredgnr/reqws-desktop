@@ -190,21 +190,70 @@ class ReqwsExcludePlannerTest {
   }
 
   @Test
-  fun `removes filesystem-equivalent actual URLs`() {
+  fun `rejects a filesystem-equivalent alias when the exact owned target is missing`() {
     val managed = claim("file:///workspace/Retained", TOKEN_A)
-    val actualTarget = "file:///workspace/retained"
+    val alias = "file:///workspace/retained"
 
-    val plan = plan(
-      managedClaims = mapOf("Retained" to managed),
-      currentExcludes = listOf(
-        CurrentExclude(actualTarget),
-        CurrentExclude(managed.markerUrl),
-      ),
-      urlsEquivalent = { first, second -> first.equals(second, ignoreCase = true) },
+    val failure = expectConflict {
+      plan(
+        managedClaims = mapOf("Retained" to managed),
+        currentExcludes = listOf(
+          CurrentExclude(alias),
+          CurrentExclude(managed.markerUrl),
+        ),
+        urlsEquivalent = { first, second -> first.equals(second, ignoreCase = true) },
+      )
+    }
+
+    assertEquals(ProjectModelErrorCode.OWNERSHIP_CONFLICT, failure.code)
+  }
+
+  @Test
+  fun `owns an exact target alongside a filesystem equivalent user alias`() {
+    val target = "file:///workspace/retained"
+    val alias = "file:///workspace/retained-alias"
+    val managed = claim(target, TOKEN_A)
+    val equivalent = { first: String, second: String ->
+      first == second || setOf(first, second) == setOf(target, alias)
+    }
+
+    val initial = plan(
+      desiredUrls = mapOf("retained" to target),
+      candidateClaims = mapOf("retained" to managed),
+      currentExcludes = listOf(CurrentExclude(alias)),
+      urlsEquivalent = equivalent,
     )
 
-    assertEquals(setOf("Retained"), plan.removed)
-    assertEquals(setOf(actualTarget, managed.markerUrl), plan.removableUrls)
+    assertEquals(setOf("retained"), initial.added)
+    assertTrue(initial.borrowed.isEmpty())
+
+    val replay = plan(
+      desiredUrls = mapOf("retained" to target),
+      managedClaims = mapOf("retained" to managed),
+      currentExcludes = listOf(
+        CurrentExclude(alias),
+        CurrentExclude(target),
+        CurrentExclude(managed.markerUrl),
+      ),
+      urlsEquivalent = equivalent,
+    )
+
+    assertEquals(setOf("retained"), replay.kept)
+    assertEquals(mapOf("retained" to TOKEN_A), replay.nextOwnership)
+
+    val removal = plan(
+      activeUrls = setOf(target),
+      managedClaims = mapOf("retained" to managed),
+      currentExcludes = listOf(
+        CurrentExclude(alias),
+        CurrentExclude(target),
+        CurrentExclude(managed.markerUrl),
+      ),
+      urlsEquivalent = equivalent,
+    )
+
+    assertEquals(setOf("retained"), removal.removed)
+    assertEquals(setOf(target, managed.markerUrl), removal.removableUrls)
   }
 
   @Test

@@ -20,7 +20,6 @@ import com.intellij.util.ui.UIUtil
 import com.reqws.goland.ReqwsBundle
 import com.reqws.goland.ReqwsPlugin
 import com.reqws.goland.diagnostics.ReqwsDiagnostics
-import com.reqws.goland.project.ReqwsLifecycleState
 import com.reqws.goland.project.ReqwsProjectDetector
 import com.reqws.goland.project.ReqwsProjectService
 import com.reqws.goland.project.ReqwsProjectState
@@ -46,13 +45,14 @@ import javax.swing.JPanel
 import javax.swing.ListCellRenderer
 import javax.swing.ListSelectionModel
 import javax.swing.ScrollPaneConstants
-import javax.swing.SwingUtilities
+import javax.swing.JToolTip
 
 internal class ReqwsToolWindowPanel(
   private val project: Project,
   private val service: ReqwsProjectService,
 ) : JPanel(BorderLayout()), Disposable {
   private val disposed = AtomicBoolean(false)
+  private val stateDispatcher = ReqwsToolWindowStateDispatcher()
   private val workspaceValue = manifestTextLabel()
   private val branchValue = manifestTextLabel()
   private val activeRepositoriesValue = CompressibleTextLabel()
@@ -69,7 +69,7 @@ internal class ReqwsToolWindowPanel(
     isOpaque = false
   }
   private val repositoryViewport = createRepositoryViewport(repositoriesList)
-  private val details = CompressibleTextLabel()
+  private val details = ReqwsDiagnosticsSummary()
   private val syncButton = ReqwsPrimaryButton(ReqwsBundle.message("action.syncNow"))
   private val openManifestLink = ActionLink(
     ReqwsBundle.message("action.openManifest"),
@@ -214,8 +214,6 @@ internal class ReqwsToolWindowPanel(
       JBUI.Borders.customLineTop(JBUI.CurrentTheme.Separator.color()),
       JBUI.Borders.empty(10, 12, 12, 12),
     )
-    details.font = JBFont.small()
-    details.foreground = UIUtil.getContextHelpForeground()
     add(details, BorderLayout.NORTH)
 
     add(
@@ -225,14 +223,7 @@ internal class ReqwsToolWindowPanel(
   }
 
   private fun acceptState(state: ReqwsProjectState) {
-    if (!isUsable() || state.lifecycle == ReqwsLifecycleState.DISPOSED) return
-    if (SwingUtilities.isEventDispatchThread()) {
-      if (isUsable()) render(state)
-    } else {
-      SwingUtilities.invokeLater {
-        if (isUsable()) render(state)
-      }
-    }
+    stateDispatcher.accept(state, ::isUsable, ::render)
   }
 
   private fun render(state: ReqwsProjectState) {
@@ -256,9 +247,7 @@ internal class ReqwsToolWindowPanel(
     repositoriesCount.accessibleContext.accessibleDescription = repositoriesCount.text
     updateRepositoryViewportSize(repositoryViewport, repositoriesList)
 
-    details.text = formatDetailsText(model)
-    details.toolTipText = safeTextTooltip(details.text.orEmpty())
-    details.accessibleContext.accessibleDescription = details.text
+    details.updateDetails(formatDetailsText(model))
     syncButton.isEnabled = model.syncEnabled
     openManifestLink.isEnabled = model.openManifestEnabled
     copyDiagnosticsLink.isEnabled = model.copyDiagnosticsEnabled
@@ -287,15 +276,14 @@ internal class ReqwsToolWindowPanel(
       state = currentState,
     )
     CopyPasteManager.getInstance().setContents(StringSelection(diagnostics))
-    details.text = ReqwsBundle.message("message.diagnosticsCopied")
-    details.toolTipText = safeTextTooltip(details.text)
-    details.accessibleContext.accessibleDescription = details.text
+    details.showCopyFeedback()
   }
 
   private fun isUsable(): Boolean = !disposed.get() && !project.isDisposed
 
   override fun dispose() {
     if (!disposed.compareAndSet(false, true)) return
+    stateDispatcher.dispose()
     listenerHandle.close()
   }
 }
@@ -407,6 +395,52 @@ internal class CompressibleTextLabel : JBLabel() {
       }
     }
     super.paintComponent(graphics)
+  }
+}
+
+internal class ReqwsDiagnosticsSummary : JPanel(GridBagLayout()) {
+  private val details = CompressibleTextLabel()
+  private val copyFeedback = CompressibleTextLabel()
+
+  init {
+    isOpaque = false
+    isFocusable = false
+    listOf(details, copyFeedback).forEachIndexed { index, label ->
+      label.font = JBFont.small()
+      label.foreground = UIUtil.getContextHelpForeground()
+      label.putClientProperty(HTML_DISABLE_PROPERTY, true)
+      label.isFocusable = false
+      label.isVisible = false
+      add(label, GridBagConstraints().apply {
+        gridx = 0
+        gridy = index
+        weightx = 1.0
+        fill = GridBagConstraints.HORIZONTAL
+        anchor = GridBagConstraints.LINE_START
+        if (index > 0) insets = JBUI.insetsTop(4)
+      })
+    }
+  }
+
+  fun updateDetails(text: String?) {
+    details.updateText(text)
+    copyFeedback.updateText(null)
+    revalidate()
+    repaint()
+  }
+
+  fun showCopyFeedback() {
+    copyFeedback.updateText(ReqwsBundle.message("message.diagnosticsCopied"))
+    revalidate()
+    repaint()
+  }
+
+  private fun JBLabel.updateText(value: String?) {
+    text = value
+    toolTipText = safeTextTooltip(value.orEmpty())
+    accessibleContext.accessibleName = value
+    accessibleContext.accessibleDescription = value
+    isVisible = !value.isNullOrEmpty()
   }
 }
 
@@ -541,8 +575,15 @@ internal fun JBLabel.applyStatusPill(text: String, tone: ReqwsStatusTone) {
 
 internal fun formatDetailsText(model: ReqwsToolWindowViewModel): String? = when {
   model.errorCode != null && model.preservedSnapshot ->
-    "${model.errorCode} · ${ReqwsBundle.message("message.preservedModel")}"
-  model.errorCode != null -> model.errorCode
+    listOfNotNull(
+      model.errorCode,
+      model.errorDetailKey?.let { ReqwsBundle.message(it) },
+      ReqwsBundle.message("message.preservedModel"),
+    ).joinToString(" · ")
+  model.errorCode != null -> listOfNotNull(
+    model.errorCode,
+    model.errorDetailKey?.let { ReqwsBundle.message(it) },
+  ).joinToString(" · ")
   model.vcsDiagnosticCode != null && model.statusDetailKey != null ->
     "${model.vcsDiagnosticCode} · ${ReqwsBundle.message(model.statusDetailKey)}"
   model.vcsDiagnosticCode != null -> model.vcsDiagnosticCode
@@ -617,9 +658,29 @@ internal class ReqwsPrimaryButton(text: String) : JButton(text) {
 
 internal fun safeTextTooltip(value: String): String? {
   if (value.isEmpty()) return null
-  val escaped = StringUtil.escapeXmlEntities(value).replace("\n", "<br>")
-  return "<html>$escaped</html>"
+  val tooltip = JToolTip()
+  val metrics = tooltip.getFontMetrics(tooltip.font)
+  val maximumWidth = JBUI.scale(320)
+  val lines = mutableListOf<String>()
+  value.split('\n').forEach { paragraph ->
+    val line = StringBuilder()
+    TOOLTIP_GRAPHEMES.findAll(paragraph).forEach { match ->
+      val grapheme = match.value
+      if (line.isNotEmpty() && metrics.stringWidth(line.toString() + grapheme) > maximumWidth) {
+        lines.add(line.toString())
+        line.setLength(0)
+      }
+      line.append(grapheme)
+    }
+    lines.add(line.toString())
+  }
+  // Swing HTML does not reliably wrap an unbroken name; preserve spaces and escape every line.
+  return lines.joinToString("<br>", "<html>", "</html>") {
+    StringUtil.escapeXmlEntities(it).replace(" ", "&#32;")
+  }
 }
+
+private val TOOLTIP_GRAPHEMES = Regex("\\X")
 
 private const val CARD_ARC = 8
 private const val STATUS_PILL_ARC = 8

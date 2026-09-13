@@ -2,7 +2,7 @@
 title: ReqWS GoLand 插件使用指南
 type: guide
 status: active
-updated: 2026-08-30
+updated: 2026-09-13
 ---
 
 # ReqWS GoLand 插件使用指南
@@ -20,6 +20,7 @@ GoLand 插件只读这份 manifest，把活动仓库自动投影到 GoLand 的�
 - 不删除工作区或仓库目录；
 - 不生成或修改 `go.work`；
 - 不访问 manifest 中的 repository URL；
+- 不直接调用 GoLand 的 Go tracker/scheduler/downloader、Go command 或进程 API；trusted project 中为推动 Go Modules registry 收敛而发布的 ordinary roots event 可能让 GoLand 原生 Go integration 按用户环境自行执行 `go list`、依赖下载或网络访问，这些都是平台行为；
 - 不调用 API 新增、删除、替换或重排 VCS Directory Mappings，也不直接修改 `rootSettings` 或 `.idea/vcs.xml`；GoLand 自身仍可能按用户的原生自动检测设置更新 mappings，插件既不调用也不关闭该机制；
 - 不把 GoLand 中的变化回写到 ReqWS Desktop。
 
@@ -93,20 +94,26 @@ npm run package:goland
 
 在 Safe Mode 中，插件只读取并展示 manifest、当前 Git Root 配置和诊断：
 
-- 不修改项目模型；Git roots 在所有信任状态下都只读；
+- 不修改项目模型，也不发布 project-roots event；Git roots 在所有信任状态下都只读；
 - 不启动外部进程；
 - 不执行仓库中的代码、脚本或构建；
 - Tool Window 显示 **Safe Mode / 安全模式** 和信任提示。
 
 通过 GoLand 原生流程信任项目后，插件会停止信任检查并向同一个串行同步流程提交一次同步。
 
+GoLand 在 Safe Mode 打开项目时可能暂不加载原项目配置；此行为已在 2026.1.3 和 2026.2.1.1 中观察到。若 IDE 提示信任后需要重新打开，先保存需要保留的编辑，再通过 **File → Close Project** 关闭项目，并从欢迎页重新打开同一个 workspace root。ReqWS 会随正常项目模型加载自动重新同步。此时直接信任后出现的 `OWNERSHIP_CONFLICT` 可能与尚未替换的临时项目模型有关；先按原生提示重开，仍失败时按第 12 节保存诊断排查，不要删除 ownership 或清空 `.idea`。
+
+全新 workspace 第一次打开时，GoLand 可能先建立内存项目模型，稍后才把 `.idea` 保存到磁盘。此时 ReqWS 会保持 **Syncing… / 正在同步…**，每秒只检查一次固定 `.idea` entry，并在 GoLand 创建真实目录后自动重读最新 manifest；不需要点击 `Sync Now`、修改 manifest 或重开项目。等待从首次遇到该状态起最多 10 分钟；若仍未创建，插件进入 `Error / PROJECT_MODEL_APPLY_FAILED`，此后可以在 GoLand 项目 metadata 就绪后选择 `Sync Now`。
+
+ReqWS 不会创建、删除、清空或强制保存 `.idea`。不要为了加快首次同步而手工创建/清空该目录；若 `.idea` 是文件、符号链接、身份已变化，或既有 ownership state 丢失，插件仍会按真正的所有权错误停止，而不会把它当成首次等待。
+
 若启动期首次读取或首次项目模型同步只发生一次瞬时平台/coroutine cancellation，仍存活的 project service 会在短暂延迟后自动重试一次；不需要改动 manifest、等待新的文件事件或重开项目。为避免持续取消造成忙循环，自动恢复次数固定有界。
 
 ## 7. Tool Window 界面导览
 
-![ReqWS Tool Window 同步态实现候选](../changes/goland-plugin-support/ui/tool-window-implementation-2026-08-17.png)
+![ReqWS Tool Window 同步态实现候选](../changes/goland-plugin-support/ui/tool-window-synchronized-light.jpg)
 
-[打开原尺寸截图](../changes/goland-plugin-support/ui/tool-window-implementation-2026-08-17.png)。该图来自 2026-08-17 旧候选的同步态，只用于定位界面；它不展示当前手动 Directory Mappings 语义，也不代表完整 GUI `PASS` 或 `GO`。
+[打开原尺寸截图](../changes/goland-plugin-support/ui/tool-window-synchronized-light.jpg)。该图用于定位面板区块；具体候选、实测范围与未完成验收见[修复报告](../changes/goland-plugin-support/testing/verification-2026-09-13.md)，截图不代表完整 GUI 验收通过。
 
 从上到下，Tool Window 分为以下区域：
 
@@ -125,7 +132,7 @@ npm run package:goland
 
 | 状态 | 含义 | 建议操作 |
 |---|---|---|
-| `Active / 活动` | manifest 声明该仓库、目录是普通 Git repository，且当前有一个等价的 `Git` mapping。它不证明远端、工作树或分支健康。 | 通常无需操作；结合顶部状态判断是否还存在 retained/extra mapping。 |
+| `Active / 活动` | manifest 声明该仓库、目录是普通 Git repository，live `ProjectFileIndex` 已纳入该目录，顶层普通 `go.mod`（若有）已进入 GoLand Go Modules registry，且当前有一个等价的 `Git` mapping。它不证明远端、工作树或分支健康。 | 通常无需操作；结合顶部状态判断是否还存在 retained/extra mapping。 |
 | `Directory Missing / 目录缺失` | manifest 仍声明该仓库，但目录不存在。插件不会创建目录或 clone。 | 回到 ReqWS Desktop 检查工作区详情并恢复仓库，或确认 manifest 是否来自预期工作区。 |
 | `Git Root Not Configured / 需配置 Git 根目录` | 仓库目录存在且包含普通 `.git`，但当前没有等价的 GoLand `Git` mapping。 | 按第 9 节添加精确目录。 |
 | `Git Root Conflict / Git 根目录冲突` | 同一仓库目录存在非 Git mapping，或多个 alias mapping 指向同一目录。 | 先确认用户/其他插件配置，再在 Directory Mappings 中手动修正；ReqWS 不覆盖。 |
@@ -138,7 +145,7 @@ npm run package:goland
 
 ### Sync Now / 立即同步
 
-跳过 VFS 文件事件的防抖等待，重新读取固定 manifest，重放 Project Model reconcile，并重新读取当前 VCS Directory Mappings。它进入与自动同步相同的串行、latest-wins 协调器，但不会自动修复 Git Roots。
+跳过 VFS 文件事件的防抖等待，重新读取固定 manifest，重放 Project Model 与 live `ProjectFileIndex`/Go Modules registry reconcile，并重新读取当前 VCS Directory Mappings。它进入与自动同步相同的串行、latest-wins 协调器，但不会自动修复 Git Roots。
 
 它不会：
 
@@ -148,6 +155,8 @@ npm run package:goland
 - 删除目录；
 - 强行覆盖所有权不明的用户 Content Root 或 exclude；
 - 新增、删除、替换、重排 VCS mapping，或修改 `rootSettings`/`.idea/vcs.xml`。
+
+在 trusted project 中，如果只读 registry 仍与目标不一致，reconcile 可发布一次 guarded ordinary roots event；ReqWS 不直接启动 Go command/process，但 GoLand 原生 Go integration 可能因该事件执行 `go list`、依赖下载或网络访问。Safe Mode 不发布该事件。
 
 适用于文件/配置事件丢失、Mac 睡眠恢复、错误修正后重试，或需要立即核对当前 manifest 和 Git Root 配置的场景。
 
@@ -159,7 +168,7 @@ npm run package:goland
 .reqws/workspace.json
 ```
 
-该操作只定位并打开文件，不创建、修复或写回内容。ReqWS Desktop 是唯一 writer；排障时可以检查字段和错误位置，但不要把手工编辑 manifest 当作日常仓库增删流程。
+该操作只定位并打开文件，不创建、修复或写回内容。打开的是普通 GoLand 编辑器，插件不会将文件设置为只读。ReqWS Desktop 是唯一 writer；排障时可以检查字段和错误位置，但不要把手工编辑 manifest 当作日常仓库增删流程。
 
 ### Copy Diagnostics / 复制诊断信息
 
@@ -196,9 +205,9 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 |---|---|---|
 | `Reading… / 正在读取…` | 正在初次读取或重新读取 manifest。首次尚未确认 manifest 时 Tool Window 通常不显示；单次瞬时取消会由 service 自动重试一次。 | 等待读取完成；持续停留时检查固定 manifest 是否可访问。 |
 | `Safe Mode / 安全模式` | manifest 可读，但项目未被 GoLand 信任；插件保持只读。 | 仅在确认项目来源后，通过 GoLand 原生流程信任项目。 |
-| `Syncing… / 正在同步…` | 正在收敛项目模型并读取当前 VCS 配置。 | 等待完成，不要用重复点击制造无意义重试。 |
-| `Synced / 已同步` | 项目模型已同步，当前只读检查未发现 Git Root 差异，摘要已推进。 | 无需操作。 |
-| `Partially Available / 部分可用` | 至少一部分安全投影可用，但存在目录缺失、Git Root 待手动配置或 Project Model ownership 冲突。 | 查看仓库行和底部提示；VCS 差异按第 9 节手动处理，完成后等待自动复核或选择 `Sync Now`。 |
+| `Syncing… / 正在同步…` | 正在收敛 authoritative Workspace Model、live `ProjectFileIndex`、Go Modules registry，并读取当前 VCS 配置。全新 workspace 尚无 `.idea` 时也会保持此状态，等待 GoLand 自己保存 metadata；这不是 `OWNERSHIP_CONFLICT`。 | 等待完成，不要用重复点击制造无意义重试；virgin metadata 等待最长 10 分钟。 |
+| `Synced / 已同步` | authoritative Workspace Model、live `ProjectFileIndex` 和 Go Modules registry 均已收敛，当前只读检查也未发现 Git Root 差异，摘要已推进。 | 无需操作。 |
+| `Partially Available / 部分可用` | 至少一部分安全投影可用，但存在目录缺失、Git Root 待手动配置、Project Model ownership 冲突，或 live `ProjectFileIndex`/Go Modules registry 未收敛。 | 查看仓库行和底部提示；VCS 差异按第 9 节手动处理；`PROJECT_CONTENT_NOT_CONVERGED` 按第 12 节处理。 |
 | `Error / 错误` | manifest candidate 被拒绝，或项目模型应用失败。已有有效 snapshot 时继续显示并保留上次有效模型。 | 先复制诊断并按错误码区分输入错误与 IDE 项目模型错误，不要默认修改 manifest。 |
 | `Not a ReqWS Project / 非 ReqWS 项目` | 当前 root 没有固定 manifest，且没有可保留的旧 snapshot。普通项目通常不显示 Tool Window；存在但无效的 manifest 会进入 `Error`。 | 打开正确的 workspace root，不要在普通项目中创建伪 manifest。 |
 | `Closed / 已关闭` | 项目服务已经进入终态。 | 所有动作停用；重新打开项目会创建新的服务并重新收敛。 |
@@ -210,7 +219,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 1. 在 ReqWS Desktop 中向工作区添加仓库。
 2. Desktop 完成 clone、分支切换并原子更新 manifest。
 3. GoLand 插件观察最新文件并自动同步项目内容。
-4. 新仓库出现在 Repositories 卡片；若缺少 Git Root，会显示手动 Directory Mappings 提示。
+4. 插件确认 live `ProjectFileIndex` 与 Go Modules registry 收敛后，新仓库在 Repositories 卡片中显示为 `Active`；若缺少 Git Root，会显示手动 Directory Mappings 提示。
 5. 按第 9 节添加精确 `Git` mapping；配置事件自动复核状态。
 
 ### Desktop 逻辑移除仓库
@@ -219,11 +228,17 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 2. Desktop 只从 manifest 和 `.code-workspace` 移除记录；目录仍保留。
 3. 插件为退出活动集合但仍保留在磁盘的直系 Git 目录新增或维持可证明 ownership 的 Project Model exclude；不修改原 Git mapping。
 4. 若底部显示整体 `VCS_CONFIGURATION_MISMATCH` 而活动仓库行都已配置，应把 Directory Mappings 与 Repositories 活动列表逐项比较；只有用户按自身意图移除 retained/extra mapping。
-5. 保留目录不再属于活动项目集合；插件不会删除它。
+5. live `ProjectFileIndex` 不再纳入保留目录，其顶层 Go module 也不再留在 registry；插件不会删除目录。
 
 ### 重新添加与冷启动
 
-重新添加同一仓库后，插件恢复 Project Model 投影并重新检查现有 mapping；它不创建重复 root/module，也不创建 mapping。若 Git Root 先前已由用户移除，按第 9 节手动恢复。GoLand 重启时会重新读取 manifest 和 VCS 配置；不要求 ReqWS Desktop 同时运行，也不会仅凭持久摘要跳过重建。
+重新添加同一仓库后，插件恢复 Project Model、live `ProjectFileIndex` 与 Go Modules registry 投影并重新检查现有 mapping；它不创建重复 root/module，也不创建 mapping。若 Git Root 先前已由用户移除，按第 9 节手动恢复。GoLand 重启时会重新读取 manifest 和 VCS 配置；不要求 ReqWS Desktop 同时运行，也不会仅凭持久摘要跳过重建。
+
+### 验证 Go package 与运行配置
+
+活动仓库包含顶层普通 `go.mod` 时，现有 PACKAGE run/test/debug configuration 应在 **Edit Configuration** 中无校验错误。若仍出现 `Error: Cannot find package ...`，说明 Go Modules registry 尚未收敛；即使选择 `Continue Anyway` 后底层 Go 命令成功，也不能把该场景记为通过。等待自动重放或选择 `Sync Now` 后重新打开配置；只有警告消失且正常 test/run/debug 成功，才证明该仓库的 Go 投影可用。
+
+若 GoLand 在中国区首次启用 Go Modules 时提示配置 GOPROXY，或日志出现 `GOPROXY_MISSING`，先通过 GoLand/Go 的原生设置配置组织批准的代理，再重开项目或选择 `Sync Now`。ReqWS 不读取、写入或绕过 GOPROXY；`GOPROXY=off` 只适合没有外部依赖的隔离验证，不应作为日常项目默认值。
 
 ## 12. 故障排查
 
@@ -245,7 +260,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 ### 显示 Partially Available
 
-底部摘要可能显示 `REPOSITORY_MISSING`、Git Root missing/wrong-VCS/retained 提示或 `OWNERSHIP_CONFLICT`。插件会保留能够安全应用的项目模型以及全部 VCS 配置，不会为追求“全绿”覆盖用户 mapping。目录问题回到 Desktop 修复；VCS 差异按第 9 节在 Directory Mappings 中手动处理。完成后等待配置事件自动复核，必要时选择 `Sync Now`。
+底部摘要可能显示 `REPOSITORY_MISSING`、Git Root missing/wrong-VCS/retained 提示、`OWNERSHIP_CONFLICT` 或 `PROJECT_CONTENT_NOT_CONVERGED`。最后一项表示 live `ProjectFileIndex` 或 Go Modules registry 至少一层没有在有界等待内符合 manifest；Tool Window 会继续显示统一稳定错误码，并分别补充“项目文件索引未收敛”或“Go 模块注册表未收敛”，present repository 因而不得显示 `Active`。插件会保留能够安全应用的项目模型以及全部 VCS 配置，不会为追求“全绿”覆盖用户 mapping。目录问题回到 Desktop 修复；VCS 差异按第 9 节在 Directory Mappings 中手动处理；project content 未收敛时先等待一次自动重放，必要时选择 `Sync Now`，持续失败则复制诊断并检查 GoLand 日志。
 
 若仓库行显示 `Git Root Status Unavailable / Git 根目录状态不可用`，先查看底部稳定码：`GIT_PLUGIN_UNAVAILABLE` 表示 GoLand Git integration 当前不可用，`VCS_DIAGNOSTIC_FAILED` 表示本次配置读取失败。两者都不会触发 mapping 写入；稍后重试，持续失败时复制诊断并检查 GoLand 日志或 Git 插件状态。
 
@@ -256,6 +271,7 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 - manifest/路径错误：`MANIFEST_*`、`UNSUPPORTED_MANIFEST_VERSION`、`WORKSPACE_ROOT_MISMATCH`、`REPOSITORY_*`。选择 `Open Manifest File` 查看固定文件，并通过 Desktop 修复受管输入；若文件不存在或不是普通文件，该动作无法打开内容，应直接核对固定路径。
 - 刷新错误：`REFRESH_FAILED`。插件会保留进入本次刷新前的 last-good snapshot 与 applied digest；稍后选择 `Sync Now` 重试，持续失败时复制诊断并检查 GoLand 日志。
 - 项目模型错误：`PROJECT_MODEL_APPLY_FAILED`。manifest 可能完全有效；先等待 IDE indexing/项目状态稳定后选择 `Sync Now`，仍失败时保存诊断、检查 GoLand 日志或重开项目，不要盲目改 manifest 或清空 `.idea`。
+- 首次 metadata 等待超时也使用 `PROJECT_MODEL_APPLY_FAILED`。先确认 GoLand 已自行创建真实 `<workspace-root>/.idea`，再选择 `Sync Now`；不要手工创建、删除、替换或清空 `.idea`。若诊断为 `OWNERSHIP_CONFLICT`，按真实 ownership/路径异常处理，它不是 readiness timeout。
 - VCS 只读诊断：`VCS_CONFIGURATION_MISMATCH` 按第 9 节手动核对；`VCS_DIAGNOSTIC_FAILED` 或 `GIT_PLUGIN_UNAVAILABLE` 按上一节重试并检查 IDE；`REPOSITORY_NOT_GIT` 回到 Desktop/磁盘检查仓库。它们都不是 mapping apply 失败。
 
 `OWNERSHIP_CONFLICT` 通常表示 Project Model ownership 不足；VCS 差异是只读配置提示，不是 mapping apply 错误。`SAFE_MODE_BLOCKED` 表现为独立的 Safe Mode 状态，而不是 Error 错误码。
@@ -265,8 +281,10 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 ## 13. 数据与安全边界
 
 - `.reqws/workspace.json` 按不可信、只读输入处理；Desktop 是唯一 writer。
-- Safe Mode 下没有项目模型或外部进程副作用；VCS 在所有模式下都只读。
+- Safe Mode 下没有项目模型、roots event 或外部进程副作用；VCS 在所有模式下都只读。
 - 插件只删除能以持久 state 与当前模型双重证明归 ReqWS 所有的 Project Model 条目；不确定时保留并降级。
+- trusted project 的 Go Modules registry 不匹配时，插件只发布一次 guarded public ordinary roots event 并只读复核 registry；它不直接调用 Go scheduler/downloader 或 Go command/process。GoLand 原生 Go integration 可能因 roots event 运行 `go list`、下载依赖或访问网络，不能把该平台副作用表述为 ReqWS 的直接执行，也不能承诺 trusted 同步全程无网络。
+- 已有有效 snapshot 后，外部 project-roots drift 会触发 force reconcile；ReqWS 自身 mutation guard 会抑制反咬，GoLand 的异步 follow-up 最多再触发一次有界重放，不形成事件循环。
 - 插件不调用 VCS mapping writer，也不直接写 `.idea/vcs.xml` 或 VCS ownership state；GoLand 原生自动检测仍由 IDE/用户设置控制。旧 ownership/lock inert 且不自动清理。
 - 逻辑移除和停用插件都不会删除磁盘仓库。
 - 插件不提供 Git 生命周期、仓库增删、分支、`go.work` 或 Desktop 控制按钮。
@@ -276,8 +294,8 @@ GoLand 可能按其原生 VCS 自动检测设置自行添加或调整 mapping；
 
 - 当前只支持本地 macOS GoLand，不支持 Windows、Linux、IntelliJ IDEA、Fleet 或 Remote Development。
 - 插件没有签名、Marketplace 分发、自动安装或自动更新。
-- 当前 exact-source 候选的 GoLand 2026.1.3/2026.2 Plugin Verifier 均为 `Compatible`；281 项插件测试通过，本地 ZIP SHA-256 为 `9746925dad410016187d1f9859829dfa77ca020d167f4a87f9261afbac6e2fc8`（484,669 bytes）。真实 GUI/Go 功能仍待绑定推送后 exact commit 验收；旧候选证据不能继承。
-- 同步态截图来自旧候选，只覆盖界面布局，不代表手动 Git Root 提示、深色主题、错误、降级、Safe Mode、最窄宽度或完整生命周期已验收。
+- Plugin Verifier、自动化测试数量、ZIP SHA-256 与真实 GUI verdict 必须从对应的 dated verification 报告读取；常青指南不固定某个候选的瞬时数字，旧候选证据也不能继承。
+- 同步态截图用于界面导览；实际长提示、VoiceOver 和完整规模验收的限制以修复报告为准。
 
 进一步资料：
 

@@ -34,6 +34,74 @@ class SyncReadRequestTrackerTest {
   }
 
   @Test
+  fun `startup metadata recovery follows the latest read and increments only its own attempt`() {
+    val tracker = SyncReadRequestTracker()
+    tracker.begin(
+      trigger = SyncTrigger.AUTOMATIC,
+      armInitialProjectMetadataRecovery = true,
+    )
+    val latest = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    assertTrue(latest.initialProjectMetadataRecoveryEligible)
+    val recovery = tracker.beginProjectMetadataRecoveryIf(latest) { true }
+
+    requireNotNull(recovery)
+    assertEquals(0, recovery.cancellationRecoveryAttempt)
+    assertEquals(1, recovery.projectMetadataRecoveryAttempt)
+    assertTrue(recovery.initialProjectMetadataRecoveryEligible)
+  }
+
+  @Test
+  fun `a stale metadata readiness monitor cannot supersede a newer read`() {
+    val tracker = SyncReadRequestTracker()
+    val waiting = tracker.begin(
+      trigger = SyncTrigger.AUTOMATIC,
+      armInitialProjectMetadataRecovery = true,
+    )
+    val newer = tracker.begin(SyncTrigger.MANUAL)
+
+    assertEquals(null, tracker.beginProjectMetadataRecoveryIf(waiting) { true })
+    assertTrue(newer.initialProjectMetadataRecoveryEligible)
+    assertTrue(tracker.completeInitialProjectMetadataRecoveryIfLatest(newer))
+    assertFalse(tracker.begin(SyncTrigger.AUTOMATIC).initialProjectMetadataRecoveryEligible)
+  }
+
+  @Test
+  fun `a newer normal read cannot reset an active project metadata recovery attempt`() {
+    val tracker = SyncReadRequestTracker()
+    val startup = tracker.begin(
+      trigger = SyncTrigger.AUTOMATIC,
+      armInitialProjectMetadataRecovery = true,
+    )
+    val recovery = requireNotNull(tracker.beginProjectMetadataRecoveryIf(startup) { true })
+
+    val newer = tracker.begin(SyncTrigger.AUTOMATIC)
+
+    assertEquals(1, recovery.projectMetadataRecoveryAttempt)
+    assertEquals(1, newer.projectMetadataRecoveryAttempt)
+    assertTrue(newer.initialProjectMetadataRecoveryEligible)
+  }
+
+  @Test
+  fun `metadata recovery cannot reset a consumed startup cancellation attempt`() {
+    val tracker = SyncReadRequestTracker()
+    val startup = tracker.begin(
+      trigger = SyncTrigger.AUTOMATIC,
+      armInitialProjectMetadataRecovery = true,
+    )
+    val cancellationRecovery = requireNotNull(
+      tracker.beginCancellationRecoveryIf(startup) { true },
+    )
+
+    val metadataRecovery = requireNotNull(
+      tracker.beginProjectMetadataRecoveryIf(cancellationRecovery) { true },
+    )
+
+    assertEquals(1, metadataRecovery.cancellationRecoveryAttempt)
+    assertEquals(1, metadataRecovery.projectMetadataRecoveryAttempt)
+  }
+
+  @Test
   fun `a rejected conditional begin does not supersede the current generation`() {
     val tracker = SyncReadRequestTracker()
     val current = tracker.begin(SyncTrigger.AUTOMATIC)
@@ -105,6 +173,49 @@ class SyncReadRequestTrackerTest {
 
     assertEquals(SyncTrigger.TRUST_TRANSITION, offeredTrigger)
     assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `a newer automatic read inherits the exact verify-only event lineage`() {
+    val tracker = SyncReadRequestTracker()
+    val followUp = tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "a".repeat(64),
+      projectModelEventEpoch = 17,
+    )
+    val automatic = tracker.begin(SyncTrigger.AUTOMATIC)
+    var offeredTrigger: SyncTrigger? = null
+
+    assertFalse(tracker.offerCandidateIfLatest(followUp) { true })
+    assertEquals("a".repeat(64), automatic.projectModelOriginDigest)
+    assertEquals(17L, automatic.projectModelEventEpoch)
+    assertTrue(
+      tracker.offerCandidateIfLatest(automatic) { trigger ->
+        offeredTrigger = trigger
+        true
+      },
+    )
+
+    assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, offeredTrigger)
+    assertEquals(null, tracker.pendingReconcileIntent())
+  }
+
+  @Test
+  fun `overlapping verify-only events keep the newer event lineage`() {
+    val tracker = SyncReadRequestTracker()
+    tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "a".repeat(64),
+      projectModelEventEpoch = 21,
+    )
+    val newer = tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+      projectModelOriginDigest = "b".repeat(64),
+      projectModelEventEpoch = 22,
+    )
+
+    assertEquals("b".repeat(64), newer.projectModelOriginDigest)
+    assertEquals(22L, newer.projectModelEventEpoch)
   }
 
   @Test
