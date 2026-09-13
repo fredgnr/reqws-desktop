@@ -1,10 +1,11 @@
-# 文档规范索引
+# 项目规范索引
 
-本目录保存项目文档治理规则和按需使用的写作模板。
+本目录保存项目文档治理、IDE 插件开发与测试边界，以及按需使用的写作模板。
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
 | [项目文档规范](documentation-standard.md) | active | 定义分类、状态、命名、文档影响判断、索引同步和完成检查。 |
+| [IDE 插件开发与测试规范](ide-plugin-development-testing.md) | active | 定义语言无关的仓库职责、受管 IDE 适配、成功语义与按影响选择的测试。 |
 | [文档模板](templates/README.md) | active | 提供需求、技术方案、测试方案和交付记录的最小骨架。 |
 
-Agent 在需求开发和行为变更中通过项目级 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md) 执行这套工作流；规范正文仍是唯一事实源。
+Agent 在需求开发和行为变更中通过项目级 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md) 执行文档工作流；各规范正文是对应范围的权威入口。
