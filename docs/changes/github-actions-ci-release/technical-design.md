@@ -2,73 +2,75 @@
 title: GitHub Actions CI 与 Release 技术方案
 type: technical-design
 status: active
-updated: 2026-08-17
+updated: 2026-09-13
 ---
 
 # GitHub Actions CI 与 Release 技术方案
 
-本方案以两个最小权限工作流复用现有检查和 package 脚手架，并用 draft、资产复验和失败清理保证 Release 不会半成品公开。
-
-## 现状与约束
-
-- 项目要求 Node.js 24，锁定依赖入口为 `npm ci`，完整质量基线为 `npm run check`。
-- `npm run package:macos` 会执行 clean install、完整检查、Forge package 和 bundle 校验；CI 已完成前两步时，可通过脚手架的 skip 参数避免重复执行。
-- Forge 当前只配置本机 ad-hoc 签名并关闭 Hardened Runtime。它可以验证 bundle 内部一致性，但不构成 Developer ID、公证或 Gatekeeper 公共分发能力。
-- GitHub-hosted macOS 的 arm64 与 x64 架构使用不同 runner，构建结果不能依赖跨 job 的 `node_modules` 或 `out/`。
-- GoLand plugin 位于独立 Gradle project；根 `npm run check` 和 Electron package 不下载 IDE SDK，也不复用 plugin Gradle cache 或 build output。
+两个最小权限工作流复用现有检查和 package 脚手架。优化只调整依赖缓存和 Release DAG，不减少检查内容；draft、资产复验和失败清理继续防止半成品公开。
 
 ## 工作流划分
 
-| 工作流 | 触发 | Runner | 职责 |
-|---|---|---|---|
-| CI / `checks` | 所有 branch push、`pull_request`、`workflow_dispatch` | `macos-15` | Node 24 下安装依赖、运行 Desktop 完整检查并执行 arm64 package smoke。 |
-| CI / `goland-plugin` | 同上 | `macos-15` | JDK 21 下校验 Gradle wrapper，运行 plugin tests、project/structure checks、261/262 Plugin Verifier 和 ZIP build。 |
-| Release | `v*` tag push | validate 使用 `macos-15`；package 使用 `macos-15` 与 `macos-15-intel` | 验证 tag 来源和版本、重跑检查、构建双架构资产并事务化发布。 |
+CI 保留 `checks`（Checks and macOS package smoke）与 `goland-plugin`（GoLand plugin checks）两个独立 macOS job。branch push、PR 和 dispatch 触发器、原有 concurrency 与取消策略保持不变，不通过路径过滤或忽略失败提速。
 
-两个 CI job 都只授予 `contents: read`，且彼此不传递依赖或 artifact。同一 ref 的后续 CI 运行可取消未完成的旧运行，避免陈旧结果占用 runner；pull request 与 branch push 仍分别保留可见检查。
-
-### GoLand plugin job
-
-plugin job 使用固定完整 SHA 的 `actions/setup-java` 配置 Temurin 21，并用固定 SHA 的 `gradle/actions` 完成 wrapper validation 和 Gradle setup。随后在 `integrations/goland/` 执行：
+Desktop 保留 Node 24、`npm ci`、完整 `npm run check` 和 arm64 package smoke，另执行 Python 标准库发布脚本回归测试。GoLand 保留 JDK 21、Gradle wrapper validation 和以下任务：
 
 ```bash
-./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon
+./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
 ```
 
-构建基线为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 和 `since-build: 261`。`verifyPlugin` 下载并校验 GoLand 2026.1.3 与 2026.2；configuration/structure check 不能代替该矩阵。120 分钟 timeout 只限制单个 job，不允许 `continue-on-error`。
+`buildPlugin` 仍依赖 `verifyForbiddenProductionSymbols`；GoLand 2026.1.3 与 2026.2 均参与 Verifier。CI 从 `package.json` 读取候选版本，构建后运行与 Release 相同的 ZIP 校验脚本，但不上传或发布资产。根 `npm run check`、Electron package 和 Gradle 仍相互隔离。
 
-`buildPlugin` 产物只用于当前 CI job 的构建证明，不上传为长期 artifact。Release workflow 没有 plugin dependency，资产集合、签名限制、draft 事务和失败清理逻辑全部保持不变。
+`.github/actions/setup-goland/action.yml` 在 CI/Release 中共享 Temurin 21、wrapper validation、Gradle setup 和 IDE 缓存配置，避免两个入口漂移。所有第三方 Actions 继续固定到完整 commit SHA。
+
+## 缓存策略
+
+| 缓存 | 所有者与路径 | 隔离和失效 |
+|---|---|---|
+| npm 下载 | `actions/setup-node`，npm 默认缓存 | `package-lock.json`；每个 job 仍独立 `npm ci`，不共享 `node_modules`。 |
+| Electron 下载 | `actions/cache`，`~/Library/Caches/electron` | OS、runner 架构、完整锁文件 hash；在安装依赖前恢复。 |
+| Gradle 依赖和任务缓存 | `gradle/actions/setup-gradle` | 保留 action 默认的缓存清理和默认分支写入策略，不再叠加同路径缓存。 |
+| 解压后的 GoLand IDE | `actions/cache`，`integrations/goland/.intellijPlatform/ides` | OS、runner 架构、Gradle build/settings/properties/wrapper 配置 hash；精确 key，不用宽泛 fallback。 |
+
+IntelliJ Platform Gradle Plugin 2.18.1 的 `caching.ides.enabled = true` 启用稳定 IDE 缓存位置。只保存 IDE 依赖，不保存整个 `.intellijPlatform`、测试 sandbox、构建报告或发布 ZIP。源码变化不必重新创建 IDE 缓存；工具链变化会失效。
+
+现有 `org.gradle.caching=true` 和 configuration-cache 设置保留，但不为持久化配置缓存新增 secret，也不把可能含敏感环境值的 configuration-cache 明文上传。缓存只是加速层：下载失效或缓存未命中不跳过任何验证。首次填充存在下载、解压和上传成本，不能承诺首跑更快。
 
 ## Release 校验与构建
 
-1. checkout 必须取得完整历史，以便把 tag 解引用为 commit，并用 Git ancestry 判断其是否属于事件载荷声明的默认分支。
-2. validate 使用严格正则解析 `vMAJOR.MINOR.PATCH`，去除 `v` 后与 `package.json`、`package-lock.json` 根项目版本比较。缺失字段、前导零、预发布后缀或任一不一致均 fail closed。
-3. validate 在 Node 24 上执行 `npm ci` 和 `npm run check`。package jobs 仅在它成功后启动。
-4. 每个 package job 都从锁文件独立执行 `npm ci`，再以 skip-ci、skip-check 模式调用现有 `package:macos` 脚手架并传入 runner 对应架构。脚手架继续负责 `.app` 的版本、bundle ID、Mach-O 架构和签名结构校验。
-5. macOS 使用保留 bundle 目录、符号链接与资源属性的归档方式，将 `.app` 包装为 `ReqWS-<version>-macos-<arch>.zip`；架构 job 只上传供本次 workflow 使用的中间 artifact。
+```text
+validate（tag / 三处版本 / 默认分支 ancestry）
+  ├── checks（npm ci / 发布脚本回归 / 完整 npm run check）
+  ├── package（arm64 .app / 归档 / 解压复验 / checksum）
+  └── goland-plugin（完整插件检查 / ZIP / 内嵌版本复验 / checksum）
+        ↓ 三条路径均成功，且 validate 成功
+      publish（资产集合 / checksum / draft / 远端复验 / 公开）
+```
+
+`validate` 使用 Ubuntu 和 Node 24，只进行原有严格 tag 正则、三处版本一致性和完整 Git 历史 ancestry 校验。其余三个 job 在 `macos-15` 独立运行；插件的 macOS 文件系统测试没有迁移到 Linux。`publish.needs` 显式列出所有四个前置 job，不使用 `always()` 或 `continue-on-error` 绕过失败。
+
+应用固定 `ARCH=arm64`，删除 Intel matrix。现有 package 脚手架仍负责 bundle 校验；Release 继续用 `ditto` 保留 bundle、资源与符号链接，解压后重新验证 codesign、bundle ID、版本和纯 arm64 主可执行文件。
+
+## 插件版本与 ZIP
+
+Gradle 的 `releaseVersion` property 覆盖 project/plugin 版本；没有参数的本地构建仍用 `0.1.0`。Release 将已验证 tag 版本传入完整检查与构建，不能只重命名旧版本 ZIP。
+
+`scripts/prepare-goland-release.py` 使用 Python 标准库读取恰好一个 `build/distributions/*.zip`，验证 ZIP/JAR 完整性、路径和唯一插件描述文件，核对 `com.reqws.workspace` 与预期版本。校验的是将要复制的同一份字节，不解压到工作区；额外/缺失/损坏 ZIP、重复描述文件、错误 ID/版本或已有目标文件均失败。
+
+校验后保存 `ReqWS-<version>-goland-plugin.zip` 和对应 `.zip.sha256`。插件与应用分别上传 `release-goland-plugin`、`release-arm64` 中间 artifact；二者使用零额外压缩和 7 天保留期。插件不嵌入 app，不上传 Marketplace，不自动安装。
 
 ## 资产汇总与发布事务
 
-发布 job 依赖 validate 和两个 package jobs，下载资产到全新目录后执行以下步骤：
+发布 job 只接受两个约定 ZIP 和两个 checksum 片段，拒绝缺失或额外文件，生成并反向校验 `SHA256SUMS`。公开附件恰好为两个 ZIP 和一个清单。
 
-1. 按精确文件名和数量检查 arm64、x64 ZIP，拒绝额外或缺失文件。
-2. 计算两份 ZIP 的 SHA-256，生成排序稳定、使用相对文件名的 `SHA256SUMS`，随后本地反向验证清单。
-3. 确认目标 tag 尚无 Release，再通过 `gh` 创建带隐藏 workflow run 标识的 draft Release，并在调用前记录创建尝试，以覆盖服务端创建成功但客户端未收到响应的情况。
-4. 上传三份资产，从 GitHub Release API 重新查询 draft 的资产名称与大小，确认集合完整且非空。
-5. 只有复验通过才把 draft 转为公开 Release。失败处理只在“本次运行已创建且仍为 draft”时删除该 Release；既有 Release 一律不覆盖、不清理。
+保留既有事务：拒绝覆盖既有 Release；用内置短期 token 创建带 run/attempt 标识的 draft；上传后远端检查精确附件集合、非空大小和 draft 状态；通过后才公开。失败清理同时核对 draft 与本次运行标识；无法确认或删除失败则告警，不删除 tag 或人工创建的 Release。
 
-失败清理属于安全的 best effort：工作流必须同时核对 draft 状态和隐藏运行标识，不能因同 tag 出现人工创建的 Release 而误删。GitHub API 无法确认状态或删除失败时保留 draft 并输出告警，由维护者核对运行日志后人工处理。
-
-Git tag 是版本事实源，Release 标题使用同一 tag。package job 与发布 job 之间只传递 ZIP 资产及其校验片段，不传递 token；发布 job 是唯一配置 `contents: write` 的 job，并使用内置 `github.token`，不读取自定义 secrets。
-
-## 供应链与并发控制
-
-- `actions/checkout`、`actions/setup-node`、artifact 上传/下载等第三方 Action 全部固定到完整 commit SHA；版本升级应作为可审查的代码变更。
-- CI plugin job 的 `actions/setup-java`、Gradle wrapper validation 和 setup action 同样固定到完整 commit SHA。
-- Release 按 tag 设置并发组且不自动取消正在发布的运行，避免两次运行互相删除 draft。创建前检查既有 Release，使重跑在人工确认前 fail closed。
-- shell 使用严格错误处理，所有路径和 tag 参数都引用。pull request 来源代码会执行项目检查，但对应 job 始终只有读权限；拥有写权限的发布 job 只由 tag 事件触发。
-- npm 缓存只用于下载加速，依赖安装仍以锁文件和 `npm ci` 为准，缓存命中不能跳过校验。
+默认权限仍为 `contents: read`，只有 tag 触发的 `publish` 获得 `contents: write`，不读取自定义 secrets。页面区分 arm64 app 的 ad-hoc/未公证限制与 GoLand 插件的 unsigned/磁盘安装方式。
 
 ## 测试与回滚
 
-静态和本地验证覆盖 YAML、现有检查、package 与归档；真实 GitHub 事件覆盖权限、runner 架构、artifact 和 Release API。详细场景见[测试方案](testing/test-plan.md)。工作流回滚是回退对应 YAML；已发布错误版本不移动 tag，应删除错误 Release、按项目版本规则修复后创建新 tag。用户资产回滚见[交付说明](delivery.md)。
+2026-09-13 的基线 main CI run `34757091480`：Desktop job 约 56 秒，GoLand job 约 272 秒，其中 Gradle 执行约 205 秒，Gradle post-action 约 53 秒。日志有依赖/transform 缓存未命中和缓存写入冲突；因此优先改善 IDE 复用，而不拆散很短的 Desktop 检查。基线见 [Actions run](https://github.com/fredgnr/reqws-desktop/actions/runs/34757091480)。
+
+这些是旧流程测量，不是新流程提速结果。后续分别记录冷缓存和热缓存的命中、下载、验证、cache post 与总耗时，再评估是否需要进一步拆分 Verifier。Release 并行可缩短等待链，但会同时占用更多 runner，不能替代实际测量。
+
+回滚需要共同回退 workflow、共享 action、Gradle 缓存/版本配置和发布脚本；已经发布的历史资产与 tag 不自动修改。测试和交付方式分别见[测试方案](testing/test-plan.md)和[交付说明](delivery.md)。

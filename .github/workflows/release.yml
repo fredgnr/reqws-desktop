@@ -19,7 +19,7 @@ defaults:
 jobs:
   validate:
     name: Validate release
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CI: 'true'
@@ -37,8 +37,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Validate tag and package versions
         id: version
@@ -78,29 +76,14 @@ jobs:
 
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Run project checks
-        run: npm run check
-
-  package:
-    name: Package macOS (${{ matrix.arch }})
+  # Checks and both packages have independent workspaces. Only publish joins their gates.
+  checks:
+    name: Release project checks
     needs: validate
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     timeout-minutes: 45
     env:
-      ARCH: ${{ matrix.arch }}
       CI: 'true'
-      VERSION: ${{ needs.validate.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            runner: macos-15
-          - arch: x64
-            runner: macos-15-intel
 
     steps:
       - name: Check out tag
@@ -114,6 +97,50 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run release packaging regression tests
+        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
+
+      - name: Run project checks
+        run: npm run check
+
+  package:
+    name: Package macOS (arm64)
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      ARCH: arm64
+      CI: 'true'
+      VERSION: ${{ needs.validate.outputs.version }}
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install locked dependencies
         run: npm ci
@@ -143,11 +170,9 @@ jobs:
             exit 1
           fi
 
-          expected_arch="$ARCH"
-          if [[ "$ARCH" == 'x64' ]]; then expected_arch='x86_64'; fi
           executable_arches="$(/usr/bin/lipo -archs "$extracted_app/Contents/MacOS/ReqWS")"
-          if [[ " $executable_arches " != *" $expected_arch "* ]]; then
-            echo "::error::Archive does not contain $expected_arch: $executable_arches"
+          if [[ "$executable_arches" != 'arm64' ]]; then
+            echo "::error::Archive must contain only arm64: $executable_arches"
             exit 1
           fi
 
@@ -159,7 +184,43 @@ jobs:
       - name: Upload intermediate release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-${{ matrix.arch }}
+          name: release-arm64
+          path: |
+            dist/release/*.zip
+            dist/release/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  goland-plugin:
+    name: Package and verify GoLand plugin
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      CI: 'true'
+      VERSION: ${{ needs.validate.outputs.version }}
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up GoLand build
+        uses: ./.github/actions/setup-goland
+
+      - name: Test, verify, and package the plugin
+        working-directory: integrations/goland
+        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
+
+      - name: Verify and stage plugin release ZIP
+        run: python3 scripts/prepare-goland-release.py --version "$VERSION"
+
+      - name: Upload intermediate plugin release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-goland-plugin
           path: |
             dist/release/*.zip
             dist/release/*.sha256
@@ -171,7 +232,9 @@ jobs:
     name: Publish GitHub release
     needs:
       - validate
+      - checks
       - package
+      - goland-plugin
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -198,8 +261,8 @@ jobs:
           printf '%s\n' \
             "ReqWS-${VERSION}-macos-arm64.zip" \
             "ReqWS-${VERSION}-macos-arm64.zip.sha256" \
-            "ReqWS-${VERSION}-macos-x64.zip" \
-            "ReqWS-${VERSION}-macos-x64.zip.sha256" \
+            "ReqWS-${VERSION}-goland-plugin.zip" \
+            "ReqWS-${VERSION}-goland-plugin.zip.sha256" \
             | LC_ALL=C sort > "$expected_file"
           find "$directory" -maxdepth 1 -type f -exec basename {} \; \
             | LC_ALL=C sort > "$actual_file"
@@ -219,7 +282,7 @@ jobs:
         run: |
           files=(
             "dist/release/ReqWS-${VERSION}-macos-arm64.zip"
-            "dist/release/ReqWS-${VERSION}-macos-x64.zip"
+            "dist/release/ReqWS-${VERSION}-goland-plugin.zip"
             'dist/release/SHA256SUMS'
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -249,7 +312,9 @@ jobs:
 
           notes="$release_owner_marker
           > [!WARNING]
-          > These macOS ZIPs use an ad-hoc signature. They are not Developer ID signed or notarized, and are not Gatekeeper-ready public-distribution artifacts."
+          > The macOS app ZIP uses an ad-hoc signature. It is not Developer ID signed or notarized, and is not a Gatekeeper-ready public-distribution artifact.
+
+          The Desktop app is Apple silicon (arm64) only. The separate GoLand plugin ZIP is unsigned; install it with Install Plugin from Disk. It is not bundled into the app or published to JetBrains Marketplace."
 
           release_creation_attempted=true
           gh release create "$TAG" \
@@ -271,7 +336,7 @@ jobs:
           actual_assets_file="${RUNNER_TEMP}/actual-release-assets"
           printf '%s\n' \
             "ReqWS-${VERSION}-macos-arm64.zip" \
-            "ReqWS-${VERSION}-macos-x64.zip" \
+            "ReqWS-${VERSION}-goland-plugin.zip" \
             'SHA256SUMS' \
             | LC_ALL=C sort > "$expected_assets_file"
           gh release view "$TAG" --json assets --jq '.assets[].name' \

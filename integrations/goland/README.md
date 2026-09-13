@@ -6,7 +6,7 @@ This Gradle project builds the local-only ReqWS plugin that projects a Desktop-o
 
 The checked-in build uses:
 
-- plugin ID `com.reqws.workspace`, version `0.1.0`;
+- plugin ID `com.reqws.workspace`, local default version `0.1.0`;
 - IntelliJ Platform Gradle Plugin 2.18.1;
 - Gradle wrapper 9.3.0;
 - Kotlin 2.3.20;
@@ -35,7 +35,11 @@ cd integrations/goland
 
 `verifyForbiddenProductionSymbols` scans every `src/main` file and every class in the composed plugin JAR. It rejects private Go tracker/scheduler APIs and VCS Directory Mapping mutation/internal implementation symbols while leaving test fixtures outside the production scan. Both root npm commands run this gate automatically. `verifyPlugin` runs the configured Plugin Verifier matrix. The ZIP is written under `integrations/goland/build/distributions/`; Gradle caches, IDE sandboxes and build output are ignored and must not be committed.
 
-The root `npm run check` and Desktop `package:macos` remain independent of Gradle. GitHub Actions uses a separate `goland-plugin` job so a plugin failure is visible without coupling Gradle artifacts into the Electron app or its Release assets.
+The root `npm run check` and Desktop `package:macos` remain independent of Gradle. GitHub Actions retains a separate `goland-plugin` CI job and all existing checks. CI passes the Desktop project version with `-PreleaseVersion`; tag Release builds pass the validated tag version. This sets the actual plugin descriptor version, not just the archive name, while commands without the property retain the local default. Both workflows run `scripts/prepare-goland-release.py` to check the ZIP/JAR integrity, unique plugin ID/version and staged SHA-256.
+
+Release publishes `ReqWS-<version>-goland-plugin.zip` as a separate unsigned asset beside the arm64 app and `SHA256SUMS`. It does not embed the plugin in Electron, install it automatically or publish to Marketplace. All Desktop and plugin gates must pass before publication. The [Release delivery guide](../../docs/changes/github-actions-ci-release/delivery.md) describes download and disk installation.
+
+CI and Release share `.github/actions/setup-goland/action.yml`. Gradle task/dependency caching remains enabled, with extracted IDEs separately cached under `.intellijPlatform/ides` using OS/architecture/toolchain keys. Sandboxes, release outputs and plaintext configuration-cache state are not part of this IDE cache; cache misses never waive checks.
 
 ## Run and install locally
 

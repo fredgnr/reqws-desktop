@@ -15,3 +15,5 @@ coverage/
 /integrations/goland/local.properties
 /integrations/goland/*.iml
 /.idea/
+__pycache__/
+*.py[cod]

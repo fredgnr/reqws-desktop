@@ -2,56 +2,49 @@
 title: GitHub Actions CI 与 Release 需求说明
 type: requirements
 status: active
-updated: 2026-08-17
+updated: 2026-09-13
 ---
 
 # GitHub Actions CI 与 Release 需求说明
 
-本需求为所有分支变更建立一致的自动检查，并将默认分支上的有效版本 tag 转换为可校验的双架构 macOS Release 资产。
+本需求为所有分支变更建立一致的自动检查，并将默认分支上的有效版本 tag 转换为可校验的 Apple silicon macOS 应用和独立 GoLand 插件资产。
 
 ## 背景与目标
 
-项目已有可复现的 `npm run check` 和 macOS package 脚手架，但缺少托管在 GitHub 上的持续检查与版本资产发布入口。目标是让 push、pull request 和人工检查使用同一质量基线，并让 tag 发布具备明确的版本、来源、架构和失败语义。
+push、pull request 和人工检查使用同一质量基线；tag 发布具有明确的版本、来源、产物和失败语义。优化下载缓存与 Release 并行度，但不得为提速移除现有 CI 检查、测试、Verifier 目标或安全门禁。
 
 ## 范围与非目标
 
-范围包括：
+范围包括所有 branch push、`pull_request`、`workflow_dispatch` 的 Desktop/GoLand CI，以及默认分支有效版本 tag 的 arm64 macOS app ZIP、GoLand plugin ZIP、SHA-256 清单和事务化 GitHub Release。
 
-- 所有 branch push、`pull_request` 和 `workflow_dispatch` 的 CI。
-- 独立的 GoLand 插件测试、项目/结构检查、261/262 Plugin Verifier 和 ZIP build 质量门禁。
-- 默认分支有效语义化版本 tag 的双架构 macOS package 与 GitHub Release。
-- Release ZIP 的 SHA-256 清单、最小权限和失败清理。
+后续 Release 不再构建或发布 x64/x86_64 Desktop app；既有版本的 Intel 资产不删除，本地 package 脚手架的架构参数不在本次移除范围内。插件作为单独附件提供，不嵌入 Electron app，不自动安装、不签名、不上传 JetBrains Marketplace。
 
-本需求不包括 Developer ID 签名、Apple 公证、DMG、自动更新、Windows/Linux 构建，也不自动配置 GitHub branch protection。GoLand plugin ZIP 只在 CI 中构建验证，不进入 tag Release，不签名、不上传 Marketplace。必需检查是否阻止合并仍由仓库规则管理。
+不包括 Developer ID 签名、Apple 公证、DMG、自动更新、Windows/Linux 应用构建，也不自动配置 GitHub branch protection。必需检查是否阻止合并仍由仓库规则管理。
 
 ## 触发与质量规则
 
-1. 所有 branch push、所有 `pull_request` 和人工 `workflow_dispatch` 均运行两个独立 job：Desktop `checks` 与 `goland-plugin`。
-2. Desktop `checks` 在 `macos-15`、Node.js 24 上依次执行 `npm ci`、`npm run check` 和 arm64 package smoke；package smoke 复用依赖和检查，不安装应用、不创建 Release，也不上传长期交付资产。
-3. `goland-plugin` 在 `macos-15`、JDK 21 上校验 Gradle wrapper，并执行 `test`、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、对 GoLand 2026.1.3/2026.2 的 `verifyPlugin` 和 `buildPlugin`。它不依赖 Desktop `node_modules`，也不上传发布资产。
-4. Release 工作流由 `v*` tag push 触发，但只接受无前导零的 `vMAJOR.MINOR.PATCH`；其版本必须同时等于 `package.json` 与 `package-lock.json` 的项目版本。
-5. tag 指向的 commit 必须可从仓库默认分支到达。仅创建于功能分支或游离提交上的 tag 必须失败且不得发布。
-6. Release 的 validate 阶段重新执行 `npm ci` 与 `npm run check`，成功后分别在 `macos-15` 构建 arm64、在 `macos-15-intel` 构建 x64。GoLand plugin job 不加入 tag Release DAG。
-7. 每次发布仍只产出 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-macos-x64.zip` 和覆盖两份 ZIP 的 `SHA256SUMS`；不发布 GoLand plugin ZIP。
-8. 发布阶段先创建带本次运行标识的 draft Release，下载并验证两个架构 job 的资产与校验和后才转为公开；任何一步失败时，工作流尝试清理仅由本次运行创建的 draft，不覆盖既有 Release 或 tag。
+1. 所有 branch push、`pull_request` 和人工 `workflow_dispatch` 保留两个独立 job：Desktop `checks` 与 `goland-plugin`，以及原有可见检查名称。
+2. Desktop 在 `macos-15`、Node.js 24 上执行 `npm ci`、完整 `npm run check` 和 arm64 package smoke；新增发布脚本回归测试。package smoke 复用依赖和检查，不安装应用或创建 Release。
+3. GoLand 在 `macos-15`、JDK 21 上校验 Gradle wrapper，执行 `test`、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GoLand 2026.1.3/2026.2 的 `verifyPlugin` 和 `buildPlugin`，并保留后者依赖的 `verifyForbiddenProductionSymbols`。CI 还验证候选 ZIP 的真实 ID、版本和校验和生成；不上传发布资产，不依赖 Desktop `node_modules`。
+4. Release 仍由 `v*` tag push 触发，只接受无前导零的 `vMAJOR.MINOR.PATCH`。版本必须同时等于 `package.json`、`package-lock.json` 顶层及根 package 版本；tag commit 必须可从默认分支到达。
+5. 轻量 `validate` 通过后，完整 Desktop 检查、arm64 app 打包和完整 GoLand 检查/打包并行执行。`publish` 必须等待四个前置 job 全部成功；打包中的 `--skip-check` 只避免重复执行，不豁免独立检查门禁。
+6. 发布插件的 Gradle project version、内嵌 `META-INF/plugin.xml` 版本和资产文件名必须与 tag 版本一致，plugin ID 必须为 `com.reqws.workspace`。CI 使用项目版本演练相同的覆盖和校验路径；本地无参数构建仍保留原有插件默认版本。
+7. 每次发布恰好包含 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip` 和覆盖两份 ZIP 的 `SHA256SUMS`。
+8. 发布阶段精确核对中间资产与校验和，先创建带本次运行标识的 draft，远端复验附件集合和非空大小后才公开。失败只能尽力清理可确认属于本次运行且仍为 draft 的 Release，不覆盖既有 Release 或 tag。
 
 ## 安全与失败语义
 
-- 工作流不使用仓库自定义 secrets。GitHub 提供的短期 token 只用于读取仓库和最终发布。
-- 默认权限为 `contents: read`；只有发布 job 获得 `contents: write`。
-- 所有第三方 GitHub Actions 必须固定到完整 commit SHA，不能只引用可移动 tag。
-- 检查、版本验证、任一架构打包、资产校验或发布失败，整个运行均失败；不允许以单架构或缺少校验清单的 Release 降级成功。
-- 当前 `.app` 使用 ad-hoc 签名、未公证，不保证通过其他 Mac 的 Gatekeeper；Release 页面和交付说明必须保留这一限制。
+- npm、Electron 下载和 Gradle/IDE 缓存仅用于复用依赖；仍执行 `npm ci` 和全部检查命令。缓存未命中时从头构建，不允许将失败变成成功。
+- Electron 缓存按 OS、CPU 架构和锁文件隔离；GoLand IDE 缓存按 OS、CPU 架构及 Gradle 工具链/配置隔离，不缓存 sandbox、发布输出或明文 configuration-cache。
+- 不新增仓库自定义 secrets；默认 `contents: read`，仅发布 job 拥有 `contents: write`。所有第三方 Actions 固定完整 SHA。
+- 任一检查、应用/插件打包、资产校验或发布失败均不得产生降级公开 Release。
+- `.app` 仍为 ad-hoc 签名、未经公证，不保证通过其他 Mac 的 Gatekeeper；页面和交付说明必须保留限制。插件 ZIP 不代表真实 IDE GUI 验收已经完成。
 
 ## 验收条件
 
-- branch push、pull request 和人工触发均可看到同名 CI 检查，且任一命令失败会使检查失败。
-- 同一事件可独立看到 GoLand plugin 检查；任一 plugin test、项目/结构校验、261/262 verifier 或 ZIP build 失败时该 job 失败。
-- CI 能从干净依赖安装完成 arm64 package smoke，且不会产生 GitHub Release。
-- 非法 tag、三个版本不一致或 tag commit 不属于默认分支时，Release 运行在创建 Release 前失败。
-- 合法 tag 只有在重跑检查和两种架构 package 均成功后才发布，资产名称、数量和 SHA-256 清单符合契约。
-- 解压两份 ZIP 后均保留完整 `ReqWS.app` bundle；其版本、架构和 bundle ID 通过现有 package 校验。
-- 发布失败不会删除既有 Release；工作流只能清理可确认属于本次运行且仍为 draft 的 Release，API 不可用或删除失败时必须告警并留待人工处理。
+所有原有 CI 任务和两个 Verifier 目标继续执行；合法 tag 仅在完整检查和两种不同产品的打包均成功后发布。应用 ZIP 解压后版本、arm64 架构、bundle ID 和签名结构正确；插件 ZIP 可作为磁盘安装包，其内嵌 ID/版本与发布契约一致。缺失、额外、损坏或版本不一致的附件必须阻止发布。
+
+缓存收益需通过相同工具链的冷/热运行测量，不以配置存在代替命中证据或承诺固定提速。真实 tag 发布和真实 GoLand GUI 验收须分别记录，不能由单元测试或 ZIP 构建代替。
 
 ## 关联文档
 

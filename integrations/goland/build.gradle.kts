@@ -105,7 +105,8 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 }
 
 group = "com.reqws.goland"
-version = "0.1.0"
+// CI and tag builds verify the same explicit version; local builds retain their default.
+version = providers.gradleProperty("releaseVersion").orElse("0.1.0").get()
 
 dependencies {
   testImplementation("junit:junit:4.13.2")
@@ -134,6 +135,11 @@ tasks {
 }
 
 intellijPlatform {
+  caching {
+    ides {
+      enabled = true
+    }
+  }
   pluginConfiguration {
     id = "com.reqws.workspace"
     name = "ReqWS"
