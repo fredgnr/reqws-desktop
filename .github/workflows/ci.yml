@@ -44,8 +44,17 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Cache Electron downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Run release packaging regression tests
+        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
 
       - name: Run project checks
         run: npm run check
@@ -66,18 +75,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Java
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
-        with:
-          distribution: temurin
-          java-version: '21'
+      - name: Set up GoLand build
+        uses: ./.github/actions/setup-goland
 
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      # Exercise the same version override and ZIP staging as a tag build, without publishing.
+      - name: Read plugin candidate version
+        id: version
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Test, verify, and package the plugin
         working-directory: integrations/goland
-        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon
+        env:
+          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
+        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+
+      - name: Verify plugin release ZIP and version
+        env:
+          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/prepare-goland-release.py --version "$PLUGIN_VERSION"

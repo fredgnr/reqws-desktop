@@ -266,9 +266,11 @@ npm run package:macos -- --skip-ci --skip-check
 
 安装脚本会在目标目录进行 staging、旧版备份、整体替换和尽力回滚；不要用 `sudo` 包裹整个 npm 命令，也不要弱化遗留 lock/staging/backup 的 fail-closed 检查。
 
-GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。当前 Release ZIP 仍为 ad-hoc 签名且未公证；面向外部分发前需要独立实现 Developer ID、Hardened Runtime 和 notarization。
+GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。当前 Release 的 macOS 应用 ZIP 仍为 ad-hoc 签名且未公证；面向外部分发前需要独立实现 Developer ID、Hardened Runtime 和 notarization。
 
-CI 另有只读权限的 `goland-plugin` job，在 macOS + JDK 21 上验证 Gradle wrapper、测试、项目/结构、Plugin Verifier 和 ZIP 构建。它不改变 tag Release 工作流；ReqWS Desktop Release 仍只有双架构 `.app` ZIP 与 `SHA256SUMS`，不发布插件 ZIP。
+CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip` 与 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
+
+CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。发布脚本回归使用 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
 
 ## 10. 调试与安全操作
 
@@ -293,7 +295,7 @@ CI 另有只读权限的 `goland-plugin` job，在 macOS + JDK 21 上验证 Grad
 ## 12. 设计依据与追溯
 
 - [全局设置需求包](../changes/global-settings/README.md)记录 settings、持久化兼容、typed IPC、启动语言解析和验证证据。
-- [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)记录 GitHub Actions 触发器、权限、双架构资产和发布限制。
+- [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)记录 GitHub Actions 触发器、权限、缓存与并行、arm64 应用/独立插件资产和发布限制。
 - [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)记录跨语言 manifest、Project Model ownership、只读 VCS/手动 Directory Mappings 契约、构建矩阵和待完成 GUI 证据。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始范围、交付与验证历史；其状态为 archived，只用于理解演进背景。
 - [历史参考](../reference/README.md)是冻结输入，不作为当前开发决策。没有 active 设计覆盖的现状必须回到代码与测试核实。
