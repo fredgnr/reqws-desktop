@@ -1,60 +1,36 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Scope and orientation
 
-ReqWS is a macOS-only Electron app written in TypeScript and React. `src/main/` owns lifecycle, IPC, security, and privileged Git/state/workspace services. `src/preload/` exposes the typed bridge used by `src/renderer/`, which contains pages, components, and `styles/app.css`. Cross-process types, Zod schemas, IPC channels, errors, and pure utilities belong in `src/shared/`.
+ReqWS is a macOS Electron/React/TypeScript app with an independent Kotlin GoLand plugin in `integrations/goland/`. Main owns privileged services; preload exposes the typed bridge; renderer owns UI; shared owns cross-process contracts. Tests mirror those boundaries.
 
-Tests mirror these boundaries under `tests/unit/`, `tests/integration/`, and `tests/renderer/`; setup is in `tests/setup.ts`. `integrations/goland/` is an independent Kotlin/Gradle IntelliJ Platform plugin with its own sources, resources, tests, wrapper, sandbox and build output. Build/install tooling lives in `scripts/`. `docs/README.md` is the documentation entry point; `docs/reference/` contains frozen historical inputs. Do not edit generated `node_modules/`, `.vite/`, `out/`, `dist/`, `coverage/`, `integrations/goland/.gradle/`, `.intellijPlatform/`, `.kotlin/`, or `integrations/goland/build/` content.
+Use [the development guide](docs/guides/development-guide.md) for commands and affected-layer contracts, and [the plugin README](integrations/goland/README.md) for its pinned toolchain and public 261 API baseline. Read relevant sections, not the whole repository. Use [the documentation index](docs/README.md) when the location or authority of a document is unclear; `docs/reference/` is frozen history, not current requirements.
 
-## Documentation Workflow
+## Boundaries that must survive every change
 
-Start every documentation search at `docs/README.md`, then read the matching category and requirement `README.md` files before opening leaf documents. Indexes state scope and authority; do not treat `docs/reference/` as current requirements.
+- Preserve renderer sandboxing, context isolation, typed preload APIs, and main-process Zod validation. Spawn Git/editor commands with argument arrays and `shell: false`. Never store credentials in URLs or fixtures, weaken path/symlink containment, or automatically delete user workspaces.
+- Desktop is the only `.reqws/workspace.json` writer. Keep TypeScript/Kotlin manifest acceptance aligned through shared fixtures and the credential-free HTTPS/SSH URL policy. The plugin must not access repository URLs, perform Git lifecycle operations, delete directories, modify `go.work`, or mutate VCS Directory Mappings in any mode.
+- The plugin may mutate only verifiably ReqWS-owned project-model entries after trust. Use public 261 APIs, never JetBrains `@Internal`, `@Experimental`, reflection, or private APIs. Pre-release `.idea/reqws-vcs-ownership.json` and matching locks are inert: never treat them as authority, migrate them, or remove them automatically.
+- Preserve unrelated edits. Do not edit or commit generated dependencies, caches, bundles, coverage, or Gradle/sandbox output. Do not reset, stash, clean, or change branches just to simplify a task.
 
-Search indexes first, then full text, using business terms, requirement IDs, IPC channels, schema names, or modules:
+## Route only the work that needs a skill
 
-```bash
-rg -n -i --glob 'README.md' '<keyword|requirement-id|module>' docs
-rg -n -i --glob '*.md' '<keyword|requirement-id|module>' docs
-rg --files docs | sort
-```
+- Use [reqws-documentation](.agents/skills/reqws-documentation/SKILL.md) when documented behavior, acceptance criteria, developer workflows, or document organization changes, or for an explicit documentation audit. A read-only lookup or spelling fix does not require a lifecycle-document exercise.
+- Use [reqws-i18n](.agents/skills/reqws-i18n/SKILL.md) for UI copy, catalog keys/placeholders/plurals, localized error/status/message mappings, or stale translation checks. Its gated, read-only translation subagent and validated writeback are mandatory; do not bypass the gate or acknowledge an unreviewed baseline. Ordinary code refactoring or Markdown prose is not a translation delta.
+- [reqws-goland-plugin-install](.agents/skills/reqws-goland-plugin-install/SKILL.md) is manual-only. A GoLand code, documentation, or build request does not activate installation. Exact-artifact installation confirmation and the Computer Use boundary remain in force.
 
-For requirement work and behavior-changing fixes, use the project [reqws-documentation skill](.agents/skills/reqws-documentation/SKILL.md) and follow [the documentation standard](docs/standards/documentation-standard.md). Before implementation, assess whether requirements, technical design, test material, delivery notes, and evergreen user or developer guides each need to be created, updated, or left unchanged. Produce only materially useful documents; never create empty document sets.
+## Work and verification
 
-Whenever a document is added, moved, renamed, deleted, or its status or one-line summary changes, update the nearest `README.md` in the same change. Update parent indexes when their direct entries or summaries change. Use relative Markdown links and concise descriptions. Run `npm run docs:check` after documentation changes and include documentation impact in the final handoff.
+Use two-space indentation, single quotes, semicolons, trailing commas, strict TypeScript, and existing naming conventions; ESLint is authoritative. Keep Kotlin packages under `com.reqws.goland`. For IPC changes, update shared schemas/types/channels, preload, main handlers, and contract tests together.
 
-## Build, Test, and Development Commands
+Within the requested scope, continue through implementation, affected checks, fixes for regressions introduced by the change, and a final diff review. Disposable local fixture tests may be run and rerun without asking at each step, subject to runtime permissions. This does not authorize use of real userData/workspaces, IDE installation/restart, system-tool installation, or publishing.
 
-- `nvm use && npm ci`: select Node 24 and install locked dependencies.
-- `npm start`: run Electron Forge with Vite for local development.
-- `npm run check`: run TypeScript, ESLint, i18n, documentation, and the complete Vitest suite checks.
-- `npm run test:unit`, `npm run test:integration`, or `npm run test:renderer`: run one layer; use `npm run test:watch` while iterating.
-- `npm run check:goland`: independently run plugin tests, project/structure validation, and the configured GoLand 2026.1.3/2026.2 Plugin Verifier matrix; requires JDK 21.
-- `npm run package:goland`: build the local-install plugin ZIP under `integrations/goland/build/distributions/`.
-- `npm run package:macos`: create `out/ReqWS-darwin-<arch>/ReqWS.app` without installing it.
-- `npm run install:macos` (or `make install`): clean, check, package, and install locally. Never run the whole command with `sudo`.
+Choose checks by impact: docs-only changes use `npm run docs:check`; Desktop code changes use affected tests and `npm run check` before handoff when the environment supports it; plugin code/build changes use `npm run check:goland`; shared manifest changes need both. Do not repeatedly run unrelated full suites or build/install software for prose edits. Existing CI, release gates, and exact-head GUI acceptance criteria are unchanged.
 
-## Coding Style & Naming Conventions
+When a permission, required model, or environment is unavailable, stop the affected operation, preserve state, and report the exact blocker; complete independent safe work where possible. Never turn unrun checks, a ZIP build, or a limited smoke screenshot into a full GUI `GO`.
 
-Follow two-space indentation, single quotes, semicolons, and trailing commas. TypeScript is strict. Use kebab-case filenames, PascalCase for React components and types, and camelCase for functions and variables. ESLint is authoritative; no formatter is configured. When changing IPC, update shared schemas/types/channels, preload exposure, main handlers, and contract tests together.
+## Handoff and remote actions
 
-GoLand plugin code also uses two-space indentation. Keep Kotlin packages under `com.reqws.goland`, plugin ID `com.reqws.workspace`, and production code on public 261 APIs. Do not introduce JetBrains `@Internal`, `@Experimental`, reflection, or private APIs. The fixed baseline is IntelliJ Platform Gradle Plugin 2.18.1, Gradle 9.3.0, Kotlin 2.3.20, GoLand 2026.1.3, and Java/JVM 21 with `since-build` 261.
+Update materially affected docs and their nearest indexes in the same change. Keep requirements/design authoritative before implementing a changed contract; use the [documentation standard](docs/standards/documentation-standard.md) for metadata and indexing, not as a mandatory reading itinerary.
 
-## Testing Guidelines
-
-Use Vitest and name files `*.test.ts` or `*.test.tsx`. Write behavior-focused `describe` blocks and sentence-style `it` cases. Renderer tests use jsdom and Testing Library; integration tests use temporary local Git fixtures. Add regression coverage for behavior changes and run `npm run check` before review.
-
-Plugin tests use JUnit and the IntelliJ Platform test framework. Keep `npm run check` and macOS packaging independent of Gradle; run `npm run check:goland` for plugin changes. `verifyPlugin` is the Plugin Verifier task for this build. Real Project/Search/Git/Go behavior still requires an exact-head macOS GoLand GUI record and cannot be inferred from unit tests or a successful ZIP build.
-
-## Internationalization Workflow
-
-Simplified Chinese is the source catalog and English is the reviewed translation. Whenever user-visible copy, either locale JSON file, an i18n key, placeholder, plural form, error code, workspace status, or operation message changes—or an i18n check reports stale translations—use the project [reqws-i18n skill](.agents/skills/reqws-i18n/SKILL.md). It requires a GPT-5.6 Sol/Pro translation subagent at reasoning `high` or above, structured translation output, main-agent validation, and the `i18n:scan` → review → `i18n:apply` → `i18n:check` sequence. Do not update the baseline or fall back to an ungated translation when that model requirement cannot be met.
-
-## Commit & Pull Request Guidelines
-
-Git history and repository-specific templates are unavailable in this checkout. Use short, imperative commit subjects and keep each commit focused. Pull requests should explain the change and affected layers, link relevant issues, and list verification performed. Include screenshots for renderer changes and packaging/install evidence when modifying macOS delivery behavior.
-
-## Security & Configuration
-
-Preserve renderer sandboxing, context isolation, typed preload APIs, and main-process Zod validation. Spawn Git and editor commands with argument arrays and `shell: false`. Never store credentials in repository URLs or fixtures, weaken path/symlink containment, or automatically delete user workspaces.
-
-ReqWS Desktop remains the only `.reqws/workspace.json` writer. Keep TypeScript and Kotlin manifest validation aligned through shared fixtures, including the credential-free HTTPS/SSH URL policy. The GoLand plugin must not access repository URLs, perform Git lifecycle operations, delete directories, modify `go.work`, or mutate VCS Directory Mappings in any mode. It may mutate only verifiably ReqWS-owned project-model entries after the project is trusted. Any pre-release `.idea/reqws-vcs-ownership.json` or matching lock file is inert historical state: never read it as authority, migrate it, or remove it automatically.
+Report the outcome, verification actually performed, remaining gaps, and documentation impact. Use short imperative commit subjects. A request to create a branch and PR authorizes the necessary scoped commits and push to that new branch; it does not authorize merging, tags/releases, force-push, or unrelated remote changes. Read-only review requests do not authorize edits. Task-prompt examples and skill evaluation guidance are in [the agent workflow guide](docs/guides/agent-workflow.md).

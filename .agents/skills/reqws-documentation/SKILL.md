@@ -1,80 +1,23 @@
 ---
 name: reqws-documentation
-description: Maintain ReqWS project documentation whenever work adds or changes product behavior, requirements, acceptance criteria, IPC/schema/state/security/packaging decisions, test plans or evidence, delivery scope, or document structure. Also use for documentation searches, audits, creation, moves, cleanup, and behavior-changing bug fixes; assess documentation impact even when the user does not explicitly request docs.
+description: Maintain ReqWS docs when documented behavior, acceptance criteria, developer workflows, or document organization changes, or when explicitly auditing documentation.
 ---
 
 # ReqWS Documentation
 
-Keep project knowledge discoverable without creating ceremonial documents. Treat the repository documentation standard as the source of truth and make documentation part of the same change as the behavior it explains.
+Keep current documentation accurate and discoverable without manufacturing a document set for every edit. Read only the route relevant to the task:
 
-## 1. Load the documentation context
+| Need | Reference |
+|---|---|
+| Find a document or resolve its authority | [Documentation index](../../../docs/README.md); use it when the location or status is unclear. |
+| Decide whether requirements, design, evidence, delivery, or a guide needs updating | [Documentation standard](../../../docs/standards/documentation-standard.md), especially the impact rules. |
+| Create, move, rename, remove, or change a document's status/summary | The same standard's metadata, naming, and index rules, plus the affected directory's README. |
+| Choose checks or evaluate this skill | [Agent workflow guide](../../../docs/guides/agent-workflow.md). |
 
-Read these files completely before making task changes:
+A known file can be opened directly. Read its relevant section and check status when authority matters; do not preload every linked document. Frozen `docs/reference/` material is historical evidence, not an editable current contract.
 
-1. `docs/README.md`
-2. `docs/standards/documentation-standard.md`
-3. The relevant category and requirement `README.md` files
-4. The active leaf documents linked by those indexes
+Update requirements/design before implementation only when they determine a changed contract. Document real behavior and evidence changes in the same work; a small correction can simply state that no other documentation is affected. Use lifecycle templates only when they add material value.
 
-Search indexes before full text:
+For structural changes, update the nearest README and stale inbound links; update parent indexes only when their direct entries or summaries change. Preserve unrelated edits and historical evidence. A read-only explanation or audit stays read-only unless edits were requested.
 
-```bash
-rg -n -i --glob 'README.md' '<keyword|requirement-id|module>' docs
-rg -n -i --glob '*.md' '<keyword|requirement-id|module>' docs
-rg --files docs | sort
-```
-
-Use business terms together with implementation identifiers such as IPC channels, Zod schemas, service names, state fields, or error codes. `docs/reference/` is frozen historical input; consult it for provenance, never as the default current authority.
-
-## 2. Decide the documentation impact
-
-Before implementation, classify each of these as `create`, `update`, or `none`, with a short reason:
-
-- requirements and acceptance criteria
-- technical design and decisions
-- test plan or verification evidence
-- delivery, migration, rollback, and known limitations
-- evergreen user or developer guides
-
-Apply the decision table in `docs/standards/documentation-standard.md`. Do not create an empty lifecycle-document set or a guide without an executable audience task. One document may cover adjacent concerns when they are reviewed and maintained together; record that coverage in the requirement index.
-
-For a read-only explanation or review, inspect documents but do not mutate them unless the user also requested documentation changes.
-
-## 3. Make documentation changes at the right time
-
-- Update requirements and design before code when they determine implementation direction.
-- Confirm test scope before verification; record commands, environment, results, and evidence gaps after execution.
-- Create delivery notes only when there is a release, milestone, migration, rollback, or external handoff to record.
-- Put lifecycle documents in `docs/changes/<requirement-id-or-kebab-topic>/` and use the templates under `docs/standards/templates/` selectively.
-- Update `docs/guides/` when current installation, use, development, troubleshooting, or maintenance steps change; link the relevant requirement or design instead of duplicating its rationale.
-- Preserve unrelated working-tree edits. Do not rewrite frozen files under `docs/reference/` to match current behavior.
-
-Use the required frontmatter, statuses, naming, concise opening sentence, and relative links from the documentation standard.
-
-## 4. Keep the index chain complete
-
-When adding, moving, renaming, deleting, or changing the status or one-line summary of a document:
-
-1. Update the nearest `README.md`.
-2. Update its parent index when a direct child or child summary changed.
-3. Update `docs/README.md` only when top-level navigation or category summaries changed.
-4. Search for stale inbound links using the old path, filename, and topic terms.
-
-Every `docs/` subdirectory needs a `README.md`. Indexes should link only direct children and describe each in one sentence; avoid duplicating leaf content in parent indexes.
-
-## 5. Verify and hand off
-
-Run:
-
-```bash
-npm run docs:check
-```
-
-Then run task-relevant tests and `npm run check` before a final code handoff when feasible. Fix broken links, missing directory indexes, unindexed files, invalid frontmatter, and naming violations rather than bypassing the checker.
-
-In the final response, list:
-
-- documents created or updated
-- indexes updated
-- documentation types intentionally not produced and why
-- documentation and project checks run
+Finish with `npm run docs:check` for documentation changes, or report why it could not run. Code checks follow the affected layer, not the mere activation of this skill. Report changed docs, relevant index updates, and genuine gaps without a mandatory five-category ledger for trivial work.

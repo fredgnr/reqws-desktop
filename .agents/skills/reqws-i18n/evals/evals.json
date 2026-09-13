@@ -3,26 +3,62 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "给 ReqWS 的创建工作区对话框新增中文提示 key createWorkspace.directoryUnavailable，并生成英文。请说明完整执行顺序、你会怎样调用翻译 subagent，以及谁负责写回 en-US.json；不要实际改文件。",
-      "expected_output": "Runs i18n:scan before review, explicitly gates a designated GPT-5.6 Sol/Pro subagent at high reasoning or above, requires structured JSON only, validates it in the main agent, updates English only after validation, then runs i18n:apply and i18n:check.",
+      "prompt": "给 ReqWS 的创建工作区对话框新增中文提示 key createWorkspace.directoryUnavailable，并生成英文。请说明完整执行顺序、怎样调用翻译 subagent，以及谁写回 en-US.json；不要实际改文件。",
+      "expected_output": "Scans before review, uses a designated subagent with the same model as the main agent through confirmed inheritance or the current configured model identifier, keeps reasoning high or above, requires read-only structured JSON output, validates in the main agent, then writes reviewed English and runs i18n:apply and i18n:check.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "zh-CN.json 里 errors.codes.STATE_WRITE_FAILED 的中文从“无法保存应用数据。”改成了“无法写入应用数据。”，key 没变。请判断是否触发翻译流程并给出 fail-closed 条件；不要改仓库。",
-      "expected_output": "Treats changed source copy under an existing key as a translation delta, invokes the gated translator, and refuses to update English or the baseline when the required model or high reasoning gate is unavailable.",
+      "prompt": "zh-CN.json 里 errors.codes.STATE_WRITE_FAILED 的中文从“无法保存应用数据。”改成了“无法写入应用数据。”，key 没变。判断是否触发翻译并给出 fail-closed 条件；不要改仓库。",
+      "expected_output": "Treats changed source text under an existing key as a delta; refuses English/baseline writeback when the same-model configuration, high reasoning, or output validation cannot be established, without blocking independent safe non-translation work.",
       "files": []
     },
     {
       "id": 3,
-      "prompt": "新增 repositoryCount_one、repositoryCount_other 以及中文基础计数文案。请给翻译 subagent 的结构化输出要求和主 Agent 的复核点，重点覆盖复数形式；只输出方案。",
-      "expected_output": "Sends the complete plural family together, requires one structured entry per key, checks natural English singular/plural number agreement, and validates exact key coverage before updating en-US.json.",
+      "prompt": "新增 repositoryCount_one、repositoryCount_other 以及中文基础计数文案。请给翻译 subagent 的结构化输出要求和主 Agent 的复核点，重点覆盖复数；只输出方案。",
+      "expected_output": "Sends the complete plural family, requires one entry per requested key in order, validates exact key coverage and source text, and checks natural English singular/plural agreement before writeback.",
       "files": []
     },
     {
       "id": 4,
-      "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文翻译候选漏掉了 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
-      "expected_output": "Rejects the candidate because the placeholder multiset differs, keeps en-US.json and the baseline unchanged, requests a corrected structured response from the gated translator, and only applies after exact placeholder validation.",
+      "prompt": "把提示改为“已为 {{name}} 添加 {{count}} 个仓库”，英文候选漏掉 {{name}}。请按项目 i18n 流程处理，不要直接改文件。",
+      "expected_output": "Rejects the placeholder mismatch, preserves English and baseline, requests one corrected structured response from the gated read-only translator, and applies only after exact validation.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "只重命名 Main 中一个内部 status 局部变量，不改错误码、状态枚举、本地化映射或任何 UI 文案。需要调用翻译 subagent 或更新 i18n baseline 吗？不要执行。",
+      "expected_output": "Does not activate the i18n translation workflow, spawn a translator, or acknowledge the baseline; chooses only affected code verification.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "只调整 i18n 文档里的模型说明：翻译子代理使用与 main agent 相同的模型，不修改 catalog。请说明需要同步哪些说明，以及是否要启动翻译或更新 baseline；只输出判断。",
+      "expected_output": "Updates model-selection documentation and affected eval expectations to follow the main agent rather than a fixed model family, preserves the high reasoning floor and independent read-only translation contract, and does not run translation or change locale/baseline files for documentation-only work.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "源文案为“{{name}} 已保存，继续编辑 {{name}}”，候选只有一个 {{name}}；另一个候选 source 还是上次旧文案。请判断是否可写回，不执行。",
+      "expected_output": "Rejects both repeated-placeholder multiset loss and stale source text, preserves English/baseline, requires current source plus exact placeholders and one correction attempt before reporting an unresolved validation blocker.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "真实翻译任务中，运行时配置已确认子代理继承主 Agent 的模型，reasoning 为 high，但没有单独的 model 参数。是否需要换成固定模型或停止？只说明判断，不执行。",
+      "expected_output": "Accepts confirmed runtime inheritance as the same-model configuration without requiring a redundant explicit model argument or a fixed model version; proceeds with the independent read-only JSON review and main-agent validation workflow.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "真实翻译任务中，运行时要求显式指定 subagent model，主 Agent 当前配置的模型标识已知；工具的默认子代理模型不同。说明如何选择模型，不执行。",
+      "expected_output": "Uses the main agent's current configured model identifier explicitly rather than the different tool default, preserves high reasoning or above, and does not invent a model ID or fall back to a hard-coded model family.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "翻译子代理自称与 main agent 同模型，但运行时显示实际模型不同，或既无法确认继承关系也无法取得主 Agent 的配置。候选译文和占位符看起来正确。可以写回吗？只回答判断。",
+      "expected_output": "Rejects mismatched or unestablished same-model configuration despite plausible output or self-identification, preserves English and baseline, reports the blocker, and does not translate in the main agent or silently select another model.",
       "files": []
     }
   ]
