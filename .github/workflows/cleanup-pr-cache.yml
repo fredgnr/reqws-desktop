@@ -1,0 +1,49 @@
+name: Cleanup merged PR caches
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+permissions: {}
+
+concurrency:
+  group: cleanup-pr-cache-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    # The action also deletes refs/heads/<head-ref> in THIS repository.
+    # Never pass a fork branch, the default branch, or the PR base branch.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch &&
+      github.event.pull_request.head.ref != github.event.pull_request.base.ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+
+    steps:
+      # No checkout: pull_request_target must not execute PR-controlled code.
+      # The pinned composite action interpolates head-ref into its shell script.
+      - name: Validate source branch name
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || ! git check-ref-format "refs/heads/$HEAD_REF"; then
+            echo "::error::Unsafe or unsupported source branch name; no caches were deleted."
+            exit 1
+          fi
+
+      - name: Delete PR and source branch caches
+        uses: toshimaru/delete-action-cache@a12c3ca71338e3312989302c48edeb5ce66293b7
+        with:
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.pull_request.number }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
+          limit: '1000'
+          # Do not set branch: it makes the action skip the PR merge-ref cache.

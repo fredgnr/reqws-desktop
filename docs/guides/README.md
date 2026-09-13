@@ -7,6 +7,7 @@
 | [使用说明](user-guide.md) | active | 说明 Desktop 安装启动、仓库配置、工作区管理、数据保护和故障处理。 |
 | [GoLand 插件使用指南](goland-plugin-guide.md) | active | 图解本地插件编译安装、Tool Window 区块与按钮、状态、日常同步和安全排障。 |
 | [开发指南](development-guide.md) | active | 说明 Desktop/GoLand 开发环境、进程边界、验证、可选同步追踪及打包发布流程。 |
+| [Actions PR 缓存清理](actions-cache-cleanup.md) | active | 说明合入后临时缓存清理范围、主分支保护、启用验收和排障。 |
 | [Agent 协作指南](agent-workflow.md) | active | 说明任务提示词、按需上下文、技能触发、授权边界与指令回归评估。 |
 
 指南描述当前代码的常青用法。查找需求背景、技术取舍或按次验证结果时，从[文档总索引](../README.md)进入相应需求包。
