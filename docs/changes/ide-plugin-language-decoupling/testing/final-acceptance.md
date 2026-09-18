@@ -2,7 +2,7 @@
 title: V：最终系统回归与验收
 type: test-plan
 status: active
-updated: 2026-09-13
+updated: 2026-09-19
 ---
 
 # V：最终系统回归与验收
@@ -11,7 +11,7 @@ updated: 2026-09-13
 
 ## 1. 状态与进入条件
 
-计划状态为 active；本阶段尚未执行，不是第三个开发子任务。只有[S1](../tasks/s1-core-sync-decoupling.md)和[S2](../tasks/s2-scheduling-dependency-cleanup.md)的实际实现、编译和各自必要回归完成，清理清单无已知缺陷后才进入本阶段。
+计划状态为 active；本阶段不是第三个开发子任务，实际执行结果见[2026-09-19 验收记录](acceptance-2026-09-19.md)。只有[S1](../tasks/s1-core-sync-decoupling.md)和[S2](../tasks/s2-scheduling-dependency-cleanup.md)的实际实现、编译和各自必要回归完成，清理清单无已知缺陷后才进入本阶段。
 
 接收两阶段的实际基线/差异、选择器与结果、保留的通用事件处理理由、依赖装配结论，以及是否修改 roots 订阅/关闭恢复路径。先固定用于验证的源码、构建配置与功能输入；完整检查失败后的修复会形成新候选，不能继续沿用旧候选结论。
 
@@ -89,4 +89,4 @@ fixture 为 repo-a/repo-b active、repo-c retained、notes 普通目录；仅普
 
 V 发现缺陷时先补或运行直接失败回归，再在修复后的候选上重新建立所需完整插件/兼容证据；运行逻辑、依赖、构建或 GUI 工件改变，就重做相关集成。只有文档改动且功能输入/工件确实未变时可复用对应功能结果，但必须说明绑定关系。
 
-最终通过不自动授权合并、tag、发布或安装到真实工作区。本文件目前只是计划，没有执行记录；旧 verification 不作为本次候选结果。报告使用 Git/CI/工件引用而非具体摘要表；Wrapper 的固定版本与无 distribution checksum 配置按既定规范保持，不在验收时重新生成清单。
+最终通过不自动授权合并、tag、发布或安装到真实工作区。本文件维护执行计划，实际结果在按次报告中记录；旧 verification 不作为本次候选结果。报告使用 Git/CI/工件引用而非具体摘要表；Wrapper 的固定版本与无 distribution checksum 配置按既定规范保持，不在验收时重新生成清单。

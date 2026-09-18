@@ -2,7 +2,7 @@
 title: IDE 插件语言解耦技术方案
 type: technical-design
 status: active
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 # IDE 插件语言解耦技术方案
@@ -11,7 +11,7 @@ updated: 2026-09-18
 
 ## 1. 状态、依据与范围
 
-S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误/UI 分支，并移除无效参数；本轮必要回归已通过，实际记录见 [S1 任务](tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖及共享追踪核心清理已落实，必要回归已通过，见 [S2 实施记录](tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。V 整体验收尚未执行。Gradle Wrapper 仍为 9.3.0，官方 HTTPS URL 不变且不设置 `distributionSha256Sum`；本轮不升级依赖，不变更 CI/Release，也不安装、重启或发布插件。
+S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误/UI 分支，并移除无效参数；阶段记录见 [S1 任务](tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖及共享追踪核心清理已落实，阶段记录见 [S2 实施记录](tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。S1/S2 已提交，V 的当前结果见[验收记录](testing/acceptance-2026-09-19.md)。Gradle Wrapper 仍为 9.3.0，官方 HTTPS URL 不变且不设置 `distributionSha256Sum`；本轮不升级依赖，不变更 CI/Release。V 所需安装/重启单独遵守授权边界，不自动发布插件。
 
 源码核对基线是 [main@409b30e573d47348618620bbc0a52c0dd0710954](https://github.com/fredgnr/reqws-desktop/tree/409b30e573d47348618620bbc0a52c0dd0710954)。实施时按实际基线核对引用；以下路径和类名是清理入口，不是允许整体删除文件的名单。
 
@@ -83,7 +83,7 @@ S2 删除 `PROJECT_MODEL_FOLLOW_UP` 及其 lineage；未被 mutation guard 拦�
 
 S2 已从 `plugin.xml` 删除 `org.jetbrains.plugins.go` 依赖；保留 `com.intellij.modules.goland`、platform/VCS 以及现有 GoLand 构建 target。产品限制与语言 API 依赖是不同问题，本变更不扩大安装范围。
 
-Gradle 的 `bundledPlugin("org.jetbrains.plugins.go")` 已同步删除，未增加构建/测试专属替代依赖；当前配置已通过 S2 编译、真实平台主路径与结构验证；261/262 Verifier 仍须在 V 分别确认。若测试/产品装配确有依赖，先查明原因并将必要部分限定在构建/测试配置，记录证据，不通过恢复生产 Go API 依赖掩盖问题，也不把工具链假设写成已经验证的结论。GoLand 产品自带 Go 能力不等于 ReqWS 可以继续调用它。
+Gradle 的 `bundledPlugin("org.jetbrains.plugins.go")` 已同步删除，未增加构建/测试专属替代依赖；当前配置已通过 S2 编译、真实平台主路径与结构验证，261/262 Verifier 已在 [V 验收](testing/acceptance-2026-09-19.md)分别通过。若测试/产品装配确有依赖，先查明原因并将必要部分限定在构建/测试配置，记录证据，不通过恢复生产 Go API 依赖掩盖问题，也不把工具链假设写成已经验证的结论。GoLand 产品自带 Go 能力不等于 ReqWS 可以继续调用它。
 
 现有 `verifyForbiddenProductionSymbols` 任务已扩展，在 production source/bytecode 上拒绝 `com.goide` / `com/goide`、`VgoModulesRegistry` 等 Go API 引用；继续保留 VCS writer、外部进程及既有私有 API 禁令。调整 scanner 的自检哨兵，使新增禁止项和原安全项均有覆盖，不新增另一套重复扫描框架。对构建文件探测的语义检查只针对可执行生产路径；文档、历史证据及语言无关对照 fixture 不应被简单文本匹配误杀。
 
@@ -144,4 +144,4 @@ S1/S2 默认同一分支串行，不并发修改共享 adapter/service/coordinat
 
 LD-01～LD-06 的相关用例有结果；生产路径无 Go API、构建文件探测、Go gate 或专属轮询；剩余 notifier/follow-up 有明确通用职责或已删除；现有安全和恢复回归不被削弱；无无用 Go 依赖/空实现；代码、规范、当前指南与实际检查一致。
 
-当前 S1 已提交；S2 核心清理已落实、必要回归已通过，V 尚未执行。阶段结果不能代替上述整体完成标准，也不产生新的完整功能 GO。
+当前 S1/S2 已提交；V 完整自动化、兼容、打包和必要真实 GUI 验收已通过。实际证据见[验收记录](testing/acceptance-2026-09-19.md)；阶段结果或仅自动化通过均不能代替上述整体完成标准。

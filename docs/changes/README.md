@@ -8,7 +8,7 @@
 | [GitHub Actions CI 与 Release](github-actions-ci-release/README.md) | active | 定义 Desktop/GoLand 独立 CI 和版本 tag 发布流程，记录 v0.1.1 双架构正式发布与资产校验。 | 2026-09-13 |
 | [全局设置与界面国际化](global-settings/README.md) | active | 新增 Settings 页面、全局默认目录与中英文界面支持。 | 2026-08-14 |
 | [GoLand 插件支持](goland-plugin-support/README.md) | active | 保留已交付实现与验证记录，Go 专属成功条件及旧测试矩阵由语言解耦方案替代。 | 2026-09-13 |
-| [IDE 插件语言解耦](ide-plugin-language-decoupling/README.md) | active | S1 已提交；S2 调度/依赖核心清理已落实、必要回归已通过，V 尚未执行。 | 2026-09-18 |
+| [IDE 插件语言解耦](ide-plugin-language-decoupling/README.md) | active | S1/S2 已提交；V 完整自动化、双版本兼容、打包及必要真实 GUI 通过，GUI 为 manifest 边界集成。 | 2026-09-19 |
 | [ReqWS Desktop MVP](mvp/README.md) | archived | 保存 MVP 1.0 的覆盖矩阵、交付快照和目标机验证证据。 | 2026-08-13 |
 
 新增需求时使用 kebab-case 创建 `docs/changes/<需求标识或简短主题>/`，先建立局部 `README.md`，再按需添加文档并更新本索引。

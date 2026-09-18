@@ -2,7 +2,7 @@
 title: S2：补偿调度与依赖清理
 type: technical-design
 status: active
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 # S2：补偿调度与依赖清理
@@ -118,6 +118,8 @@ V 需要的候选、工件和 GUI 条件：...
 ```
 
 ## 8. 本轮实施记录（2026-09-18）
+
+本节保留 S2 实施与验证时的阶段事实。S2 随后已提交为 `70e566dfd69403ca57631af3025c68790ab15745`；下文“未提交工作树差异”和“V 未执行”描述当时输入与交接。组合候选的最终阶段证据另见[V 验收记录](../testing/acceptance-2026-09-19.md)，不把阶段结果当作完整验收。
 
 - 接收基线：S1 提交 `8d2561a6b6492f437bad7709b591f72ee8ee3c2d`；本轮候选为该提交加 S2 未提交工作树差异。S1 的 108 项通过记录属于原阶段，不能替代当前依赖和调度配置下的验证。
 - 已落实代码：清理 `PROJECT_MODEL_FOLLOW_UP`、origin digest / event epoch 和 verify-only 合并/传播，保留普通 `PROJECT_MODEL_CHANGE` 范围漂移修复；清理共享 registry trace，删除 descriptor/Gradle 显式 Go 依赖，并扩展既有生产符号门禁及自检。

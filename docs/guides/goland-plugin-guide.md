@@ -2,14 +2,14 @@
 title: ReqWS GoLand 插件使用指南
 type: guide
 status: active
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 # ReqWS GoLand 插件使用指南
 
 本指南说明如何从可信源码编译、安装和使用 ReqWS GoLand 插件，并逐区解释 ReqWS Tool Window 的状态、仓库列表、诊断信息和操作入口。
 
-本指南的同步语义已随语言解耦代码更新；S1 阶段已完成，当前 S2 清理与必要回归状态见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。V 尚未执行，历史截图仅用于界面导览，不代表本轮候选已通过验收。
+本指南的同步语义已随语言解耦代码更新；S1 阶段已完成，当前 S2 清理与必要回归状态见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。[V 验收记录](../changes/ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)记录本轮已通过的完整自动化、兼容、打包及必要真实 GUI；GUI 使用 manifest 边界集成，并完成同候选关闭重开。历史截图仅用于界面导览，不代表本轮候选已通过验收。
 
 ## 1. 插件解决什么问题
 

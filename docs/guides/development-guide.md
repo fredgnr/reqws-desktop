@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 # ReqWS 开发指南
@@ -211,7 +211,7 @@ cd integrations/goland
 
 ### 插件开发与验收边界
 
-[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 已清理补偿调度与显式 Go 依赖，当前验证见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)；V 整体验收尚未执行。
+[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 已清理补偿调度与显式 Go 依赖，当前验证见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)；V 的完整自动化、兼容、打包、必要真实 GUI 及同候选关闭重开已通过，详见 [V 验收记录](../changes/ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。
 
 Desktop 保持 manifest 和 Git/workspace 生命周期的唯一 writer。插件只读消费仓库集合，进行必要的受管项目范围适配和 VCS 诊断。同步主路径不依据 `go.mod` 等语言文件判断成员或成功，不查询 Go registry，也不等待 SDK、依赖、运行配置或语言分析就绪。旧指南中的 Go registry 三层成功门禁和 Go test/run/debug 验收要求已由新规范替代。
 
