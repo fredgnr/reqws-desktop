@@ -272,35 +272,29 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `does not label repositories active when the live project content failed to converge`() {
-    listOf(
-      "PROJECT_FILE_INDEX" to "message.projectFileIndexNotConverged",
-      "GO_MODULES_REGISTRY" to "message.goModulesRegistryNotConverged",
-    ).forEach { (field, expectedDetailKey) ->
-      val model = ReqwsToolWindowViewModel.from(
-        ReqwsProjectState(
-          lifecycle = ReqwsLifecycleState.DEGRADED,
-          snapshot = snapshot(),
-          lastError = ReqwsProjectError(
-            code = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
-            field = field,
-          ),
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.DEGRADED,
+        snapshot = snapshot(),
+        lastError = ReqwsProjectError(
+          code = ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED,
+          field = "PROJECT_FILE_INDEX",
         ),
-      )
+      ),
+    )
 
-      assertEquals(field, "state.degraded", model.statusKey)
-      assertEquals(field, ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, model.errorCode)
-      assertEquals(field, expectedDetailKey, model.errorDetailKey)
-      assertEquals(
-        field,
-        listOf("repository.projectContentUnavailable", "repository.missing"),
-        model.repositories.map { it.statusKey },
-      )
-      assertTrue(field, model.repositories.all { it.statusTone == ReqwsStatusTone.WARNING })
-      val details = formatDetailsText(model).orEmpty()
-      assertTrue(field, details.contains(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED))
-      assertTrue(field, details.contains(ReqwsBundle.message(expectedDetailKey)))
-      assertFalse(field, details.contains("repository.active"))
-    }
+    assertEquals("state.degraded", model.statusKey)
+    assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, model.errorCode)
+    assertEquals("message.projectFileIndexNotConverged", model.errorDetailKey)
+    assertEquals(
+      listOf("repository.projectContentUnavailable", "repository.missing"),
+      model.repositories.map { it.statusKey },
+    )
+    assertTrue(model.repositories.all { it.statusTone == ReqwsStatusTone.WARNING })
+    val details = formatDetailsText(model).orEmpty()
+    assertTrue(details.contains(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED))
+    assertTrue(details.contains(ReqwsBundle.message("message.projectFileIndexNotConverged")))
+    assertFalse(details.contains("repository.active"))
   }
 
   @Test

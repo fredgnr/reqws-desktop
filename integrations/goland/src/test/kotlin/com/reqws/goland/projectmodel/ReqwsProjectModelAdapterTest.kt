@@ -19,6 +19,7 @@ import com.intellij.platform.workspace.jps.entities.modifyModuleEntity
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.concurrency.AppExecutorUtil
+import com.reqws.goland.manifest.ManifestReader
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.manifest.RepositoryAvailability
 import com.reqws.goland.manifest.ResolvedRepository
@@ -31,6 +32,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
@@ -51,6 +53,7 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
     gitRepository(root, "repo-c")
+    Files.writeString(root.resolve("repo-c/README.txt"), "retained repository data")
     Files.createDirectories(root.resolve("ordinary"))
     Files.createDirectories(root.resolve("worktree"))
     Files.writeString(root.resolve("worktree/.git"), "gitdir: ../outside")
@@ -145,6 +148,15 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
       "re-adding a ReqWS exclude must keep its roots event inside the mutation guard",
       guardedRootsChangedCount.get() > guardedRootsChangedAfterReactivation,
     )
+    assertEquals("retained repository data", Files.readString(root.resolve("repo-c/README.txt")))
+
+    val readdedRepository = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+
+    assertEquals(setOf("repo-c"), readdedRepository.removed)
+    assertEquals(setOf(".reqws", "user-hidden"), targetExcludedRelativePaths(root))
+    assertLiveProjection(root, included = setOf("repo-a", "repo-c", "ordinary"), excluded = setOf(".reqws"))
+    assertEquals("retained repository data", Files.readString(root.resolve("repo-c/README.txt")))
+    assertEquals(beforeDependencies, requireNotNull(workspaceModel.currentSnapshot.resolve(moduleId)).dependencies)
   }
 
   fun testVirginProjectionWaitsWithoutSideEffectsThenConvergesAfterIdeaAppears() {
@@ -186,67 +198,193 @@ class ReqwsProjectModelAdapterTest : BasePlatformTestCase() {
     ).generation)
   }
 
-  fun testSynchronizesGoModulesAfterEverySuccessfulLiveProjectionIncludingModelNoOp() {
+  fun testManifestProjectionIsIndependentOfGoModContentsAndLocation() {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    listOf("repo-a", "repo-b", "repo-c").forEach { name ->
+      val process = ProcessBuilder("git", "init", "--quiet", "--template=", "--", root.resolve(name).toString())
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+      try {
+        assertTrue("local Git fixture initialization must finish", process.waitFor(10, TimeUnit.SECONDS))
+        assertEquals("local Git fixture initialization must succeed", 0, process.exitValue())
+      } finally {
+        if (process.isAlive) process.destroyForcibly()
+      }
+      Files.writeString(root.resolve("$name/README.txt"), "ordinary repository content")
+    }
+    Files.createDirectories(root.resolve("notes"))
+    Files.writeString(root.resolve("notes/notes.txt"), "ordinary notes")
+    addExclude("user-hidden")
+    val adapter = WorkspaceExcludeModelAdapter(project, ReqwsManagedModelState(), isTrusted = { true })
+    fun escapeJson(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
+    val repositoriesJson = listOf("repo-a", "repo-b").joinToString(",") { name ->
+      """
+        {
+          "catalogRepositoryId": "$name",
+          "name": "$name",
+          "url": "https://example.invalid/$name.git",
+          "defaultBranch": "main",
+          "relativePath": "$name"
+        }
+      """.trimIndent()
+    }
+    Files.writeString(
+      root.resolve(".reqws/workspace.json"),
+      """
+        {
+          "schemaVersion": 1,
+          "id": "ws_test",
+          "name": "Text Workspace",
+          "featureBranch": "feature/test",
+          "rootPath": "${escapeJson(root.toString())}",
+          "workspaceFilePath": "${escapeJson(root.resolve("workspace.code-workspace").toString())}",
+          "repositories": [$repositoriesJson],
+          "createdAt": "2026-08-14T00:00:00.000Z",
+          "updatedAt": "2026-08-14T00:00:00.000Z"
+        }
+      """.trimIndent(),
+    )
+    val reader = ManifestReader()
+    val manifest = reader.read(root)
+    val initial = awaitUpdate { adapter.apply(manifest) }
+    val initialExcludes = excludedRelativePathsList(root)
+
+    fun assertUnchangedProjection() {
+      val reread = reader.read(root)
+      assertEquals(manifest.digestSha256, reread.digestSha256)
+      assertEquals(listOf("repo-a", "repo-b"), reread.repositories.map { it.repository.name })
+      val result = awaitUpdate { adapter.apply(reread) }
+      assertEquals(initial.managedExcludes, result.managedExcludes)
+      assertTrue(result.added.isEmpty())
+      assertTrue(result.removed.isEmpty())
+      assertEquals(initialExcludes, excludedRelativePathsList(root))
+      assertLiveProjection(
+        root,
+        included = setOf("repo-a", "repo-b", "notes"),
+        excluded = setOf("repo-c", ".reqws"),
+      )
+      assertEquals("ordinary repository content", Files.readString(root.resolve("repo-c/README.txt")))
+      assertEquals("ordinary notes", Files.readString(root.resolve("notes/notes.txt")))
+    }
+
+    assertEquals(setOf(".reqws", "repo-c"), initial.managedExcludes)
+    assertUnchangedProjection()
+    listOf("repo-a", "repo-b", "repo-c").forEach { name ->
+      Files.writeString(root.resolve("$name/go.mod"), "not a valid Go module declaration")
+    }
+    assertUnchangedProjection()
+    listOf("repo-a", "repo-b", "repo-c").forEach { name ->
+      Files.createDirectories(root.resolve("$name/nested"))
+      Files.move(root.resolve("$name/go.mod"), root.resolve("$name/nested/go.mod"))
+    }
+    assertUnchangedProjection()
+  }
+
+  fun testVerifiesLiveProjectionAfterEveryApplyIncludingModelNoOp() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
     gitRepository(root, "repo-c")
-    val calls = mutableListOf<Triple<String, Set<Path>, Set<Path>>>()
-    val notificationPolicies = mutableListOf<Boolean>()
+    val calls = mutableListOf<Pair<Set<Path>, Set<Path>>>()
+    val verifier = PlatformReqwsLiveProjectionVerifier(project)
     val adapter = WorkspaceExcludeModelAdapter(
       project,
       ReqwsManagedModelState(),
       isTrusted = { true },
       markerTokenFactory = tokenFactory(TOKEN_A, TOKEN_B),
-      goModulesProjection = ReqwsGoModulesProjection { moduleName, active, excluded, allowNotification ->
-        calls.add(Triple(moduleName, active.toSet(), excluded.toSet()))
-        notificationPolicies.add(allowNotification)
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { active, excluded ->
+        verifier.verify(active, excluded)
+        calls.add(active.toSet() to excluded.toSet())
       },
     )
 
     awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a"))) }
     awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
+    val noOpRootsEvents = AtomicInteger()
+    project.messageBus.connect(testRootDisposable).subscribe(
+      ModuleRootListener.TOPIC,
+      object : ModuleRootListener {
+        override fun rootsChanged(event: ModuleRootEvent) {
+          noOpRootsEvents.incrementAndGet()
+        }
+      },
+    )
     val noOpModel = awaitUpdate { adapter.apply(snapshot(root, listOf("repo-a", "repo-c"))) }
-    awaitUpdate {
-      adapter.apply(
-        snapshot(root, listOf("repo-a", "repo-c")),
-        allowRootsChangeNotification = false,
-      )
-    }
 
+    assertEquals(0, noOpRootsEvents.get())
     assertTrue(noOpModel.added.isEmpty())
     assertTrue(noOpModel.removed.isEmpty())
-    assertEquals(4, calls.size)
-    assertEquals(module.name, calls.last().first)
-    assertEquals(setOf(root.resolve("repo-a"), root.resolve("repo-c")), calls.last().second)
-    assertEquals(setOf(root.resolve(".reqws")), calls.last().third)
-    assertEquals(listOf(true, true, true, false), notificationPolicies)
+    assertEquals(3, calls.size)
+    assertEquals(setOf(root.resolve("repo-a"), root.resolve("repo-c")), calls.last().first)
+    assertEquals(setOf(root.resolve(".reqws")), calls.last().second)
   }
 
-  fun testDoesNotSynchronizeGoModulesWhenTheLiveFileIndexVerifierFails() {
+  fun testPropagatesLiveFileIndexFailureAndRecoversWithTheSameSnapshot() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
-    var goModuleSyncs = 0
     val liveFailure = ProjectModelApplyException(
       ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
       "live projection failed",
     )
+    var shouldFail = true
+    val verifier = PlatformReqwsLiveProjectionVerifier(project)
     val adapter = WorkspaceExcludeModelAdapter(
       project,
       ReqwsManagedModelState(),
       isTrusted = { true },
       markerTokenFactory = tokenFactory(TOKEN_A),
-      liveProjectionVerifier = ReqwsLiveProjectionVerifier { _, _ -> throw liveFailure },
-      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> goModuleSyncs += 1 },
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { active, excluded ->
+        if (shouldFail) throw liveFailure
+        verifier.verify(active, excluded)
+      },
     )
-
-    val thrown = expectApplyFailure {
-      adapter.apply(snapshot(root, listOf("repo-a")))
-    }
+    val manifest = snapshot(root, listOf("repo-a"))
+    val thrown = expectApplyFailure { adapter.apply(manifest) }
 
     assertSame(liveFailure, thrown)
-    assertEquals(0, goModuleSyncs)
+    shouldFail = false
+    val recovered = awaitUpdate { adapter.apply(manifest) }
+    assertEquals(setOf(".reqws"), recovered.managedExcludes)
+    assertTrue(recovered.added.isEmpty())
+    assertTrue(recovered.removed.isEmpty())
+    assertLiveProjection(root, included = setOf("repo-a"), excluded = setOf(".reqws"))
+  }
+
+  fun testRejectsTrustRevocationAfterLiveFileIndexConverges() {
+    assertFinalLifecycleGate(dispose = false)
+  }
+
+  fun testRejectsServiceDisposalAfterLiveFileIndexConverges() {
+    assertFinalLifecycleGate(dispose = true)
+  }
+
+  private fun assertFinalLifecycleGate(dispose: Boolean) {
+    val root = rootPath()
+    Files.createDirectories(root.resolve(".reqws"))
+    gitRepository(root, "repo-a")
+    var verified = false
+    val verifier = PlatformReqwsLiveProjectionVerifier(project)
+    val adapter = WorkspaceExcludeModelAdapter(
+      project,
+      ReqwsManagedModelState(),
+      isTrusted = { dispose || !verified },
+      isProjectDisposed = { dispose && verified },
+      liveProjectionVerifier = ReqwsLiveProjectionVerifier { active, excluded ->
+        verifier.verify(active, excluded)
+        verified = true
+      },
+    )
+
+    val thrown = expectApplyFailure { adapter.apply(snapshot(root, listOf("repo-a"))) }
+
+    assertTrue(verified)
+    assertEquals(
+      if (dispose) ProjectModelErrorCode.PROJECT_DISPOSED else ProjectModelErrorCode.UNTRUSTED_PROJECT,
+      thrown.code,
+    )
   }
 
   fun testRemovesOwnedTargetAfterStateReloadWithoutRuntimeEntityTags() {
@@ -1396,7 +1534,7 @@ $excludeElements
     )
   }
 
-  fun testTraceSpansCoverRealModelPfiAndRegistryAndKeepTheApplyIdentity() {
+  fun testTraceSpansCoverRealModelAndPfiAndKeepTheApplyIdentity() {
     val root = rootPath()
     Files.createDirectories(root.resolve(".reqws"))
     gitRepository(root, "repo-a")
@@ -1404,7 +1542,6 @@ $excludeElements
     val trace = ReqwsSyncTrace.testing(sink = lines::add)
     val adapter = WorkspaceExcludeModelAdapter(
       project, ReqwsManagedModelState(), isTrusted = { true }, trace = trace,
-      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> },
     )
     val result = awaitUpdate {
       withContext(trace.workerContext()) {
@@ -1413,7 +1550,7 @@ $excludeElements
     }
     assertEquals(setOf(".reqws"), result.added)
     assertLiveProjection(root, included = setOf("repo-a"), excluded = emptySet())
-    assertProjectionTrace(lines, listOf("MODEL", "PFI", "REGISTRY"), "SUCCESS")
+    assertProjectionTrace(lines, listOf("MODEL", "PFI"), "SUCCESS")
     assertTrue(traceRecords(lines, SyncTraceEvent.PROJECTION_STAGE_END).all { it["request_id"] == "31" && it["source_id"] == "41" })
   }
 
@@ -1421,20 +1558,16 @@ $excludeElements
     assertTraceProjectionFailure("MODEL", IllegalStateException("model failure"))
   }
 
-  fun testTracePfiFailureDoesNotEnterRegistry() {
+  fun testTracePfiFailureFinishesThePfiStage() {
     assertTraceProjectionFailure("PFI", IllegalStateException("pfi failure"))
-  }
-
-  fun testTraceRegistryFailureFinishesOnlyTheRegistryStage() {
-    assertTraceProjectionFailure("REGISTRY", IllegalStateException("registry failure"))
   }
 
   fun testTracePreservesPfiPlatformCancellation() {
     assertTraceProjectionFailure("PFI", ProcessCanceledException())
   }
 
-  fun testTracePreservesRegistryCoroutineCancellation() {
-    assertTraceProjectionFailure("REGISTRY", CancellationException("registry cancellation"))
+  fun testTracePreservesPfiCoroutineCancellation() {
+    assertTraceProjectionFailure("PFI", CancellationException("pfi cancellation"))
   }
 
   private fun assertTraceProjectionFailure(stage: String, failure: Throwable) {
@@ -1446,7 +1579,6 @@ $excludeElements
       project, ReqwsManagedModelState(),
       isTrusted = { if (stage == "MODEL") throw failure else true },
       liveProjectionVerifier = ReqwsLiveProjectionVerifier { _, _ -> if (stage == "PFI") throw failure },
-      goModulesProjection = ReqwsGoModulesProjection { _, _, _, _ -> if (stage == "REGISTRY") throw failure },
       trace = ReqwsSyncTrace.testing(sink = lines::add),
     )
     // Catch within the worker coroutine to preserve the original exception across the platform future.
@@ -1454,7 +1586,7 @@ $excludeElements
       try { adapter.apply(snapshot(root, listOf("repo-a"))); null } catch (thrown: Throwable) { thrown }
     }
     assertSame(failure, caught)
-    val enteredStages = listOf("MODEL", "PFI", "REGISTRY").takeWhile { it != stage } + stage
+    val enteredStages = listOf("MODEL", "PFI").takeWhile { it != stage } + stage
     assertProjectionTrace(lines, enteredStages, if (failure is ProcessCanceledException || failure is CancellationException) "CANCELLED" else "FAILED")
   }
 
@@ -1639,7 +1771,7 @@ $excludeElements
       val repository = WorkspaceRepository(
         catalogRepositoryId = "repo_$index",
         name = name,
-        url = "https://sensitive.invalid/repository.git?token=secret",
+        url = "https://example.invalid/repository.git",
         defaultBranch = "main",
         relativePath = name,
       )

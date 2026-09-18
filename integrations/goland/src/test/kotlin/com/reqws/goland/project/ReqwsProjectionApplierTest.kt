@@ -8,11 +8,20 @@ import com.reqws.goland.manifest.WorkspaceManifest
 import com.reqws.goland.manifest.WorkspaceRepository
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
+import com.reqws.goland.sync.LatestWinsSyncCoordinator
+import com.reqws.goland.sync.SyncCandidate
+import com.reqws.goland.sync.SyncCandidateApplier
+import com.reqws.goland.sync.SyncCandidateCommitter
+import com.reqws.goland.sync.SyncCoordinatorEvent
+import com.reqws.goland.sync.SyncCoordinatorObserver
 import com.reqws.goland.sync.SyncTrigger
 import java.nio.file.Path
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -25,7 +34,7 @@ class ReqwsProjectionApplierTest {
     val snapshot = snapshot()
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ -> events.add("model") },
+      projectModel = ProjectModelProjection { _ -> events.add("model") },
     )
 
     applier.apply(snapshot)
@@ -34,25 +43,10 @@ class ReqwsProjectionApplierTest {
   }
 
   @Test
-  fun `disables another roots notification for a bounded project-model follow-up`() = runBlocking {
-    var notificationAllowed: Boolean? = null
-    val applier = ReqwsProjectionApplier(
-      isTrusted = { true },
-      projectModel = ProjectModelProjection { _, allowRootsChangeNotification ->
-        notificationAllowed = allowRootsChangeNotification
-      },
-    )
-
-    applier.apply(snapshot(), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
-
-    assertEquals(false, notificationAllowed)
-  }
-
-  @Test
   fun `maps a stale live file index to a layered project-content diagnostic`() {
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ ->
+      projectModel = ProjectModelProjection { _ ->
         throw ProjectModelApplyException(
           ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
           "Live ProjectFileIndex did not converge.",
@@ -70,30 +64,73 @@ class ReqwsProjectionApplierTest {
   }
 
   @Test
-  fun `keeps the Go Modules registry failure layer in diagnostics`() {
-    val applier = ReqwsProjectionApplier(
+  fun `file index failure dirties the same digest until a successful retry commits it`() = runBlocking {
+    val snapshot = snapshot()
+    val events = Channel<SyncCoordinatorEvent>(Channel.UNLIMITED)
+    var fileIndexConverged = true
+    var applyCount = 0
+    var commitCount = 0
+    val projectionApplier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ ->
-        throw ProjectModelApplyException(
-          ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED,
-          "Go Modules registry did not converge.",
-        )
+      projectModel = ProjectModelProjection { _ ->
+        applyCount += 1
+        if (!fileIndexConverged) {
+          throw ProjectModelApplyException(
+            ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
+            "Live ProjectFileIndex did not converge.",
+          )
+        }
       },
     )
-
-    val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
-      runBlocking { applier.apply(snapshot()) }
+    val coordinator = LatestWinsSyncCoordinator(
+      scope = this,
+      applier = SyncCandidateApplier<ManifestSnapshot> { projectionApplier.apply(it.value) },
+      committer = SyncCandidateCommitter { commitCount += 1 },
+      observer = SyncCoordinatorObserver { events.trySend(it) },
+    )
+    val candidate = SyncCandidate(snapshot.digestSha256, snapshot)
+    suspend fun nextOutcome(): SyncCoordinatorEvent = withTimeout(5_000) {
+      var event = events.receive()
+      while (event is SyncCoordinatorEvent.Applying) event = events.receive()
+      event
     }
+    try {
+      assertTrue(coordinator.offer(candidate))
+      assertTrue(nextOutcome() is SyncCoordinatorEvent.Applied)
+      assertEquals(snapshot.digestSha256, coordinator.lastAppliedDigest)
+      assertEquals(1, commitCount)
 
-    assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, failure.stableCode)
-    assertEquals("GO_MODULES_REGISTRY", failure.field)
+      fileIndexConverged = false
+      assertTrue(coordinator.offer(candidate, SyncTrigger.MANUAL))
+      val failed = nextOutcome() as SyncCoordinatorEvent.Failed
+      val failure = failed.cause as ReqwsProjectionApplyException
+      assertEquals(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED, failure.stableCode)
+      assertEquals("PROJECT_FILE_INDEX", failure.field)
+      assertTrue(failure.degraded)
+      assertNull(coordinator.lastAppliedDigest)
+      assertEquals(1, commitCount)
+
+      fileIndexConverged = true
+      assertTrue(coordinator.offer(candidate))
+      assertTrue(nextOutcome() is SyncCoordinatorEvent.Applied)
+      assertEquals(snapshot.digestSha256, coordinator.lastAppliedDigest)
+      assertEquals(2, commitCount)
+      assertEquals(3, applyCount)
+
+      assertTrue(coordinator.offer(candidate))
+      assertTrue(nextOutcome() is SyncCoordinatorEvent.NoOp)
+      assertEquals(3, applyCount)
+      assertEquals(2, commitCount)
+    } finally {
+      coordinator.close()
+    }
   }
 
   @Test
   fun `classifies virgin project metadata readiness without reporting ownership conflict`() {
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ ->
+      projectModel = ProjectModelProjection { _ ->
         throw ProjectModelApplyException(
           ProjectModelErrorCode.PROJECT_METADATA_NOT_READY,
           "The .idea directory is not ready.",
@@ -115,7 +152,7 @@ class ReqwsProjectionApplierTest {
     var sideEffects = 0
     val applier = ReqwsProjectionApplier(
       isTrusted = { false },
-      projectModel = ProjectModelProjection { _, _ -> sideEffects += 1 },
+      projectModel = ProjectModelProjection { _ -> sideEffects += 1 },
     )
 
     val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
@@ -132,7 +169,7 @@ class ReqwsProjectionApplierTest {
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { true },
-      projectModel = ProjectModelProjection { _, _ -> sideEffects += 1 },
+      projectModel = ProjectModelProjection { _ -> sideEffects += 1 },
     )
 
     assertThrows(ReqwsProjectionApplyException::class.java) {
@@ -148,13 +185,27 @@ class ReqwsProjectionApplierTest {
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
       isProjectDisposed = { disposed },
-      projectModel = ProjectModelProjection { _, _ -> disposed = true },
+      projectModel = ProjectModelProjection { _ -> disposed = true },
     )
 
     assertThrows(ReqwsProjectionApplyException::class.java) {
       runBlocking { applier.apply(snapshot()) }
     }
+  }
 
+  @Test
+  fun `rejects trust revocation that follows the model commit`() {
+    var trusted = true
+    val applier = ReqwsProjectionApplier(
+      isTrusted = { trusted },
+      projectModel = ProjectModelProjection { _ -> trusted = false },
+    )
+
+    val failure = assertThrows(ReqwsProjectionApplyException::class.java) {
+      runBlocking { applier.apply(snapshot()) }
+    }
+
+    assertEquals(ReqwsStableErrorCode.SAFE_MODE_BLOCKED, failure.stableCode)
   }
 
   @Test
@@ -162,7 +213,7 @@ class ReqwsProjectionApplierTest {
     val cancellation = CancellationException("cancel project model apply")
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ -> throw cancellation },
+      projectModel = ProjectModelProjection { _ -> throw cancellation },
     )
 
     val thrown = assertThrows(CancellationException::class.java) {
@@ -177,7 +228,7 @@ class ReqwsProjectionApplierTest {
     val cancellation = ProcessCanceledException()
     val applier = ReqwsProjectionApplier(
       isTrusted = { true },
-      projectModel = ProjectModelProjection { _, _ -> throw cancellation },
+      projectModel = ProjectModelProjection { _ -> throw cancellation },
     )
 
     val thrown = assertThrows(ProcessCanceledException::class.java) {

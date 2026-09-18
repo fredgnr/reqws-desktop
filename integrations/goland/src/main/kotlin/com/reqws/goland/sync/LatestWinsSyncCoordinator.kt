@@ -19,7 +19,6 @@ import kotlinx.coroutines.launch
 
 internal enum class SyncTrigger {
   AUTOMATIC,
-  PROJECT_MODEL_FOLLOW_UP,
   PROJECT_MODEL_CHANGE,
   TRUST_TRANSITION,
   MANUAL,
@@ -28,14 +27,9 @@ internal enum class SyncTrigger {
 internal val SyncTrigger.requiresReconciliation: Boolean
   get() = this != SyncTrigger.AUTOMATIC
 
-/** A verify-only language follow-up applies once but must not leak into a later read/digest. */
-private val SyncTrigger.retainsCoordinatorReconcileIntent: Boolean
-  get() = requiresReconciliation && this != SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-
 private val SyncTrigger.reconciliationPriority: Int
   get() = when (this) {
     SyncTrigger.AUTOMATIC -> 0
-    SyncTrigger.PROJECT_MODEL_FOLLOW_UP -> 1
     SyncTrigger.PROJECT_MODEL_CHANGE -> 2
     SyncTrigger.TRUST_TRANSITION -> 3
     SyncTrigger.MANUAL -> 4
@@ -159,7 +153,6 @@ internal class LatestWinsSyncCoordinator<T>(
   private val submissionLock = Any()
   private var pendingSubmission: Submission<T>? = null
   private var pendingReconcileTrigger: SyncTrigger? = null
-  private var pendingFollowUpDigest: String? = null
   private val submissionSignal = Channel<Unit>(Channel.CONFLATED)
   private val worker: Job
 
@@ -178,7 +171,6 @@ internal class LatestWinsSyncCoordinator<T>(
       synchronized(submissionLock) {
         pendingSubmission = null
         pendingReconcileTrigger = null
-        pendingFollowUpDigest = null
       }
       submissionSignal.close()
     }
@@ -221,33 +213,17 @@ internal class LatestWinsSyncCoordinator<T>(
     synchronized(submissionLock) {
       if (closed.get() || !worker.isActive) return false
       if (trace.enabled) replacedRequestId = pendingSubmission?.requestId ?: 0L
-      if (submission.trigger.retainsCoordinatorReconcileIntent) {
+      if (submission.trigger.requiresReconciliation) {
         pendingReconcileTrigger = mergeReconcileTrigger(
           pendingReconcileTrigger,
           submission.trigger,
         )
-        pendingFollowUpDigest = null
       }
       val retainedTrigger = pendingReconcileTrigger
       pendingSubmission = when (submission) {
-        is CandidateSubmission -> {
-          val digest = submission.candidate.digestSha256
-          val effectiveTrigger = when {
-            retainedTrigger != null -> retainedTrigger
-            submission.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP -> {
-              pendingFollowUpDigest = digest
-              SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-            }
-            pendingFollowUpDigest == digest -> SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-            else -> {
-              // A different manifest supersedes the verify-only event lineage and must retain its
-              // ordinary roots-notification permission.
-              pendingFollowUpDigest = null
-              submission.trigger
-            }
-          }
-          submission.withTrigger(effectiveTrigger)
-        }
+        is CandidateSubmission -> submission.withTrigger(
+          retainedTrigger ?: submission.trigger,
+        )
         is ReadFailureSubmission -> submission.withTrigger(
           retainedTrigger ?: submission.trigger,
         )
@@ -279,15 +255,6 @@ internal class LatestWinsSyncCoordinator<T>(
           // failure keeps the strongest intent sticky so the next valid automatic read still
           // reconciles.
           pendingReconcileTrigger = null
-        }
-        if (
-          next is CandidateSubmission &&
-          next.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP &&
-          pendingFollowUpDigest == next.candidate.digestSha256
-        ) {
-          // The coordinator now owns the accepted verify-only lineage. Consume it only when the
-          // candidate actually leaves the pending slot and starts its bounded replay.
-          pendingFollowUpDigest = null
         }
         next
       } ?: continue
@@ -480,7 +447,6 @@ internal class LatestWinsSyncCoordinator<T>(
     synchronized(submissionLock) {
       pendingSubmission = null
       pendingReconcileTrigger = null
-      pendingFollowUpDigest = null
     }
     submissionSignal.close()
     worker.cancel(CancellationException("ReqWS sync coordinator disposed"))

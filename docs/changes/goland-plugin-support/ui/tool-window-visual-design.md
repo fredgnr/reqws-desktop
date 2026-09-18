@@ -2,12 +2,14 @@
 title: GoLand Tool Window 视觉设计与实现对照
 type: technical-design
 status: active
-updated: 2026-09-13
+updated: 2026-09-19
 ---
 
 # GoLand Tool Window 视觉设计与实现对照
 
-本文把 ReqWS Tool Window 的视觉目标固化为可实现、可截图对照的界面契约；原型用于指导实现，真实截图只代表待后续验收的候选界面。
+本文把 ReqWS Tool Window 的视觉目标固化为可实现、可截图对照的界面契约；原型用于指导实现，真实截图只代表其注明的原交付候选界面。
+
+S1/S2 已实施，以下状态与操作语义已按[语言解耦契约](../../ide-plugin-language-decoupling/technical-design.md#4-目标执行链与状态)更新；Go registry/运行配置就绪不再是 `Synced`/`Active` 条件。旧截图保留原候选归属，不证明当前状态或语言能力；当前结果见 [2026-09-19 验收记录](../../ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。
 
 ## 1. 设计目标
 
@@ -15,7 +17,7 @@ updated: 2026-09-13
 - 在常用窄 Tool Window 中先回答“当前是否同步成功、哪个工作区、有哪些活动仓库”，再提供诊断和恢复动作。
 - 同步、降级、错误和 Safe Mode 同时使用文字与颜色表达；颜色只作辅助，不成为唯一状态信号。
 - 仓库行保持紧凑且顶部对齐，避免旧实现把少量仓库拉伸成大块空白。
-- 保留 `Sync Now`、`Open Manifest File` 和 `Copy Diagnostics` 的现有入口、资源键和安全边界，不新增按钮；`Sync Now` 重放 Project Model 与 live `ProjectFileIndex`/Go Modules registry reconcile 并重新检查 VCS，不自动修改 Directory Mappings。
+- 保留 `Sync Now`、`Open Manifest File` 和 `Copy Diagnostics` 的现有入口、资源键和安全边界，不新增按钮；`Sync Now` 重放 Project Model 与 live `ProjectFileIndex` 目录边界验证并重新检查 VCS，不自动修改 Directory Mappings。
 - Git Root 缺失、同路径 VCS 冲突或 retained mapping 以文字说明用户前往 Settings → Version Control → Directory Mappings 手动处理；插件不以视觉状态暗示自动修复。
 - manifest 提供的 workspace、branch 和 repository name 继续禁用 Swing HTML 自动渲染，并在空间不足时保留可访问的完整提示。
 
@@ -31,9 +33,9 @@ updated: 2026-09-13
 |---|---|
 | 状态标题 | Tool Window 自带标题保持不变；面板首行以内容宽度的状态徽标靠右展示，不使用满宽状态边框，状态色由当前 JetBrains 主题派生。 |
 | 工作区摘要 | 使用带主题边界的独立卡片；workspace 名称作为主信息，branch 和活动仓库数量作为次级信息；长文本截断时 tooltip 保留完整值。 |
-| 仓库列表 | 使用独立卡片；header 左侧为标题、右侧为纯数字 count；每行固定紧凑高度并带主题分隔线，包含 repository name、目录状态和 Git Root configured/需手动配置等文字语义及辅助色图标；present repository 只有 live `ProjectFileIndex` 与顶层普通 `go.mod` 对应的 Go Modules registry 均收敛后才显示 `Active`；1–6 行不显示滚动条，7 行起固定显示六行并在卡片内滚动。 |
+| 仓库列表 | 使用独立卡片；header 左侧为标题、右侧为纯数字 count；每行固定紧凑高度并带主题分隔线，包含 repository name、目录状态和 Git Root configured/需手动配置等文字语义及辅助色图标；present repository 只有本会话已接受的 Workspace Model/PFI 投影有效且当前未处于读取/同步中时才显示 `Active`；1–6 行不显示滚动条，7 行起固定显示六行并在卡片内滚动。 |
 | 诊断摘要 | 显示 digest、保留上次有效模型或无 manifest 提示；VCS 差异写明 Settings → Version Control → Directory Mappings；live project content 未收敛时显示 `PROJECT_CONTENT_NOT_CONVERGED`，错误码继续与状态文字同屏。 |
-| 操作区 | `Sync Now` 为全宽主操作，但含义是“重新同步项目模型与 live projection 并检查 VCS”；trusted registry mismatch 可通过 guarded public ordinary roots event 请求 GoLand 原生刷新，Safe Mode 不发布该事件，插件不直接调用 Go scheduler/process 或 internal/reflection；另两个动作居中显示为次级链接，并保持原有 enable 规则。 |
+| 操作区 | `Sync Now` 为全宽主操作，但含义是“重新同步项目模型与 live projection 并检查 VCS”；仅在 trusted 时更新受管模型，Safe Mode 不发布 ReqWS roots event；不读取 Go registry 或触发语言专属补偿，不直接调用 Go scheduler/process 或 internal/reflection；另两个动作居中显示为次级链接，并保持原有 enable 规则。 |
 
 布局必须随 Tool Window 宽度伸缩，不依赖固定像素宽度；滚动只发生在仓库区域，摘要和操作区始终可达。浅色与深色主题都使用平台颜色，不硬编码仅适配单一主题的背景或前景。
 
@@ -41,10 +43,10 @@ updated: 2026-09-13
 
 | 状态 | 视觉语义 | 必须保留的文字语义 |
 |---|---|---|
-| synchronized | 成功色辅助标记 | authoritative Workspace Model、live `ProjectFileIndex`、Go Modules registry 与 VCS 只读诊断均收敛后才显示 `Synced` / `已同步` |
+| synchronized | 成功色辅助标记 | authoritative Workspace Model、live `ProjectFileIndex` 与 VCS 只读诊断均收敛后才显示 `Synced` / `已同步` |
 | reading、synchronizing | 信息色或进度语义 | 当前读取或同步文字 |
 | degraded、VCS 待手动配置、Safe Mode | 警示色辅助标记 | 部分可用、Directory Mappings 手动步骤或信任提示 |
-| degraded、project content 未收敛 | 警示色辅助标记 | `PROJECT_CONTENT_NOT_CONVERGED` 同时覆盖 live `ProjectFileIndex` 或 Go Modules registry 未收敛，并显示 `Project Content Unavailable` / `项目内容未生效`；present repository 不得显示 `Active` |
+| degraded、project content 未收敛 | 警示色辅助标记 | `PROJECT_CONTENT_NOT_CONVERGED` 表示 live `ProjectFileIndex` 未收敛，并显示 `Project Content Unavailable` / `项目内容未生效`；present repository 不得显示 `Active`。原 Go registry 失败分支已删除 |
 | error | 错误色辅助标记 | `Error` / `错误` 与稳定错误码 |
 | inactive、disposed | 中性色 | 不可用或已关闭文字，且操作禁用 |
 
@@ -60,4 +62,4 @@ updated: 2026-09-13
 
 长名称提示按当前字体度量，以 320 个缩放单位为目标行宽，在完整 Unicode 字符簇边界换行，保留首尾及连续普通空格并继续 HTML 转义。极端单个字符簇超过目标宽度时优先保持字符完整。原始 label 与完整辅助功能名称保持不变，实际主题、长提示与 VoiceOver 验收边界见[修复报告](../testing/verification-2026-09-13.md)。
 
-[registry 失败图](tool-window-registry-failure.jpg)展示 `PROJECT_CONTENT_NOT_CONVERGED` 与复制反馈独立成行；重复复制不累积，新的状态清理旧反馈。错误详情、tooltip 和辅助功能说明不得被复制成功提示覆盖。
+[历史 registry 失败图](tool-window-registry-failure.jpg)仅展示原候选的 `PROJECT_CONTENT_NOT_CONVERGED` 与复制反馈独立成行；重复复制不累积，新的状态清理旧反馈。错误详情、tooltip 和辅助功能说明不得被复制成功提示覆盖。

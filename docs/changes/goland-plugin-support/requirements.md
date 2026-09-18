@@ -2,12 +2,14 @@
 title: GoLand 插件支持需求说明
 type: requirements
 status: active
-updated: 2026-09-05
+updated: 2026-09-19
 ---
 
 # GoLand 插件支持需求说明
 
 本文定义 ReqWS 本次 GoLand 支持的完整交付范围：跨 IDE manifest 契约、ReqWS Desktop 的 GoLand 启动入口，以及以 manifest 为目标状态的 GoLand 插件 v0.1。
+
+S1/S2 已实施，当前结果见 [2026-09-19 验收记录](../ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。原 Go registry、`go.mod` 和 PACKAGE run/test 成功条件已由[语言解耦契约 LD-01～LD-06](../ide-plugin-language-decoupling/technical-design.md#2-目标与非目标)替代；下文完成定义、场景和矩阵已同步。原条款仅见[固定基线的历史需求](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/docs/changes/goland-plugin-support/requirements.md)，不作为当前实现或验收要求。通用 manifest、ownership、PFI、信任、取消恢复与 VCS 只读要求继续有效。
 
 ## 1. 背景与问题
 
@@ -37,7 +39,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 
 成功标准不是让 GoLand 支持 VS Code 的 workspace 文件，而是：
 
-> 同一个 ReqWS workspace 在 GoLand 中表现为一个受管多仓库项目；authoritative Workspace Model 与两个 live projection 自动向 manifest 收敛，Git Root 差异可见并由用户在 GoLand 中明确配置。
+> 同一个 ReqWS workspace 在 GoLand 中表现为一个受管多仓库项目；authoritative Workspace Model 与 public `ProjectFileIndex` 自动向 manifest 收敛，Git Root 差异可见并由用户在 GoLand 中明确配置。
 
 ## 3. 完成定义
 
@@ -47,9 +49,9 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 插件 ZIP 可由仓库源码构建、测试并通过 GoLand 的磁盘安装入口安装；
 - manifest v1 由 TypeScript 和 Kotlin 契约测试共同覆盖；
 - 首次打开、自动同步、手动复核和重启恢复均可用；
-- 活动仓库对应的 authoritative Workspace Model、public `ProjectFileIndex` 与 GoLand Go Modules registry 均与 manifest 一致，Git Root 缺失或冲突有明确的手动配置步骤；
+- 活动仓库对应的 authoritative Workspace Model 与 public `ProjectFileIndex` 均与 manifest 一致，Git Root 缺失或冲突有明确的手动配置步骤；
 - 已逻辑移除但仍在磁盘上的仓库自动退出默认索引、搜索和代码分析；若仍是 Git Root，插件提示用户在 Directory Mappings 中手动移除；
-- 活动仓库中带普通顶层 `go.mod` 的 package 可被 GoLand 的 `PACKAGE` 类型 Go run/test configuration 在校验阶段解析，并能直接运行或调试；FILE/DIRECTORY 模式或忽略配置错误后继续执行不能替代该证据；
+- 仓库是否活动由 manifest 决定，不取决于 `go.mod` 或其他构建文件；`Synced`/`Active` 不承诺语言分析、SDK、依赖或运行/调试配置就绪；
 - 插件不执行 Git 生命周期操作，不删除目录，不绕过 Trusted Project / Safe Mode；
 - 用户已有、且不属于 ReqWS 的 module、Content Root 不被删除；所有 VCS mapping、顺序和 `rootSettings` 均不被插件修改；
 - Desktop、插件、Plugin Verifier、真实 macOS GoLand GUI 和文档检查均有 exact-head 证据；
@@ -95,10 +97,10 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 - 只在项目根存在有效 ReqWS manifest 时启用项目级能力；
 - 解析和校验 manifest，但不根据 URL、branch 或其他字段执行网络或命令；
 - 把活动仓库转换为受管 Content Root、Workspace Model 实体或经过 spike 验证的等价项目模型；
-- 把 authoritative Workspace Model 作为第一层事实，再分别以 public `ProjectFileIndex` 与 public GoLand `VgoModulesRegistry` 作为两个 live 成功门禁；任何一层不一致都不得推进 clean digest、显示 `Synced`/`Active` 或宣称 Go package 已可用；
-- trusted project 的 Go Modules registry 不一致时，只允许在 EDT write action 和 `ReqwsProjectModelMutationGuard` 内通过 public `ProjectRootManagerEx.makeRootsChange({}, NO_RESCAN_NEEDED)` 发布一次普通 roots change，然后在最多 30 秒内只读复核 `VgoModulesRegistry`；Safe Mode 不发布该事件；
-- 不调用 `VgoIntegrationManager`、`VgoStatusTracker`、Go module scheduler、反射或 private API，也不直接启动 Go command 或下载；GoLand 收到 trusted roots event 后可能按其原生设置执行 `go list` 或依赖下载，该行为必须与 ReqWS 自身行为分开归因；
-- 订阅 public `ModuleRootListener` 识别用户、GoLand 或其他插件造成的 live project-model drift；外部事件以固定 250 ms 防抖并用 `PROJECT_MODEL_CHANGE` 强制 same-digest reconcile，ReqWS 自己在 mutation guard 内产生的同步事件必须抑制，GoLand 语言层的迟到事件最多形成有界 follow-up 而不能循环刷新；
+- 把 authoritative Workspace Model 作为事实层，以 public `ProjectFileIndex` 验证活动/排除目录边界；模型或 PFI 不一致时不得推进 clean digest 或显示 `Synced`/`Active`；
+- Go registry 读取、语言专属 roots 通知、等待与补偿已删除；不得通过可选适配器或恒真实现恢复旧成功门禁，详见[当前执行链](../ide-plugin-language-decoupling/technical-design.md#4-目标执行链与状态)；
+- 不调用 Go API、tracker/scheduler、反射或 private API，也不启动 Go command 或下载；正常 Workspace Model 更新及其必要平台通知保留，GoLand 原生进程/下载与 ReqWS 调用分别归因；
+- 订阅 public `ModuleRootListener` 识别用户、GoLand 或其他插件造成的 live project-model drift；外部事件以固定 250 ms 防抖并用 `PROJECT_MODEL_CHANGE` 强制 same-digest reconcile，ReqWS 自己在 mutation guard 内产生的同步事件必须抑制，未被 guard 抑制的迟到普通事件同样进入有界防抖的 `PROJECT_MODEL_CHANGE`，不得恢复 Go 专属 follow-up 或形成循环刷新；
 - 只读比对每个活动仓库与现有 Git VCS Directory Mapping，为缺失、VCS 类型冲突或保留仓库 mapping 提供手动配置诊断；
 - 逻辑移除仓库后，从插件受管项目内容中移除但不删除目录；Git Root 只提示用户手动调整；
 - 重新添加同一仓库时恢复受管项目内容并重新检查 mapping；插件不创建重复 root/module，也不创建或修改任何 mapping；
@@ -117,13 +119,15 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 
 ### 4.4 构建、测试和文档
 
+以下保留原支持交付涉及的检查层；后续候选按[开发与测试规范](../../standards/ide-plugin-development-testing.md)和[当前测试计划](../ide-plugin-language-decoupling/testing/test-plan.md)选择受影响检查，不机械重跑 Desktop、原生 Git 或 Go 工具链全矩阵。
+
 必须实现：
 
 - 使用 IntelliJ Platform Gradle Plugin 2.x；
 - 固定 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 target、Java/JVM 21 与 `since-build: 261`，不设置 `until-build`；
 - 插件单元测试、平台模型测试、`verifyPlugin`、Plugin Verifier 和 `buildPlugin` 通过；
 - 在 Apple Silicon macOS 的真实 GoLand 上完成 GUI smoke；
-- 验证报告记录 exact commit、GoLand version/build、JBR/JDK、macOS、插件 ZIP SHA-256、fixture 和结果；
+- 验证报告记录源码 commit/diff、GoLand version/build、JBR/JDK、macOS、工件入口、fixture 和结果；临时工件比对留在测试输出，不抄写摘要台账；
 - `npm run check`、macOS Desktop package smoke 和现有编辑器回归通过；
 - 实现稳定后补充 `integrations/goland/README.md`、用户指南、开发指南和按次验证报告。
 
@@ -137,7 +141,7 @@ GoLand 可以打开工作区根目录，但仅打开父目录不等同于 ReqWS 
 2. Desktop 检查 root 和 manifest 仍存在；
 3. Desktop 解析受信任的 GoLand 安装候选；
 4. Desktop 用参数数组打开 workspace root；
-5. 插件检测 manifest，并在项目已受信时同步 authoritative Workspace Model、通过 `ProjectFileIndex`/Go Modules registry 双 live gate、只读检查 Git Roots；
+5. 插件检测 manifest，并在项目已受信时同步 authoritative Workspace Model、通过 public `ProjectFileIndex` 目录边界验证、只读检查 Git Roots；
 6. 缺失或保留的 Git Root 在 ReqWS Tool Window 中显示手动配置提示；用户在 Directory Mappings 应用变更后，插件自动复核状态。
 
 GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` 类错误，其他编辑器入口不受影响。
@@ -159,7 +163,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - Desktop 继续负责 clone、分支切换、路径校验、manifest 和 `.code-workspace` 写入；
 - 插件观察到最新有效 manifest；
-- 新仓库先进入 authoritative Workspace Model，再通过 `ProjectFileIndex` 与 Go Modules registry 双 live gate；带普通顶层 `go.mod` 的 package 必须可被 `PACKAGE` run/test configuration 校验并直接执行；若缺少精确 Git mapping，Tool Window 提示用户在 Settings → Version Control → Directory Mappings 中添加为 `Git`；
+- 新仓库进入 authoritative Workspace Model 并通过 public `ProjectFileIndex` 目录边界验证；不检查 Go module 或运行配置。若缺少精确 Git mapping，Tool Window 提示用户在 Settings → Version Control → Directory Mappings 中添加为 `Git`；
 - 用户应用配置后，VCS 配置事件触发自动复核，不要求关闭或重启 GoLand。
 
 ### 5.4 Desktop 逻辑移除仓库
@@ -169,12 +173,12 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - Desktop 只从 manifest 和 `.code-workspace` 移除记录；
 - 磁盘仓库目录继续保留；
 - 插件仅移除自己管理的项目内容，不删除或改写 Git mapping；
-- 该目录不再参与默认 Project View、搜索范围、代码分析或目标 module 的 Go Modules registry；若它仍是 Git Root，Tool Window 提示用户按自身意图手动移除；
+- 该目录不再参与默认受管项目内容和搜索范围；若它仍是 Git Root，Tool Window 提示用户按自身意图手动移除；
 - 已打开文件可以由 GoLand 按平台行为保留为外部文件，但不得因此重新成为受管 root。
 
 ### 5.5 重新添加与恢复
 
-- 重新添加保留仓库时，插件恢复同一路径的受管项目模型条目，等待两个 live gate 收敛并重新检查 Git mapping；既有或新建的 `PACKAGE` run/test configuration 必须恢复正常校验，无需重启或“Continue Anyway”；
+- 重新添加保留仓库时，插件恢复同一路径的受管项目模型条目，验证 public `ProjectFileIndex` 并重新检查 Git mapping；不承诺语言运行配置即时恢复，也不把移除目录解释为禁止运行其磁盘代码；
 - 文件监听丢失、Mac 休眠恢复或同步失败后，用户可执行“立即同步”；该动作只重放项目模型同步并重新读取 VCS，不修改 Directory Mappings；
 - GoLand 重启后重新读取 manifest；
 - 首次 read/apply 的一次瞬时取消由 service-scope 有界自动重试恢复；重复取消不会形成无限重试或持续 CPU；
@@ -209,7 +213,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - 删除 repository 或 workspace 目录；
 - 自动执行仓库内脚本、Gradle task、Go command 或任意 manifest 字段。
 
-插件也不得直接调用 Go module tracker/status tracker/scheduler、下载器或 process API。trusted project 中由 ReqWS 通过 public Project Roots API 发布的普通 roots change 可能触发 GoLand 自己的 Go module 更新、`go list` 或依赖下载；这是 GoLand 原生反应，必须在日志和验收中单独归因，不得描述为 ReqWS 直接执行命令。GoLand 用户主动使用 IDE 自带 Git 功能同样不属于插件自动行为。插件只负责检测当前 Directory Mappings 是否包含活动仓库的精确 Git Root，并显示如何手动修正，不负责登记或移除。
+插件也不得直接调用 Go module tracker/status tracker/scheduler、下载器或 process API。trusted project 中正常 Workspace Model 更新产生的平台通知可能触发 GoLand 自己的语言处理或依赖下载，必须在日志和验收中单独归因；旧 Go mismatch 专属 roots 通知已删除，不得描述为 ReqWS 直接执行命令。GoLand 用户主动使用 IDE 自带 Git 功能同样不属于插件自动行为。插件只负责检测当前 Directory Mappings 是否包含活动仓库的精确 Git Root，并显示如何手动修正，不负责登记或移除。
 
 ### 6.4 VCS Directory Mappings
 
@@ -239,9 +243,9 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 - 同一项目同一时刻最多一个 apply；
 - apply 期间收到的新内容合并为下一轮最新目标；
-- 同一 live project service/coordinator 生命周期内，只有 authoritative Workspace Model、public `ProjectFileIndex`、public `VgoModulesRegistry` 与 VCS 只读快照均完成并符合目标后，相同 manifest digest 才可跳过自动项目模型重放；VCS 配置事件仍必须触发一次只读复核；
-- Go Modules registry mismatch 在 trusted project 中每轮最多发布一次普通 roots change，并在不超过 30 秒的有界窗口内只读复核；超时保持 baseline dirty 并发布稳定 `PROJECT_CONTENT_NOT_CONVERGED`，不得静默降级为 clean；
-- public `ModuleRootListener` 的外部变化 burst 必须在 250 ms 内合并为一个 `PROJECT_MODEL_CHANGE` 强制 reconcile；mutation guard 抑制 ReqWS 自己的同步事件，语言层迟到 event 只允许触发收敛所需的有界 follow-up，不能形成 roots/apply 热循环；
+- 同一 live project service/coordinator 生命周期内，只有 authoritative Workspace Model 与 public `ProjectFileIndex` 验证通过并建立 clean baseline 后，相同 manifest digest 才可跳过普通自动项目模型重放；VCS 继续独立只读诊断，其配置事件仍必须触发复核；
+- `ProjectFileIndex` 未收敛时保持 baseline dirty 并发布稳定 `PROJECT_CONTENT_NOT_CONVERGED`，后续自动或手动 same-digest 请求仍可恢复；不得静默降级为 clean；
+- public `ModuleRootListener` 的外部变化 burst 必须在 250 ms 内合并为一个 `PROJECT_MODEL_CHANGE` 强制 reconcile；mutation guard 抑制 ReqWS 自己的同步事件，未被 guard 抑制的迟到普通 event 仍经有界防抖提交 `PROJECT_MODEL_CHANGE`，不能形成 roots/apply 热循环；
 - `SAFE_MODE_BLOCKED → trusted` 是 same-digest no-op 的明确例外：必须保留一个强制 reconcile intent，直到最新有效 candidate 真正开始 Project Model apply；
 - 原子 rename 产生的多个 VFS 事件合并为一次稳定读取；
 - manifest 临时不存在时有限重试，不因单个 delete 事件立即清空 roots；
@@ -261,7 +265,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - Tool Window 在浅色与深色主题使用平台颜色，长 manifest 文本安全截断并可查看完整值，按钮保留原生键盘焦点和可访问名称；
 - listener 回调不做阻塞 IO；
 - 无目标变化时不触发重复索引；
-- clean 状态下不允许周期性 roots event；Go Modules registry 已收敛后的同 digest 复核不得再次发布 event，外部 roots burst 只产生一次防抖后的强制 reconcile；
+- clean 状态下不允许周期性 roots event；clean same-digest 自动复核不重放项目模型，manual/trust/model-change intent 仍可强制复核，外部 roots burst 只产生一次防抖后的强制 reconcile；
 - 以 50 个活动仓库和 20 个保留仓库作为规模回归；
 - 不允许持续 CPU、无限 indexing、明显 UI freeze 或与事件数量等量的重复 apply；
 - 初始 cancellation recovery 必须有固定次数上限和延迟，新的 startup/VFS/VCS/manual generation、owner scope cancellation 或 dispose 必须使旧 timer 失效，不得形成热循环；
@@ -276,7 +280,7 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - Plugin Verifier 必须覆盖 GoLand 2026.1.3 与 2026.2，262 兼容性不能只由 261 GUI 结果推断；
 - `since-build` 为 261 且不设置 `until-build`；若 262 Verifier 失败，必须修复或明确收窄范围，不能以 `continue-on-error` 掩盖；
 - 不使用 `@Internal`、`@Experimental`、反射或未记录私有 API作为生产方案；
-- Go module live gate 只读取 public `VgoModulesRegistry`，触发收敛只使用 public Project Roots event；生产代码不得引用 `VgoIntegrationManager`、`VgoStatusTracker` 或其 scheduler；
+- 生产代码不依赖或调用 Go API；仅保留 GoLand 产品限制及实际使用的平台/VCS 依赖，当前依赖边界见[语言解耦方案](../ide-plugin-language-decoupling/technical-design.md#7-依赖与构建门禁)；
 - GoLand 用户的“新窗口 / 当前窗口 / 询问”设置继续由 IDE 决定，Desktop 不通过私有参数覆盖。
 
 ## 8. 明确范围外
@@ -298,20 +302,22 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 
 ## 9. 验收矩阵
 
+本表保留通用需求编号并移除已失效的语言条件。当前执行范围与必要 GUI 链以[最终验收计划](../ide-plugin-language-decoupling/testing/final-acceptance.md)为准；规模、视觉、Desktop 及其他风险专项按影响选择，不把历史 GO 当作新候选证据。
+
 | 编号 | 场景 | 通过条件 |
 |---|---|---|
 | GL-01 | GoLand 未安装 | Desktop 明确显示不可用，其他编辑器入口正常。 |
 | GL-02 | 标准路径安装 | Desktop 可打开正确 workspace root，启动不经过 shell。 |
 | GL-03 | Toolbox 安装 | 探测和启动策略经真实安装验证，失败时有明确诊断或稳定 fallback。 |
-| GL-04 | 首次打开 | 插件识别 manifest，并按 authoritative Workspace Model → `ProjectFileIndex` → Go Modules registry 顺序通过两个 live gate；每个活动顶层 `go.mod` 的 `PACKAGE` run/test configuration 可直接通过校验并执行，不依赖“Continue Anyway”；virgin root 即使启动时尚无 `.idea`，也由单次 production startup trigger 在 GoLand 创建 metadata 后自动收敛，不误报 `OWNERSHIP_CONFLICT`，不依赖 direct service API、manifest 改写、`Sync Now` 或 reopen；首次 read/apply 的一次 PCE 或 coroutine cancellation 同样由启动链路自动恢复；缺失 Git Root 有明确 Directory Mappings 手动步骤，用户配置后事件自动复核为已配置。 |
-| GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入 Project/Search/Go Modules registry，新增 package 的 `PACKAGE` configuration 可直接校验和执行；缺失 Git Root 显示待用户配置且插件零 VCS 写入。 |
-| GL-06 | 逻辑移除 | 磁盘目录保留并退出受管项目内容、默认搜索与 Go Modules registry；其 `PACKAGE` configuration 不再被错误当成活动 package；原 Git mapping 原样保留，直到用户按提示在 Directory Mappings 中手动决定是否移除。 |
-| GL-07 | 重新添加 | 同一目录的项目内容和 Go Modules registry 恢复，原 package 的 `PACKAGE` configuration 无需重启即可重新通过校验并执行；插件重新检查现有 mapping，不创建重复 root/module 或任何 mapping。 |
-| GL-08 | 原子替换、快速连续变更与外部 model drift | 最终 authoritative Workspace Model、`ProjectFileIndex` 和 Go Modules registry 与最新 manifest 一致，VCS 诊断来自最新可读配置；外部 `ModuleRootListener` burst 经 250 ms 防抖后强制 same-digest reconcile，ReqWS 自事件被 guard 抑制、GoLand 迟到 event 只有有界 follow-up；全过程无并发异常、VCS 写入、重复 roots event 或持续索引循环；已有稳定状态时瞬时 read/apply 取消不留下 `READING`/`SYNCHRONIZING` 且 `Sync Now` 可恢复，首次启动的一次取消由有界 automatic retry 自动收敛；metadata readiness 的旧 timer 不能覆盖新 generation，普通刷新不能重置 attempt 或十分钟 absolute deadline。 |
+| GL-04 | 首次打开 | 插件识别 manifest，并按 authoritative Workspace Model → public `ProjectFileIndex` 顺序验证目录边界，不以构建文件或语言配置为成功条件；virgin root 即使启动时尚无 `.idea`，也由单次 production startup trigger 在 GoLand 创建 metadata 后自动收敛，不误报 `OWNERSHIP_CONFLICT`，不依赖 direct service API、manifest 改写、`Sync Now` 或 reopen；首次 read/apply 的一次 PCE 或 coroutine cancellation 同样由启动链路自动恢复；缺失 Git Root 有明确 Directory Mappings 手动步骤，用户配置后事件自动复核为已配置。 |
+| GL-05 | 新增仓库 | Desktop 操作完成后 GoLand 无需重启即可加入受管项目内容和搜索范围，通过 Workspace Model/PFI 验证；缺失 Git Root 显示待用户配置且插件零 VCS 写入。 |
+| GL-06 | 逻辑移除 | 磁盘目录保留并退出受管项目内容、默认搜索范围；不要求已有运行配置不可执行；原 Git mapping 原样保留，直到用户按提示在 Directory Mappings 中手动决定是否移除。 |
+| GL-07 | 重新添加 | 同一目录的项目内容与 PFI 活动边界恢复，不承诺语言配置即时就绪；插件重新检查现有 mapping，不创建重复 root/module 或任何 mapping。 |
+| GL-08 | 原子替换、快速连续变更与外部 model drift | 最终 authoritative Workspace Model 和 `ProjectFileIndex` 均与最新 manifest 一致，VCS 诊断来自最新可读配置；外部 `ModuleRootListener` burst 经 250 ms 防抖后强制 same-digest reconcile，ReqWS 自事件被 guard 抑制、迟到普通 event 仍按有界防抖处理为 `PROJECT_MODEL_CHANGE`；全过程无并发异常、VCS 写入、重复 roots event 或持续索引循环；已有稳定状态时瞬时 read/apply 取消不留下 `READING`/`SYNCHRONIZING` 且 `Sync Now` 可恢复，首次启动的一次取消由有界 automatic retry 自动收敛；metadata readiness 的旧 timer 不能覆盖新 generation，普通刷新不能重置 attempt 或十分钟 absolute deadline。 |
 | GL-09 | manifest 损坏或临时缺失 | 保留上次有效模型，不应用部分数据，并提供稳定诊断和恢复入口。 |
 | GL-10 | 路径攻击 | root mismatch、绝对 relativePath、`..` 或 symlink escape 被拒绝。 |
-| GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新、ReqWS roots change event 和外部进程动作禁用；恢复 trusted 后即使 digest 未变也强制重放一次完整投影，修复 blocked 期间的 `ProjectFileIndex` 与 Go Modules registry drift。 |
-| GL-12 | 重启恢复 | GoLand 重启后从 manifest 幂等重建 authoritative Workspace Model，通过两个 live gate 并重新读取 VCS 配置；`PACKAGE` configuration 冷启动可用，不依赖 Desktop 正在运行。 |
+| GL-11 | Safe Mode | 可读诊断与 VCS 只读检查保留，受管模型更新、ReqWS roots change event 和外部进程动作禁用；恢复 trusted 后即使 digest 未变也强制重放一次完整投影，修复 blocked 期间的 Workspace Model / `ProjectFileIndex` 目录边界漂移。 |
+| GL-12 | 重启恢复 | GoLand 重启后从 manifest 幂等重建 authoritative Workspace Model，通过 public `ProjectFileIndex` 验证并重新读取 VCS 配置，不依赖 Desktop 正在运行。 |
 | GL-13 | 用户自定义配置 | 插件同步不删除非 ReqWS-owned module/Content Root，不创建或删除 GoLand-owned `.idea`，并且不调用 API 新增、删除、替换、重排 VCS mapping 或修改 `rootSettings`/`.idea/vcs.xml`；`.idea` 文件/symlink/identity swap、既有 ownership proof 丢失与 stable transaction 异常都保持 fail closed；GoLand 原生 metadata/save/auto-detection 的独立行为必须单独记录。 |
 | GL-14 | 50+20 仓库样例 | 同步完成，无重复事件风暴、持续 CPU 或无限 indexing。 |
 | GL-15 | 全面回归 | VS Code、Cursor、Finder、workspace 增删、i18n、Desktop package 和现有测试通过。 |
@@ -324,5 +330,5 @@ GoLand 未安装时，按钮禁用或操作返回稳定的 `EDITOR_NOT_FOUND` �
 - **受管条目**：由 ReqWS GoLand 插件创建或修改、且插件能证明所有权的项目模型条目；VCS mapping 不属于受管条目。
 - **目标状态**：对当前 manifest 完整校验后得到的活动仓库路径集合、项目模型投影及期望 Git Root 检查集合。
 - **同步**：把插件拥有的 GoLand 项目模型收敛到目标状态，并只读刷新 Git Root 配置诊断。
-- **live 成功门禁**：authoritative Workspace Model 写入后的两个独立运行时断言：public `ProjectFileIndex` 的 content/exclude 状态，以及 public `VgoModulesRegistry` 中目标 module 的活动/排除 Go module roots；两者都收敛才可宣称项目内容可用。
+- **live 成功门禁**：authoritative Workspace Model 写入后，通过 public `ProjectFileIndex` 验证活动内容与精确 excludes；它只证明 ReqWS 管理的目录边界，不证明语言模型或运行配置已就绪。
 - **Desktop**：ReqWS Electron 主程序，是 workspace、Git 生命周期和 manifest 的唯一写入方。

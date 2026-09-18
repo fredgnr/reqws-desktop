@@ -8,7 +8,7 @@
 |---|---|---|
 | [使用与开发指南](guides/README.md) | active | 提供当前版本的安装使用、开发验证、Agent 协作和维护流程。 |
 | [需求与变更](changes/README.md) | active | 按需求聚合需求说明、技术方案、测试材料和交付记录。 |
-| [文档规范](standards/README.md) | active | 约定文档何时创建、如何命名、索引怎样同步，并提供精简模板。 |
+| [项目规范](standards/README.md) | active | 约定文档治理、IDE 插件开发与测试边界，并提供精简模板。 |
 | [历史参考](reference/README.md) | archived | 保存冻结的原始方案和交接资产，不代表当前实现。 |
 
 ## 按任务检索
@@ -20,7 +20,7 @@ rg -n -i --glob 'README.md' '<业务词|需求标识|模块名>' docs
 rg -n -i --glob '*.md' '<业务词|需求标识|模块名>' docs
 ```
 
-`docs/reference/` 只用于追溯历史输入。历史方案与现行文档冲突时，以标记为 `active` 的文档及当前代码、测试为准。
+`docs/reference/` 只用于追溯历史输入。历史方案与现行文档冲突时，以标记为 `active` 的文档及当前代码、测试为准。实施前方案的 `active` 仅表示方向有效，不能据此宣称代码已交付；选择性替代范围须按需求包索引中的说明判断。
 
 ## 维护入口
 

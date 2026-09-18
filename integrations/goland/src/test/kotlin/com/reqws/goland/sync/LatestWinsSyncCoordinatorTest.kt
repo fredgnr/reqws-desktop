@@ -279,7 +279,7 @@ class LatestWinsSyncCoordinatorTest {
   }
 
   @Test
-  fun `a same-digest automatic candidate cannot replace a queued verify-only follow-up`() =
+  fun `a same-digest automatic candidate preserves queued project-model intent`() =
     runBlocking {
       val firstApplyStarted = CompletableDeferred<Unit>()
       val releaseFirstApply = CompletableDeferred<Unit>()
@@ -299,17 +299,17 @@ class LatestWinsSyncCoordinatorTest {
 
       coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
       firstApplyStarted.await()
-      coordinator.offer(candidate("stable"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("stable"), SyncTrigger.PROJECT_MODEL_CHANGE)
       coordinator.offer(candidate("stable"), SyncTrigger.AUTOMATIC)
       releaseFirstApply.complete(Unit)
       assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
-      val followUp = assertEvent<SyncCoordinatorEvent.Applied>(events, "stable")
+      val replay = assertEvent<SyncCoordinatorEvent.Applied>(events, "stable")
 
-      assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, followUp.trigger)
+      assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, replay.trigger)
       assertEquals(
         listOf(
           "base" to SyncTrigger.AUTOMATIC,
-          "stable" to SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+          "stable" to SyncTrigger.PROJECT_MODEL_CHANGE,
         ),
         applyTriggers,
       )
@@ -325,7 +325,7 @@ class LatestWinsSyncCoordinatorTest {
     }
 
   @Test
-  fun `a different-digest automatic candidate supersedes a queued verify-only follow-up`() =
+  fun `a different-digest automatic candidate inherits queued project-model intent`() =
     runBlocking {
       val firstApplyStarted = CompletableDeferred<Unit>()
       val releaseFirstApply = CompletableDeferred<Unit>()
@@ -345,17 +345,17 @@ class LatestWinsSyncCoordinatorTest {
 
       coordinator.offer(candidate("base"), SyncTrigger.AUTOMATIC)
       firstApplyStarted.await()
-      coordinator.offer(candidate("old-digest"), SyncTrigger.PROJECT_MODEL_FOLLOW_UP)
+      coordinator.offer(candidate("old-digest"), SyncTrigger.PROJECT_MODEL_CHANGE)
       coordinator.offer(candidate("new-digest"), SyncTrigger.AUTOMATIC)
       releaseFirstApply.complete(Unit)
       assertEvent<SyncCoordinatorEvent.Applied>(events, "base")
       val newer = assertEvent<SyncCoordinatorEvent.Applied>(events, "new-digest")
 
-      assertEquals(SyncTrigger.AUTOMATIC, newer.trigger)
+      assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, newer.trigger)
       assertEquals(
         listOf(
           "base" to SyncTrigger.AUTOMATIC,
-          "new-digest" to SyncTrigger.AUTOMATIC,
+          "new-digest" to SyncTrigger.PROJECT_MODEL_CHANGE,
         ),
         applyTriggers,
       )
@@ -782,7 +782,7 @@ class LatestWinsSyncCoordinatorTest {
     val events = eventChannel()
     val coordinator = LatestWinsSyncCoordinator(
       scope = this,
-      applier = SyncCandidateApplier<String> { trace.record(SyncTraceEvent.REGISTRY_START) },
+      applier = SyncCandidateApplier<String> { trace.record(SyncTraceEvent.PROJECTION_STAGE_START) },
       observer = SyncCoordinatorObserver { events.trySend(it) },
       trace = trace,
     )
@@ -798,7 +798,7 @@ class LatestWinsSyncCoordinatorTest {
       assertEquals("APPLIED", ends.single()["outcome"])
       assertEquals("1", ends.single()["accepted"])
       assertEquals(starts.single()["request_id"], ends.single()["request_id"])
-      assertEquals("42", traceRecords(lines, SyncTraceEvent.REGISTRY_START).single()["source_id"])
+      assertEquals("42", traceRecords(lines, SyncTraceEvent.PROJECTION_STAGE_START).single()["source_id"])
       assertEquals("43", traceRecords(lines, SyncTraceEvent.COORDINATOR_NO_OP).single()["source_id"])
       assertEquals(2, traceRecords(lines, SyncTraceEvent.COORDINATOR_SUBMIT).size)
       assertEquals(2, traceRecords(lines, SyncTraceEvent.COORDINATOR_DEQUEUE).size)

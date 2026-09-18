@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-13
+updated: 2026-09-19
 ---
 
 # ReqWS 开发指南
@@ -73,7 +73,7 @@ npm run check:goland
 npm run package:goland
 ```
 
-`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码候选交付前在环境支持时运行 `npm run check`，插件代码或构建候选运行 `npm run check:goland`，共享 manifest 契约变化需要两侧检查。迭代中先运行最接近改动层的测试；纯文档改动运行 `npm run docs:check`，不额外要求应用全量测试或 Gradle。既有 CI、发布与 exact-head GUI 验收门禁不变。
+`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码候选交付前在环境支持时运行 `npm run check`，插件的最终代码/构建候选运行 `npm run check:goland`，共享 manifest 契约变化需要两侧检查。分阶段开发的中间子任务只做生产/测试编译和直接受影响方法/类的回归，不把每个检查点当作完整交付候选；实际受影响的安全和并发分支仍须当步验证。纯文档改动运行 `npm run docs:check`，不额外要求应用全量测试或 Gradle。既有 CI 与发布工作流不变；插件 GUI 验收范围按[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)收敛，不再沿用旧 Go 工具链门禁。
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
@@ -186,7 +186,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | Integration | 真实临时 Git、分支语义、workspace 生命周期、回滚和安装脚本 | 修改 Git、文件系统、状态或安装行为时运行。 |
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
-| Plugin compatibility | configuration/structure checks + Plugin Verifier | 每个插件候选对 GoLand 2026.1.3 与 2026.2 运行。 |
+| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选运行原 GoLand 2026.1.3/2026.2 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -196,56 +196,57 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 ### GoLand 插件构建与调试
 
+Gradle 按 Wrapper 的明确版本和官方 HTTPS `distributionUrl` 管理，当前仍为 9.3.0；不设置 `distributionSha256Sum`，不增加替代 checksum 文件或预期值。保留 URL 校验、超时、缓存及既有 Wrapper JAR 验证；这不等于验证下载 ZIP 的预期字节。升级只维护明确版本，不改为动态版本或个人二进制。
+
 当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 target 与 Java/JVM 21；plugin ID 是 `com.reqws.workspace`，`since-build` 为 261，不设置 `until-build`。直接命令：
 
 ```bash
 cd integrations/goland
-./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
-./gradlew buildPlugin
+./gradlew test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
+./gradlew verifyForbiddenProductionSymbols buildPlugin
 ./gradlew runIde
 ```
 
-`verifyPlugin` 对 GoLand 2026.1.3 和 2026.2 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，实现边界和待验证矩阵见[GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
+`verifyPlugin` 对 GoLand 2026.1.3 和 2026.2 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
-生产代码使用公开 261 API：保留 GoLand 既有 workspace-root Content Root；每个插件创建的 target exclude 都配一个虚拟 companion marker exclude。Project Model ownership 的权威文件是 `<workspace-root>/.idea/reqws-managed-project-model.json`：每次 mutation 前 verified atomic 写入 managed + recovery claims，同一 JVM 不清 recovery，legacy PSC 只作一次迁移；进程重启后的 cold service 若 target+marker pair 仍完整就保留 recovery 并完成精确删除，只有两者都不存在时才压缩 recovery，partial proof 必须冲突。Manual 与 trust-transition force intent 都要跨后到的 automatic candidate/read failure 保留到下一份有效 candidate 开始 reconcile；latest Safe Mode blocked read 必须在可能阻塞的注册后 VCS inspection 前 arm trust intent，低频 poll 只提交 automatic wake-up，因此 automatic 抢先时不会 same-digest NoOp，迟到 poll 也不会重复强制重放。project service 的 terminal dispose probe 贯穿模型、VCS 读取、refresh 与 digest gate。Safe Mode 只通过稳定 `TrustedProjects.isProjectTrusted` 查询，并仅在 blocked 期间低频检查 trust transition；禁止使用 `@Internal`、`@Experimental`、反射或私有 API。
+### 插件开发与验收边界
 
-一个候选只有在 authoritative Workspace Model、public `ProjectFileIndex` 与 GoLand public Go Modules registry 三层都收敛后，才可推进 clean digest 并显示 `Synced`；present repository 也只有同时进入 live project content 且其顶层普通 `go.mod` 已进入 registry 时才可显示 `Active`。活动 Go module 缺失或 excluded/retained Go module 仍在 registry，与 `ProjectFileIndex` 未收敛一样映射为 `DEGRADED / PROJECT_CONTENT_NOT_CONVERGED`，保持 baseline dirty。
+[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 已清理补偿调度与显式 Go 依赖，当前验证见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)；V 的完整自动化、兼容、打包、必要真实 GUI 及同候选关闭重开已通过，详见 [V 验收记录](../changes/ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。
 
-trusted project 的 registry 不匹配时，生产路径只能在 Project Model mutation guard 内发布一次公开 ordinary roots event，然后有界、只读轮询 public registry；禁止直接调用 Go tracker/scheduler/downloader、Go command/process API，也禁止借 internal/private API 或反射触发刷新。ordinary roots event 可能让 GoLand 原生 Go integration 按 IDE 与 Go 环境设置自行执行 `go list`、依赖下载或网络访问，日志和验收必须把它归因于 GoLand，不能承诺此路径无网络。Safe Mode 不得发布 roots event。外部 project-roots drift 在已有有效 snapshot 后触发一次 force reconcile；ReqWS 自己的 guarded event 不反咬监听器，GoLand 随后的异步 roots event 最多再触发一次有界重放，不得形成循环。
+Desktop 保持 manifest 和 Git/workspace 生命周期的唯一 writer。插件只读消费仓库集合，进行必要的受管项目范围适配和 VCS 诊断。同步主路径不依据 `go.mod` 等语言文件判断成员或成功，不查询 Go registry，也不等待 SDK、依赖、运行配置或语言分析就绪。旧指南中的 Go registry 三层成功门禁和 Go test/run/debug 验收要求已由新规范替代。
 
-Manifest 与 Project Model ownership 的安全文件访问必须绑定稳定目录 descriptor，不能在 attribute check 后回到可被替换的绝对父路径。实现只使用平台 classpath 已提供的公开 JNA 调 POSIX `open/openat/fstat/flock/renameat/unlinkat/fsync/fchmod/close`：从 `/` 逐级以 `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` 打开 manifest root、`.reqws` 或 ownership `.idea`，并要求 routed `Path` 遍历前后的 `unix:dev,ino` 与 descriptor 的 native `fstat` identity 相等；Project Model writer 直接在已经打开的 `.idea` descriptor 上取得 non-blocking exclusive advisory lock，再在同一 handle 内完成 state/temp/move/readback。lock 子文件不是互斥权威，rename/unlink/recreate 不得允许第二 writer 绕过 generation fence。普通文件以 `O_NOFOLLOW | O_NONBLOCK` 打开并由 `fstat` 确认 regular file 后，才通过绕过 NIO provider 的 `java.io` fd bridge 取得 `FileChannel`。路径在事务末尾必须重新逐级打开并比较 native descriptor identity；缺少 local file URI、受支持 64-bit macOS/JNA/openat、稳定 directory lock/identity 或已验证 atomic replace 能力时 fail closed。禁止引用 `MultiRoutingFileSystemProvider`、`MultiRoutingFsPath`、反射或其他 internal/private provider API；每个候选都要在 261/262 Verifier 证明该边界兼容。
+仍保留 workspace-root Content Root 与 owned-excludes 策略、公开 ProjectFileIndex 的目录归属验证，以及其真实失败/恢复。`Synced` 只描述插件负责的仓库视图和项目范围，`Active` 不承诺 Go module 可用。只读业务输入不等于不修改任何 IDE 模型；正常公开模型更新和必要通知不能随 Go 补偿一起误删。
 
-refresh 进入 `READING` 前必须捕获最近稳定 state；latest 非取消异常发布 `ERROR / REFRESH_FAILED` 并恢复该 snapshot/digest，旧 generation 的失败不能覆盖更新结果。`ProcessCanceledException` 与 coroutine `CancellationException` 在 service、projection、coordinator apply/observer 和 VCS inspection 中都是当前操作的终止信号，必须保留同一实例，不能包装成普通 apply/read/diagnostic failure。latest read cancellation 在 request 仍有效且 service/project 存活时恢复最近稳定状态，不写 `lastError`；单次 applier cancellation 发布非业务 cancellation event、恢复稳定状态并保持 baseline dirty，owner scope 仍 active 时同一 coordinator 继续接受下一份 submission。若首次 read/apply 的稳定基线仍是无 snapshot 的 `INACTIVE`，project service 在原 cancellation completion 与 provisional-listener cleanup 后用 sibling coroutine 延迟提交一次 automatic successor；successor 绑定 predecessor generation、exact rollback state version 和 fixed manifest entry，且 cancellation attempt 上限为 1。测试必须通过一次 `ReqwsStartupActivity.execute` 分别覆盖 read/apply 的 PCE 与 coroutine cancellation，不能直接调用 refresh 伪造生产恢复。新的 generation、owner cancellation 或 service dispose 使 pending retry 失效，retry 再次取消不续订；owner scope cancellation/service dispose 仍关闭 worker，observer 自身的终止信号继续按既有边界原样结束 worker。修改 coordinator 时保持 `Applying` 通知在 applier cancellation catch 外，并以 observer 只在 `Applying` 抛一次的 PCE/CE 回归确认 worker 确实终止。
+通用保护继续按[既有技术方案](../changes/goland-plugin-support/technical-design.md)维护：target/companion marker 与 ownership 证明、稳定 directory descriptor、verified atomic state、generation/恢复、trust/dispose 最终 gate、PCE/coroutine cancellation 原实例传播、latest-wins、手动/信任 intent、startup readiness 和外部 model drift 的有界处理。现有安全及并发回归不因语言解耦失效；不在本次变更中迁移 schema、简化路径安全或改写整个协调器。禁止 `@Internal`、`@Experimental`、反射和私有 API。
 
-修改 startup `.idea` readiness 时，按[技术方案](../changes/goland-plugin-support/technical-design.md)维护共享的 10 分钟 absolute deadline：schedule、wait 前后、probe 后和 successor begin 的 latest gate 都要复查，过期通过 generation/state-version/digest CAS 进入 `ERROR`，不能再追加 wait/probe/successor。正常 read 只在 latest-selection 边界内摘除恢复任务 slot，再于锁外取消已取得的 job；metadata monitor 和 initial cancellation retry 的注册也须在同一边界内复查 generation/exact state version，避免旧 read 的延迟取消或 completion 注册替换较新任务。用可控时钟和 barrier 覆盖两类 slot 的安装与撤销交错，不能用 poll 次数或普通顺序测试替代截止时间与并发保证。
+VCS 始终只读：生产代码不得调用 mapping writer、主动调用可改写配置的内部 detector 或直接写 `.idea/vcs.xml`。继续保留完整 `rootSettings`、live path identity、configured/missing/wrong-VCS/retained 分类、配置事件订阅与重查、取消和生命周期保护。旧 `.idea/reqws-vcs-ownership.json` 及 lock 为 inert 文件，不读取、不迁移、不自动清理。IDE 原生行为与 ReqWS 调用区分归因，不能承诺整个 IDE 无网络或不产生进程。
 
-VCS 是强制只读边界：production 不得调用 `setDirectoryMappings`、`setDirectoryMapping` 或任何直接/间接 mapping writer，不得主动刷新可改写 Directory Mappings 的内部 detector，也不得直接写 `.idea/vcs.xml`。允许使用公开 API 读取 canonical mappings、保留完整 `rootSettings`、计算 configured/missing/wrong-VCS/retained 诊断；repository present 时一次捕获 lexical + live canonical identity并复用于 containment、普通 `.git` 与 mapping 比对，不能混入 manifest snapshot 的旧 canonical target。`VCS_CONFIGURATION_CHANGED` 只在首个有效 manifest candidate 后 provisional 订阅，注册后立即复检同一 snapshot；latest-selection 边界内只预约单调 epoch，平台 registrar、等待与 handle close 必须在 read-selection / VCS lifecycle 锁外。latest valid generation 接受 listener，更新 valid generation 可在 STARTING/STARTED 阶段等待并接力同一 epoch，首个 registrar 失败时由仍有效的接力 generation 重试；更新 inactive/error generation或任何 latest generation 在 acceptance 前取消/失败时撤销未接受 epoch，迟到 handle 拒绝提交并恰好关闭一次。callback 的 registration epoch 校验与 read generation 创建必须使用统一 `read-selection → VCS-lifecycle` 锁序在线性化边界内完成，旧 callback 即使已通过前置检查，在关闭/重注册后也不能触发 ReqWS 读取；普通项目不得因 VCS event 进入 ReqWS 读取。inspection 必须原样传播 IntelliJ/coroutine cancellation。`Sync Now` 会重放 Project Model/live projection reconcile，并在 VCS 阶段只重新读取当前 mappings。用户按 Tool Window 提示在 Settings → Version Control → Directory Mappings 手动配置；事件丢失时才用 `Sync Now` 重查。Project Model 更新可能使 GoLand 按其原生用户设置自行运行 VCS auto-detection；ordinary roots event 也可能使原生 Go integration 运行 `go list` 或下载依赖。插件既不直接调用也不禁用这些平台机制，验证时必须区分 GoLand 原生变化与 ReqWS API 调用。
+### 插件测试选择
 
-当前实现不建立 VCS ownership 或删除权。未发布开发候选可能留下的 `.idea/reqws-vcs-ownership.json` 与匹配 lock 是 inert 文件：production 不读取、不迁移、不压缩，也不自动清理。测试必须证明源码/bytecode 无 ReqWS mapping writer、纯 VCS inspection/配置事件/只读重查不改变 mappings，以及配置事件能自动刷新诊断；manifest 驱动的 Project Model 变化若触发 GoLand 原生 auto-detection，必须单独标记为平台行为，不能伪装成 ReqWS 写入或声称插件能阻止。
+使用普通文本 Git fixture，覆盖 manifest、仓库增删重加、自动/手动刷新、项目范围、错误恢复和配置保护。[任务入口](../changes/ide-plugin-language-decoupling/tasks/README.md)采用 S1 核心语义 → S2 调度/依赖收尾 → V 最终回归，默认同分支串行。直接打开 [S1](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md)或 [S2](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md)即可查看该步实施、实际受影响方法/类的最小回归和交接要求；最后按[独立 V 文档](../changes/ide-plugin-language-decoupling/testing/final-acceptance.md)在最终组合代码上执行完整插件与兼容检查，不再从总方案拼接步骤。代码引用扫描由现有构建门禁按有效输入集中执行，不在每个 GUI 动作后人工重复。
 
-真实 GUI、Go completion/navigation/test/debug、add/remove/re-add、restart、50+20 规模和 ZIP SHA-256 不能由平台单测或 `runIde` 代替。PACKAGE run configuration 若仍显示 `Cannot find package`，即使选择 `Continue Anyway` 后底层 Go 命令碰巧成功，也不得记为通过；必须先证明配置校验无警告且正常 test/run/debug。按次报告可先记录已经执行的结果和未完成项；只有同一 exact commit 的 261/262 Verifier、真实 GoLand GUI 与全部验收条件闭合后，才可写 `GO`。
+真实 GUI 仅补自动化无法证明的必要集成，按[最终验收文档](../changes/ide-plugin-language-decoupling/testing/final-acceptance.md)执行最小链。GoLand 原生 Git 全流程、代码补全/引用、Go Modules、GOROOT、用户项目 `go test`、运行或调试不再是常规门禁。移除仓库不是禁止运行磁盘上的代码；重新加入不保证语言运行配置即时恢复。发现可归因于 ReqWS 的真实范围错误仍需修复。
+
+首次打开/恢复、安全与并发回归仍按受影响层验证；版本特有 GUI、50+20 规模、sleep/wake、视觉/无障碍或长时间 idle 按改动风险选择，不机械重复旧全矩阵。测试、工件和实际 GUI 证据绑定候选；未运行项明确记录，不从历史 GO 或 ZIP 构建推出新候选通过。
 
 ### GoLand 同步追踪
 
-需要测量同步事件或阶段耗时时，使用包含[可选同步追踪契约](../changes/goland-plugin-support/technical-design.md#182-可选同步追踪)的候选。先完成插件检查、打包与磁盘安装，并核对 installed JAR；旧候选不会因为设置参数而获得新追踪能力。完整验收的计数方法见[测试方案第 10.1 节](../changes/goland-plugin-support/testing/test-plan.md#101-同步追踪测量方法)。
+当前代码提供可选 `-Dreqws.sync.trace=true`；沿用[原追踪契约](../changes/goland-plugin-support/technical-design.md#182-可选同步追踪)中的通用格式和脱敏边界，S2 已删除其中旧 registry/follow-up 事件与字段。只在事件、恢复或性能问题需要时启用，不作为每个验收动作的固定流程。该参数要进入实际 GoLand JVM，修改真实 VM options 或重启前先取得对应授权，保留用户原参数，不更改 app 内默认配置。
 
-1. 通过 GoLand 的 Help → Edit Custom VM Options 打开自定义文件。若隔离 launcher 已设置 `GOLAND_VM_OPTIONS`，编辑该次启动实际使用的文件；它优先于配置目录中的副本。保留已有参数，不修改 `.app` 内默认 VM options；配置方式见 [GoLand 官方 JVM options 文档](https://www.jetbrains.com/help/go/tuning-the-ide.html)。
-2. 在独立一行加入 `-Dreqws.sync.trace=true`，完整退出 GoLand 后用同一候选重新启动。该参数必须进入 GoLand JVM，仅设置 Gradle JVM 参数不证明插件追踪已启用。
-3. 记录新 JVM/run、VM options 和实际 `idea.log` 路径，检查该 project service 的追踪 identity、event sequence 与单调时间。普通 Logger INFO 已是输出目标，不需要开启其他 logger 的 DEBUG。例如先定位本次原始追踪行：
+在一次明确的观察区间中记录 service/request/source 与事件序号，区分收到、匹配、防抖、apply/no-op，不重复累计 collector 重放。可用以下命令定位已授权运行产生的日志：
 
 ```bash
 reqws_trace_log='/absolute/path/to/current/idea.log'
 rg -n 'REQWS_SYNC_TRACE schema=1 ' "$reqws_trace_log"
 ```
 
-4. 执行计划中的 fixture 操作与 idle 观察，保留原始日志及明确的起止区间，再按 `service_id`、`request_id`/`source_id` 和 `event` 汇总；`seq` 是序号，`mono_ns` 是同一 service 内的单调时间偏移，无 request/source 上下文时 ID 为 0。记录收到、匹配、防抖 dispatch、apply/no-op 的区别；collector 续接重放的相同原日志只计一次。
-5. 测量完成后删除这一行或设为 `-Dreqws.sync.trace=false`，再次完整退出并重启，核对新 JVM 不再产生追踪。不要通过清空旧日志制造“零记录”。
-
-追踪只包含固定枚举和数字，不传 workspace 名称、路径、digest、URL 或异常文本。它不写单独日志文件，不提供网络/IPC 导出，也不改变同步 gate；日志仍由 GoLand 原生设施保存。报告中分别注明开启和关闭追踪的测量条件。没有完整追踪区间时保留缺口，GUI、GoLand 原生进程、文件端点保护仍各自取证。
+测量后移除该选项或设为 false，并按授权流程核对新会话；不清空旧日志制造零记录。追踪仍只含固定枚举和数字，不输出 workspace 路径、digest、URL 或异常文本，不新增网络/IPC 导出，也不改变同步判定。S1 已移除主路径 `REGISTRY` 阶段；S2 已删除 `REGISTRY_START`/`REGISTRY_END`、`EVENT_EPOCH` 与 follow-up 专属字段和判定。当前 schema 仍为 1，通用事件与字段仍以名称输出，不将枚举序号作为日志契约；roots 事件通过普通 `PROJECT_MODEL_CHANGE` 记录。通用追踪继续保留。
 
 ## 8. 文档工作流
 
 已知文档可以直接阅读相关章节；定位或权威性不明时使用[文档总索引](../README.md)。`docs/reference/` 是冻结历史输入，不是当前需求。改变已记录的行为、验收条件或开发流程时，按[项目文档规范](../standards/documentation-standard.md)更新必要材料；只有改变实现契约的决策需要先于代码更新，轻量修正不必逐项填写完整生命周期表。
+
+源码用 Git commit/diff 定位，测试报告用命令、结果和 CI run/工件入口定位。不要提交源码逐文件哈希清单，或把测试期间算出的 SHA-256 值抄进方案、指南和报告。历史台账可从当前树移除并指向 Git 历史；正式 Release 校验、依赖 lockfile integrity 和程序运行时摘要仍保留。完整边界见[插件开发与测试规范](../standards/ide-plugin-development-testing.md#7-git测试证据与-gradle-版本管理)。
 
 新增、移动、重命名、删除文档或改变状态、摘要时，同步最近一级及必要的父级 `README.md`。文档改动完成后运行 `npm run docs:check`；无法运行时记录原因，不能声明已通过。适用时使用 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md)，不用为只读检索预加载完整文档栈。
 
@@ -296,6 +297,7 @@ CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag �
 
 - [全局设置需求包](../changes/global-settings/README.md)记录 settings、持久化兼容、typed IPC、启动语言解析和验证证据。
 - [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)记录 GitHub Actions 触发器、权限、缓存与并行、arm64 应用/独立插件资产和发布限制。
-- [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)记录跨语言 manifest、Project Model ownership、只读 VCS/手动 Directory Mappings 契约、构建矩阵和待完成 GUI 证据。
+- [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)保留原实现、通用 manifest/ownership/VCS 契约及原工件验证记录；其 Go 成功条件不再约束后续候选。
+- [IDE 插件语言解耦](../changes/ide-plugin-language-decoupling/README.md)定义当前开发/测试边界；S1/S2 已实施，V 结果与适用范围见 [2026-09-19 验收记录](../changes/ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始范围、交付与验证历史；其状态为 archived，只用于理解演进背景。
 - [历史参考](../reference/README.md)是冻结输入，不作为当前开发决策。没有 active 设计覆盖的现状必须回到代码与测试核实。
