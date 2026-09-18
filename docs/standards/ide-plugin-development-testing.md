@@ -2,7 +2,7 @@
 title: IDE 插件开发与测试规范
 type: governance
 status: active
-updated: 2026-09-13
+updated: 2026-09-18
 ---
 
 # IDE 插件开发与测试规范
@@ -11,7 +11,7 @@ updated: 2026-09-13
 
 ## 1. 生效范围与实现状态
 
-适用于 `integrations/goland/` 及后续获准开发的 IDE 适配，不代表当前已支持其他 IDE 或操作系统。本规范与[语言解耦技术方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义新的开发和验收方向；规范、文档清理和 Gradle Wrapper 的版本管理调整已落实；现有 Go 耦合代码尚未删除。
+适用于 `integrations/goland/` 及后续获准开发的 IDE 适配，不代表当前已支持其他 IDE 或操作系统。本规范与[语言解耦技术方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义新的开发和验收方向；规范、文档清理和 Gradle Wrapper 的版本管理调整已落实；S1 已删除 Go 主成功门禁及直接错误链，必要回归状态见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖收尾和 V 最终验收尚未执行。
 
 旧 GoLand 需求、设计、指南和测试材料中，把 `go.mod`、Go Modules registry、Go package 配置或 Go 工具链可用性作为 ReqWS 成功条件的条款被本规范替代。其余 manifest、安全、项目模型所有权、生命周期和 VCS 只读约束继续有效。旧版本源码与按次验证报告仍用于说明当时行为，不能据此要求新候选重新执行已移出范围的验收。
 
@@ -41,7 +41,7 @@ manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检
 
 ## 4. 成功与失败语义
 
-新目标中的 `Synced` 只表示：有效 manifest 已被消费，插件负责的仓库视图和受管项目范围已同步，且没有该范围内未处理的失败。`Active` 表示对应的存在仓库在活动集合及应有的项目内容范围内，不代表语言模块可用。
+`Synced` 只表示：有效 manifest 已被消费，插件负责的仓库视图和受管项目范围已同步，且没有该范围内未处理的失败。`Active` 表示对应的存在仓库在活动集合及应有的项目内容范围内，不代表语言模块可用。
 
 Workspace Model 与公开 `ProjectFileIndex` 的目录归属/排除结果仍需一致。检查 `isInContent`、`isExcluded` 是验证插件自己的适配结果，不要求等待 IDE 全部索引结束或代码语义分析完成。真实项目范围失败不得被当作“语言无关”而吞掉；缺失仓库、非法 manifest、ownership 冲突、Safe Mode 和取消仍按各自现有契约处理。
 

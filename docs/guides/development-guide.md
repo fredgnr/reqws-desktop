@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-13
+updated: 2026-09-18
 ---
 
 # ReqWS 开发指南
@@ -211,9 +211,9 @@ cd integrations/goland
 
 ### 插件开发与验收边界
 
-[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。这是先于实现的规范调整，当前生产代码仍有 `ReqwsGoModulesSynchronizer`，不能宣称删除已经完成。
+[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖收尾和 V 整体验收尚未完成。
 
-Desktop 保持 manifest 和 Git/workspace 生命周期的唯一 writer。插件只读消费仓库集合，进行必要的受管项目范围适配和 VCS 诊断。新目标不依据 `go.mod` 等语言文件判断成员或成功，不查询 Go registry，也不等待 SDK、依赖、运行配置或语言分析就绪。旧指南中的 Go registry 三层成功门禁和 Go test/run/debug 验收要求已由新规范替代。
+Desktop 保持 manifest 和 Git/workspace 生命周期的唯一 writer。插件只读消费仓库集合，进行必要的受管项目范围适配和 VCS 诊断。同步主路径不依据 `go.mod` 等语言文件判断成员或成功，不查询 Go registry，也不等待 SDK、依赖、运行配置或语言分析就绪。旧指南中的 Go registry 三层成功门禁和 Go test/run/debug 验收要求已由新规范替代。
 
 仍保留 workspace-root Content Root 与 owned-excludes 策略、公开 ProjectFileIndex 的目录归属验证，以及其真实失败/恢复。`Synced` 只描述插件负责的仓库视图和项目范围，`Active` 不承诺 Go module 可用。只读业务输入不等于不修改任何 IDE 模型；正常公开模型更新和必要通知不能随 Go 补偿一起误删。
 
@@ -240,7 +240,7 @@ reqws_trace_log='/absolute/path/to/current/idea.log'
 rg -n 'REQWS_SYNC_TRACE schema=1 ' "$reqws_trace_log"
 ```
 
-测量后移除该选项或设为 false，并按授权流程核对新会话；不清空旧日志制造零记录。追踪仍只含固定枚举和数字，不输出 workspace 路径、digest、URL 或异常文本，不新增网络/IPC 导出，也不改变同步判定。后续实现删除 Go registry 专用观测，但保留必要通用追踪；本次规范和 Wrapper 配置调整未改变 trace 代码或 schema。
+测量后移除该选项或设为 false，并按授权流程核对新会话；不清空旧日志制造零记录。追踪仍只含固定枚举和数字，不输出 workspace 路径、digest、URL 或异常文本，不新增网络/IPC 导出，也不改变同步判定。S1 已移除主路径 `REGISTRY` 阶段及其发出点；共享 `REGISTRY_START`/`REGISTRY_END` 等枚举与残留消费者留给 S2 清理，当前 schema 仍为 1。通用追踪继续保留。
 
 ## 8. 文档工作流
 

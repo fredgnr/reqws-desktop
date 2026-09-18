@@ -6,10 +6,10 @@
 
 | 阶段 | 文档 | 状态 | 说明 |
 |---|---|---|---|
-| S1 | [核心同步语义解耦](s1-core-sync-decoupling.md) | active | 删除 Go 成功门禁，验证仓库范围、PFI 真实失败及必要保护；实现未开始。 |
+| S1 | [核心同步语义解耦](s1-core-sync-decoupling.md) | active | 已删除 Go 成功门禁及直接调用/状态分支；本轮必要回归通过，见任务内实施记录。 |
 | S2 | [补偿调度与依赖清理](s2-scheduling-dependency-cleanup.md) | active | 接收 S1 结果，清理调度/依赖残留并做影响范围内回归；实现未开始。 |
 
-最终统一验收在独立的[最终系统回归与验收](../testing/final-acceptance.md)中执行。V 是整体验收阶段，不是第三个开发子任务；所有功能检查均尚未执行。
+最终统一验收在独立的[最终系统回归与验收](../testing/final-acceptance.md)中执行。V 是整体验收阶段，不是第三个开发子任务；S1 阶段证据见任务内实施记录，S2 与 V 尚未执行。
 
 ```text
 S1：实现 + S1 必要回归

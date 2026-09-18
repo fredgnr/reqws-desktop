@@ -111,7 +111,7 @@ class ReqwsProjectService private constructor(
     scope = coroutineScope,
     applier = runtimeOverrides?.candidateApplier
       ?: SyncCandidateApplier<ManifestSnapshot> { candidate ->
-        projectionApplier.apply(candidate.value, candidate.trigger)
+        projectionApplier.apply(candidate.value)
       },
     committer = SyncCandidateCommitter { candidate ->
       runtimeOverrides?.beforeCandidateCommit?.invoke()

@@ -164,7 +164,6 @@ class ReqwsToolWindowPanelTest {
     listOf(
       "MANIFEST_INVALID_JSON · ${ReqwsBundle.message("message.preservedModel")}",
       "PROJECT_CONTENT_NOT_CONVERGED · ${ReqwsBundle.message("message.projectFileIndexNotConverged")}",
-      "PROJECT_CONTENT_NOT_CONVERGED · ${ReqwsBundle.message("message.goModulesRegistryNotConverged")}",
     ).forEach { failureDetails ->
       val summary = ReqwsDiagnosticsSummary()
       summary.updateDetails(failureDetails)
@@ -220,7 +219,7 @@ class ReqwsToolWindowPanelTest {
   @Test
   fun `diagnostics and copy feedback fit a narrow summary without losing complete text`() {
     val failureDetails = "PROJECT_CONTENT_NOT_CONVERGED · " +
-      ReqwsBundle.message("message.goModulesRegistryNotConverged").repeat(8)
+      ReqwsBundle.message("message.projectFileIndexNotConverged").repeat(8)
     val summary = ReqwsDiagnosticsSummary()
     summary.updateDetails(failureDetails)
     summary.showCopyFeedback()

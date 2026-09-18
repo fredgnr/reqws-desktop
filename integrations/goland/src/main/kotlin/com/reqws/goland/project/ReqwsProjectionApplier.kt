@@ -8,7 +8,6 @@ import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
 import com.reqws.goland.projectmodel.ReqwsProjectModelAdapter
-import com.reqws.goland.sync.SyncTrigger
 import kotlinx.coroutines.CancellationException
 
 internal object ReqwsStableErrorCode {
@@ -40,7 +39,7 @@ internal class ReqwsProjectionApplyException(
 }
 
 internal fun interface ProjectModelProjection {
-  suspend fun apply(snapshot: ManifestSnapshot, allowRootsChangeNotification: Boolean)
+  suspend fun apply(snapshot: ManifestSnapshot)
 }
 
 /** Applies and verifies the managed projection; the coordinator commits its digest afterward. */
@@ -49,17 +48,11 @@ internal class ReqwsProjectionApplier(
   private val isProjectDisposed: () -> Boolean = { false },
   private val projectModel: ProjectModelProjection,
 ) {
-  suspend fun apply(
-    snapshot: ManifestSnapshot,
-    trigger: SyncTrigger = SyncTrigger.AUTOMATIC,
-  ) {
+  suspend fun apply(snapshot: ManifestSnapshot) {
     ensureProjectionAllowed()
 
     try {
-      projectModel.apply(
-        snapshot,
-        trigger != SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-      )
+      projectModel.apply(snapshot)
     } catch (exception: ProcessCanceledException) {
       throw exception
     } catch (exception: CancellationException) {
@@ -98,14 +91,12 @@ internal class ReqwsProjectionApplier(
       ProjectModelErrorCode.INVALID_OWNERSHIP_STATE,
       ProjectModelErrorCode.NESTED_CONTENT_ROOT_CONFLICT,
       ProjectModelErrorCode.OWNERSHIP_CONFLICT -> ReqwsStableErrorCode.OWNERSHIP_CONFLICT
-      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED,
-      ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED ->
+      ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED ->
         ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED
       else -> ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED
     }
     val field = when (exception.code) {
       ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED -> "PROJECT_FILE_INDEX"
-      ProjectModelErrorCode.GO_MODULES_REGISTRY_NOT_CONVERGED -> "GO_MODULES_REGISTRY"
       else -> null
     }
     return ReqwsProjectionApplyException(
@@ -136,11 +127,10 @@ internal class ReqwsProjectionApplier(
       return ReqwsProjectionApplier(
         isTrusted = { TrustedProjects.isProjectTrusted(project) },
         isProjectDisposed = isDisposed,
-        projectModel = ProjectModelProjection { snapshot, allowRootsChangeNotification ->
+        projectModel = ProjectModelProjection { snapshot ->
           project.service<ReqwsProjectModelAdapter>().apply(
             snapshot = snapshot,
             isServiceDisposed = isDisposed,
-            allowRootsChangeNotification = allowRootsChangeNotification,
           )
         },
       )

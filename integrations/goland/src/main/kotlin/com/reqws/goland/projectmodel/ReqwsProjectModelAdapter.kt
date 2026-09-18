@@ -45,7 +45,6 @@ enum class ProjectModelErrorCode {
   NESTED_CONTENT_ROOT_CONFLICT,
   OWNERSHIP_CONFLICT,
   LIVE_FILE_INDEX_NOT_CONVERGED,
-  GO_MODULES_REGISTRY_NOT_CONVERGED,
   RETAINED_REPOSITORY_DISCOVERY_FAILED,
 }
 
@@ -77,7 +76,6 @@ class ReqwsProjectModelAdapter(
   suspend fun apply(
     snapshot: ManifestSnapshot,
     isServiceDisposed: () -> Boolean = { false },
-    allowRootsChangeNotification: Boolean = true,
   ): ProjectModelApplyResult {
     val isColdModelSnapshot = firstModelSnapshot.get()
     val result = WorkspaceExcludeModelAdapter(
@@ -88,7 +86,7 @@ class ReqwsProjectModelAdapter(
       isColdModelSnapshot = isColdModelSnapshot,
       projectMetadataObservation = projectMetadataObservation,
       trace = trace,
-    ).apply(snapshot, allowRootsChangeNotification)
+    ).apply(snapshot)
     firstModelSnapshot.set(false)
     return result
   }
@@ -119,16 +117,9 @@ internal class WorkspaceExcludeModelAdapter(
     PlatformReqwsLiveProjectionVerifier(project),
   private val projectModelMutationGuard: ReqwsProjectModelMutationGuard = project.service(),
   private val trace: ReqwsSyncTrace = ReqwsSyncTrace.NONE,
-  private val goModulesProjection: ReqwsGoModulesProjection = ReqwsGoModulesSynchronizer(
-    project = project,
-    isProjectDisposed = isProjectDisposed,
-    isTrusted = isTrusted,
-    trace = trace,
-  ),
 ) {
   suspend fun apply(
     snapshot: ManifestSnapshot,
-    allowRootsChangeNotification: Boolean = true,
   ): ProjectModelApplyResult {
     val stages = if (trace.enabled) ProjectionStagesTrace(trace) else null
     stages?.start(ProjectionTraceStage.MODEL)
@@ -362,17 +353,6 @@ internal class WorkspaceExcludeModelAdapter(
         excludedPaths = desiredRelativePaths.map { relative ->
           resolveRelative(snapshot.canonicalProjectRoot, relative)
         },
-      )
-      stages?.finish(ProjectionTraceOutcome.SUCCESS)
-      ensureMutationAllowed()
-      stages?.start(ProjectionTraceStage.REGISTRY)
-      goModulesProjection.synchronize(
-        moduleName = target.moduleName,
-        activeRepositoryPaths = currentActivePaths.values,
-        excludedPaths = desiredRelativePaths.map { relative ->
-          resolveRelative(snapshot.canonicalProjectRoot, relative)
-        },
-        allowRootsChangeNotification = allowRootsChangeNotification,
       )
       stages?.finish(ProjectionTraceOutcome.SUCCESS)
       ensureMutationAllowed()
@@ -816,7 +796,6 @@ internal class WorkspaceExcludeModelAdapter(
 private enum class ProjectionTraceStage {
   MODEL,
   PFI,
-  REGISTRY,
 }
 
 private enum class ProjectionTraceOutcome {

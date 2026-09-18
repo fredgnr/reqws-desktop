@@ -145,7 +145,6 @@ private fun ReqwsProjectError.projectContentFailureDetailKey(): String? {
   if (code != ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED) return null
   return when (field) {
     "PROJECT_FILE_INDEX" -> "message.projectFileIndexNotConverged"
-    "GO_MODULES_REGISTRY" -> "message.goModulesRegistryNotConverged"
     else -> null
   }
 }

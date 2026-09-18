@@ -2,7 +2,7 @@
 title: IDE 插件语言解耦技术方案
 type: technical-design
 status: active
-updated: 2026-09-13
+updated: 2026-09-18
 ---
 
 # IDE 插件语言解耦技术方案
@@ -11,7 +11,7 @@ updated: 2026-09-13
 
 ## 1. 状态、依据与范围
 
-Go 解耦仍是实施前方案，不是已完成实现。本次已更新规范与文档，删除源码输入哈希台账，并移除 Gradle Wrapper 的 `distributionSha256Sum`；版本仍为 9.3.0，官方 HTTPS URL 不变。不改插件运行逻辑或测试代码，不升级依赖版本，不变更 CI/Release，也不安装、重启或发布插件。
+S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误/UI 分支，并移除无效参数；本轮必要回归已通过，实际记录见 [S1 任务](tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 的调度/依赖及共享追踪清理、V 的整体验收尚未执行。Gradle Wrapper 仍为 9.3.0，官方 HTTPS URL 不变且不设置 `distributionSha256Sum`；本轮不升级依赖，不变更 CI/Release，也不安装、重启或发布插件。
 
 源码核对基线是 [main@409b30e573d47348618620bbc0a52c0dd0710954](https://github.com/fredgnr/reqws-desktop/tree/409b30e573d47348618620bbc0a52c0dd0710954)。实施时按实际基线核对引用；以下路径和类名是清理入口，不是允许整体删除文件的名单。
 
@@ -30,13 +30,13 @@ Go 解耦仍是实施前方案，不是已完成实现。本次已更新规范�
 
 非目标：重构 Desktop workspace 生命周期；自动写 Git mappings；改变独立 clone/gitfile/worktree 支持；改为全新 Content Root 策略；迁移 manifest 或 ownership schema；支持其他 IDE/系统；引入语言适配框架、可选 Go 模块或开关；升级工具链、版本或发布资产。
 
-## 3. 当前耦合位置
+## 3. 历史耦合与当前边界
 
-[历史基线的 ReqwsGoModulesSynchronizer](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/integrations/goland/src/main/kotlin/com/reqws/goland/projectmodel/ReqwsGoModulesSynchronizer.kt)在活动路径中筛选顶层普通 `go.mod`，读取 `VgoModulesRegistry`，比较活动与 excluded module root；不一致时额外发布 ordinary roots event，再有界等待，最终可能抛出 `GO_MODULES_REGISTRY_NOT_CONVERGED`。筛选只用于附加 Go 检查，不是当前 manifest 成员选择器。
+[历史基线的 ReqwsGoModulesSynchronizer](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/integrations/goland/src/main/kotlin/com/reqws/goland/projectmodel/ReqwsGoModulesSynchronizer.kt)在活动路径中筛选顶层普通 `go.mod`，读取 `VgoModulesRegistry`，比较活动与 excluded module root；不一致时额外发布 ordinary roots event，再有界等待，最终可能抛出 `GO_MODULES_REGISTRY_NOT_CONVERGED`。筛选当时只用于附加 Go 检查，不是 manifest 成员选择器；该文件已在 S1 删除。
 
-[ReqwsProjectModelAdapter](../../../integrations/goland/src/main/kotlin/com/reqws/goland/projectmodel/ReqwsProjectModelAdapter.kt)先提交受管 excludes、验证公开文件范围，再调用 `goModulesProjection.synchronize()`；[ReqwsProjectionApplier](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectionApplier.kt)把 Go 失败与 PFI 失败都映射到 `PROJECT_CONTENT_NOT_CONVERGED`，但区分诊断 field。这条链使 Go 状态可以阻塞 ReqWS clean digest。
+[ReqwsProjectModelAdapter](../../../integrations/goland/src/main/kotlin/com/reqws/goland/projectmodel/ReqwsProjectModelAdapter.kt)历史实现先提交受管 excludes、验证公开文件范围，再调用 `goModulesProjection.synchronize()`；[ReqwsProjectionApplier](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectionApplier.kt)历史实现把 Go 失败与 PFI 失败都映射到 `PROJECT_CONTENT_NOT_CONVERGED`，但区分诊断 field。这条历史链曾使 Go 状态阻塞 ReqWS clean digest。S1 已删除 Go 调用与映射，保留模型/PFI 检查及其真实失败。
 
-[ReqwsProjectService](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectService.kt)、[协调器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/sync/LatestWinsSyncCoordinator.kt)及[请求跟踪器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/SyncReadRequestTracker.kt)还传递 follow-up/notification policy。这里同时承载通用生命周期行为，不能因存在 Go 用途就整体删除。
+[ReqwsProjectService](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectService.kt)、[协调器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/sync/LatestWinsSyncCoordinator.kt)及[请求跟踪器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/SyncReadRequestTracker.kt)仍保留通用 follow-up 调度。S1 已原子移除 `allowRootsChangeNotification` 参数及直接传递；剩余调度、共享追踪与构建依赖在 S2 核对，不能因存在旧 Go 用途就整体删除通用生命周期行为。
 
 ## 4. 目标执行链与状态
 
@@ -144,4 +144,4 @@ S1/S2 默认同一分支串行，不并发修改共享 adapter/service/coordinat
 
 LD-01～LD-06 的相关用例有结果；生产路径无 Go API、构建文件探测、Go gate 或专属轮询；剩余 notifier/follow-up 有明确通用职责或已删除；现有安全和恢复回归不被削弱；无无用 Go 依赖/空实现；代码、规范、当前指南与实际检查一致。
 
-本次已完成规范、方案、独立任务及 Wrapper 配置/哈希台账清理；不满足上述 Go 解耦实现完成标准，也不产生新的功能 GO。
+当前 S1 核心实现与必要回归已完成；S2 与 V 尚未执行。阶段结果不能代替上述整体完成标准，也不产生新的完整功能 GO。
