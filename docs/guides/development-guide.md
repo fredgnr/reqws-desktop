@@ -211,7 +211,7 @@ cd integrations/goland
 
 ### 插件开发与验收边界
 
-[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖收尾和 V 整体验收尚未完成。
+[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)是开发和验收的统一入口；[语言解耦总方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义共同契约，逐文件实施和最小回归直接见[独立任务文档](../changes/ide-plugin-language-decoupling/tasks/README.md)。S1 已删除 `ReqwsGoModulesSynchronizer`、Go 成功门禁及直接错误链；阶段回归见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 已清理补偿调度与显式 Go 依赖，当前验证见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)；V 整体验收尚未执行。
 
 Desktop 保持 manifest 和 Git/workspace 生命周期的唯一 writer。插件只读消费仓库集合，进行必要的受管项目范围适配和 VCS 诊断。同步主路径不依据 `go.mod` 等语言文件判断成员或成功，不查询 Go registry，也不等待 SDK、依赖、运行配置或语言分析就绪。旧指南中的 Go registry 三层成功门禁和 Go test/run/debug 验收要求已由新规范替代。
 
@@ -231,7 +231,7 @@ VCS 始终只读：生产代码不得调用 mapping writer、主动调用可改�
 
 ### GoLand 同步追踪
 
-当前代码提供可选 `-Dreqws.sync.trace=true`；当前格式见[已实现追踪契约](../changes/goland-plugin-support/technical-design.md#182-可选同步追踪)。只在事件、恢复或性能问题需要时启用，不作为每个验收动作的固定流程。该参数要进入实际 GoLand JVM，修改真实 VM options 或重启前先取得对应授权，保留用户原参数，不更改 app 内默认配置。
+当前代码提供可选 `-Dreqws.sync.trace=true`；沿用[原追踪契约](../changes/goland-plugin-support/technical-design.md#182-可选同步追踪)中的通用格式和脱敏边界，S2 已删除其中旧 registry/follow-up 事件与字段。只在事件、恢复或性能问题需要时启用，不作为每个验收动作的固定流程。该参数要进入实际 GoLand JVM，修改真实 VM options 或重启前先取得对应授权，保留用户原参数，不更改 app 内默认配置。
 
 在一次明确的观察区间中记录 service/request/source 与事件序号，区分收到、匹配、防抖、apply/no-op，不重复累计 collector 重放。可用以下命令定位已授权运行产生的日志：
 
@@ -240,7 +240,7 @@ reqws_trace_log='/absolute/path/to/current/idea.log'
 rg -n 'REQWS_SYNC_TRACE schema=1 ' "$reqws_trace_log"
 ```
 
-测量后移除该选项或设为 false，并按授权流程核对新会话；不清空旧日志制造零记录。追踪仍只含固定枚举和数字，不输出 workspace 路径、digest、URL 或异常文本，不新增网络/IPC 导出，也不改变同步判定。S1 已移除主路径 `REGISTRY` 阶段及其发出点；共享 `REGISTRY_START`/`REGISTRY_END` 等枚举与残留消费者留给 S2 清理，当前 schema 仍为 1。通用追踪继续保留。
+测量后移除该选项或设为 false，并按授权流程核对新会话；不清空旧日志制造零记录。追踪仍只含固定枚举和数字，不输出 workspace 路径、digest、URL 或异常文本，不新增网络/IPC 导出，也不改变同步判定。S1 已移除主路径 `REGISTRY` 阶段；S2 已删除 `REGISTRY_START`/`REGISTRY_END`、`EVENT_EPOCH` 与 follow-up 专属字段和判定。当前 schema 仍为 1，通用事件与字段仍以名称输出，不将枚举序号作为日志契约；roots 事件通过普通 `PROJECT_MODEL_CHANGE` 记录。通用追踪继续保留。
 
 ## 8. 文档工作流
 

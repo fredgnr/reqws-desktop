@@ -8,6 +8,7 @@ import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.reqws.goland.diagnostics.ReqwsSyncTrace
 import com.reqws.goland.diagnostics.SyncTraceEvent
+import com.reqws.goland.manifest.ManifestReader
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard
 import com.reqws.goland.sync.SyncCandidateApplier
@@ -3699,13 +3700,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     val decisions = traceEvents(traceLines, SyncTraceEvent.ROOTS_DECISION)
     assertEquals(8, decisions.size)
     assertTrue(decisions.all { it.contains("reason=QUEUED") && it.contains("guarded=0") })
-    assertEquals(
-      (1L..8L).toList(),
-      decisions.map { traceField(it, "event_epoch").toLong() },
-    )
+    assertEquals(8, decisions.map { traceField(it, "span_id") }.toSet().size)
     val dispatch = traceEvents(traceLines, SyncTraceEvent.ROOTS_DEBOUNCE_DISPATCH).single()
     assertEquals("PROJECT_MODEL_CHANGE", traceField(dispatch, "trigger"))
-    assertEquals("8", traceField(dispatch, "event_epoch"))
     assertEquals(2, traceEvents(traceLines, SyncTraceEvent.READ_START).size)
     assertEquals(2, traceEvents(traceLines, SyncTraceEvent.READ_END).size)
   }
@@ -3741,8 +3738,11 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       )
       awaitCondition("initial burst apply") { applyCount.get() == 1 }
 
-      repeat(8) {
-        requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
+      repeat(8) { index ->
+        requireNotNull(listener.get()).invoke(
+          if (index % 2 == 0) ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY
+          else ReqwsProjectModelChangeKind.ORDINARY,
+        )
       }
       assertTrue(
         "project-model burst did not enter debounce",
@@ -3962,10 +3962,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping() =
-    verifyVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping()
+  fun testLateOrdinaryEventForcesOneReplayWithoutLooping() =
+    verifyLateOrdinaryEventForcesOneReplayWithoutLooping()
 
-  private fun verifyVgoOnlyFollowUpEventForcesAtMostOneAdditionalReplayWithoutLooping() {
+  private fun verifyLateOrdinaryEventForcesOneReplayWithoutLooping() {
     writeValidManifest()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val applyCount = AtomicInteger(0)
@@ -3994,9 +3994,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     try {
       awaitSuccessfulCompletion(
         job = requireNotNull(service.refreshAutomatically()),
-        description = "initial Vgo-follow-up projection",
+        description = "initial external-event projection",
       )
-      awaitCondition("initial Vgo-follow-up apply") { applyCount.get() == 1 }
+      awaitCondition("initial external-event apply") { applyCount.get() == 1 }
 
       requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY)
       awaitCondition("external project-model debounce") { debounceCount.get() == 1 }
@@ -4005,12 +4005,12 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
 
-      // Deliver the language plugin's ordinary event only after the primary replay has fully
-      // completed. Event classification, not timing overlap, must make this verify-only.
+      // A later ordinary event is an independent external drift signal, even after a
+      // workspace-model replay has fully completed.
       requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
-      awaitCondition("Vgo-only follow-up debounce") { debounceCount.get() == 2 }
+      awaitCondition("late ordinary-event debounce") { debounceCount.get() == 2 }
       assertTrue(debounceReleases.trySend(Unit).isSuccess)
-      awaitCondition("bounded Vgo-only follow-up replay") {
+      awaitCondition("bounded ordinary-event replay") {
         applyCount.get() == 3 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
 
@@ -4021,7 +4021,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         listOf(
           SyncTrigger.AUTOMATIC,
           SyncTrigger.PROJECT_MODEL_CHANGE,
-          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+          SyncTrigger.PROJECT_MODEL_CHANGE,
         ),
         applyTriggers,
       )
@@ -4032,10 +4032,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage() =
-    verifyOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage()
+  fun testOverlappingOrdinaryEventsEachForceReconciliation() =
+    verifyOverlappingOrdinaryEventsEachForceReconciliation()
 
-  private fun verifyOverlappingOrdinaryEventsKeepTheirOwnVerifyOnlyLineage() {
+  private fun verifyOverlappingOrdinaryEventsEachForceReconciliation() {
     writeValidManifest()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val applyTriggers = CopyOnWriteArrayList<SyncTrigger>()
@@ -4043,8 +4043,8 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     val debounceCount = AtomicInteger(0)
     val debounceReleases = Channel<Unit>(Channel.UNLIMITED)
     val candidateOfferCount = AtomicInteger(0)
-    val firstFollowUpOfferEntered = CountDownLatch(1)
-    val allowFirstFollowUpOffer = CountDownLatch(1)
+    val firstEventOfferEntered = CountDownLatch(1)
+    val allowFirstEventOffer = CountDownLatch(1)
     val baseOverrides = projectModelChangeRuntimeOverrides(
       candidateApplier = SyncCandidateApplier { candidate ->
         applyTriggers.add(candidate.trigger)
@@ -4064,9 +4064,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       runtimeOverrides = baseOverrides.copy(
         beforeCandidateOffer = {
           if (candidateOfferCount.incrementAndGet() == 2) {
-            firstFollowUpOfferEntered.countDown()
-            check(allowFirstFollowUpOffer.await(5, TimeUnit.SECONDS)) {
-              "test did not release the first follow-up candidate"
+            firstEventOfferEntered.countDown()
+            check(allowFirstEventOffer.await(5, TimeUnit.SECONDS)) {
+              "test did not release the first project-model candidate"
             }
           }
         },
@@ -4083,46 +4083,50 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       awaitCondition("first ordinary-event debounce") { debounceCount.get() == 1 }
       assertTrue(debounceReleases.trySend(Unit).isSuccess)
       assertTrue(
-        "first follow-up read did not reach candidate selection",
-        firstFollowUpOfferEntered.await(5, TimeUnit.SECONDS),
+        "first project-model read did not reach candidate selection",
+        firstEventOfferEntered.await(5, TimeUnit.SECONDS),
       )
 
       // The second event is accepted while the first read is still the latest generation. Its
-      // immutable origin must not be consumed by the first read before this debounce is released.
+      // pending debounce must still force another reconciliation after the first read completes.
       requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
       awaitCondition("second ordinary-event debounce") { debounceCount.get() == 2 }
-      allowFirstFollowUpOffer.countDown()
-      awaitCondition("first verify-only follow-up apply") { applyTriggers.size == 2 }
+      allowFirstEventOffer.countDown()
+      awaitCondition("first ordinary-event apply") { applyTriggers.size == 2 }
       assertTrue(debounceReleases.trySend(Unit).isSuccess)
-      awaitCondition("second verify-only follow-up apply") { applyTriggers.size == 3 }
+      awaitCondition("second ordinary-event apply") { applyTriggers.size == 3 }
 
       Thread.sleep(NO_CHURN_WINDOW_MILLIS)
       assertEquals(
         listOf(
           SyncTrigger.AUTOMATIC,
-          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-          SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
+          SyncTrigger.PROJECT_MODEL_CHANGE,
+          SyncTrigger.PROJECT_MODEL_CHANGE,
         ),
         applyTriggers,
       )
       assertEquals(2, debounceCount.get())
     } finally {
-      allowFirstFollowUpOffer.countDown()
+      allowFirstEventOffer.countDown()
       debounceReleases.close()
       service.dispose()
       scope.cancel()
     }
   }
 
-  fun testFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest() =
-    verifyFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest()
+  fun testFailedOrdinaryEventReadPreservesReconciliationForANewerManifestDigest() =
+    verifyFailedOrdinaryEventReadPreservesReconciliation(changeDigest = true)
 
-  private fun verifyFailedFollowUpReadDoesNotSuppressNotificationForANewerManifestDigest() {
+  fun testFailedOrdinaryEventReadPreservesReconciliationForTheSameManifestDigest() =
+    verifyFailedOrdinaryEventReadPreservesReconciliation(changeDigest = false)
+
+  private fun verifyFailedOrdinaryEventReadPreservesReconciliation(changeDigest: Boolean) {
     val root = writeValidManifest()
     val manifest = ReqwsProjectDetector.manifestPath(root)
     val originalManifest = Files.readString(manifest)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val applyTriggers = CopyOnWriteArrayList<SyncTrigger>()
+    val appliedDigests = CopyOnWriteArrayList<String>()
     val listener = AtomicReference<((ReqwsProjectModelChangeKind) -> Unit)?>()
     val debounceReleases = Channel<Unit>(Channel.UNLIMITED)
     val service = ReqwsProjectService.createForTest(
@@ -4130,6 +4134,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       coroutineScope = scope,
       runtimeOverrides = projectModelChangeRuntimeOverrides(
         candidateApplier = SyncCandidateApplier { candidate ->
+          appliedDigests.add(candidate.digestSha256)
           applyTriggers.add(candidate.trigger)
         },
         registrar = ReqwsProjectModelChangeRegistrar { callback ->
@@ -4144,9 +4149,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     try {
       awaitSuccessfulCompletion(
         requireNotNull(service.refreshAutomatically()),
-        "initial projection before failed follow-up read",
+        "initial projection before failed ordinary-event read",
       )
-      awaitCondition("initial apply before failed follow-up read") { applyTriggers.size == 1 }
+      awaitCondition("initial apply before failed ordinary-event read") { applyTriggers.size == 1 }
 
       Files.writeString(manifest, "{")
       requireNotNull(listener.get()).invoke(ReqwsProjectModelChangeKind.ORDINARY)
@@ -4154,26 +4159,29 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       awaitStableLifecycle(
         service,
         ReqwsLifecycleState.ERROR,
-        "failed verify-only follow-up read",
+        "failed ordinary-event read",
       )
 
       Files.writeString(
         manifest,
-        originalManifest.replace(
-          "2026-08-14T00:00:00.000Z",
-          "2026-08-15T00:00:00.000Z",
-        ),
+        if (changeDigest) {
+          originalManifest.replace("2026-08-14T00:00:00.000Z", "2026-08-15T00:00:00.000Z")
+        } else {
+          originalManifest
+        },
       )
       awaitSuccessfulCompletion(
         requireNotNull(service.refreshAutomatically()),
-        "automatic recovery with a newer manifest digest",
+        "automatic recovery after an ordinary-event read failure",
       )
-      awaitCondition("newer manifest apply") { applyTriggers.size == 2 }
+      awaitCondition("recovered manifest apply") { applyTriggers.size == 2 }
 
       assertEquals(
-        listOf(SyncTrigger.AUTOMATIC, SyncTrigger.AUTOMATIC),
+        listOf(SyncTrigger.AUTOMATIC, SyncTrigger.PROJECT_MODEL_CHANGE),
         applyTriggers,
       )
+      assertEquals(!changeDigest, appliedDigests[0] == appliedDigests[1])
+      assertEquals(ManifestReader().read(root).digestSha256, appliedDigests[1])
     } finally {
       debounceReleases.close()
       service.dispose()

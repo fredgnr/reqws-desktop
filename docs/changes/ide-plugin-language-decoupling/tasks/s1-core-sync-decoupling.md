@@ -126,6 +126,8 @@ S1 完成须同时满足：主同步链无 Go 探测/读取/轮询/错误门禁�
 
 ## 8. 本轮实施记录（2026-09-18）
 
+本节保留 S1 实施与验证时的阶段事实。S1 随后已提交为 `8d2561a6b6492f437bad7709b591f72ee8ee3c2d`；下文“未提交差异”和“S2 剩余项”描述当时输入与交接。后续 S2 修改后的证据见 [S2 实施记录](s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)，不能把本节旧选择器或数量当作新候选结果。
+
 - 实施基线：`044c34c10e5a5bbf57c07bfe44c5140e460642eb`；本轮为该基线上的未提交工作树差异，不能仅以 HEAD 代表被测输入。
 - 已实现：删除 Go synchronizer、projection/registry adapter、Go 专属 roots notifier、主路径 `REGISTRY` 阶段及 Go 错误映射；同步更新 adapter/applier 的签名与调用者，删除中英文旧错误文案及对应 UI 分支。
 - 提前完成的 S2 项：随已删除 notifier 原子移除 `allowRootsChangeNotification` 参数及直接传递；保留通用 follow-up 调度，未重写状态机。

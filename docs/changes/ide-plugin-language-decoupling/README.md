@@ -2,10 +2,10 @@
 
 本变更定义语言无关的插件职责，并用独立任务文档分别交接 S1、S2 的实现与最小回归，最后统一验收。
 
-- 状态：active（S1 核心实现与必要回归已完成；S2 调度/依赖收尾与 V 验收尚未执行）。
+- 状态：active（S1 核心实现与必要回归已完成；S2 调度/依赖核心清理已落实，必要回归已通过；V 尚未执行）。
 - 更新日期：2026-09-18。
 - 历史源码核对基线：`main@409b30e573d47348618620bbc0a52c0dd0710954`。后续实现使用 `refactor/ide-plugin-language-decoupling`，进度见 PR #8。
-- 本次范围：按 [S1](tasks/s1-core-sync-decoupling.md) 删除 Go 主成功门禁、专属通知、直接错误/UI 分支及无效参数，同步迁移必要回归和当前说明；保留通用 follow-up 调度、共享追踪及 Go 构建依赖供 S2 收尾。不升级依赖或工具链，不改变 CI/Release、manifest/ownership schema 或用户配置。
+- 本次范围：在已提交的 [S1](tasks/s1-core-sync-decoupling.md) 上执行 [S2](tasks/s2-scheduling-dependency-cleanup.md)，清理 Go 补偿 follow-up、共享追踪与显式 Go 依赖，扩展原符号门禁；保留普通项目范围漂移修复与通用生命周期保护。不升级依赖或工具链，不改变 CI/Release、manifest/ownership schema 或用户配置。
 - 实施组织：两个串行开发任务 S1/S2，各做必要回归，之后执行 V；不强制拆成多个 PR，强耦合时允许合并实施。
 
 ## 文档

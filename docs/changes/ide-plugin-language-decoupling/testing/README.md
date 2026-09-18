@@ -9,4 +9,4 @@
 
 开发过程中直接使用[S1 的实施与最小回归](../tasks/s1-core-sync-decoupling.md)或[S2 的实施与最小回归](../tasks/s2-scheduling-dependency-cleanup.md)，不要把 V 的全量要求逐项复制到两个子任务。
 
-S1 核心实现已完成，本轮必要回归证据见 [S1 实施记录](../tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)；S2 与 V 尚未执行。旧 verification 属于旧工件，不是本次候选证据；零匹配、全跳过、不明缓存任务状态和阶段通过均不能单独充当完整验收。完成实际验证后再新增真实按次报告并更新本索引。
+S1 已提交，阶段证据见 [S1 实施记录](../tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)；S2 核心代码已落实，当前输入与必要回归证据见 [S2 实施记录](../tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。V 尚未执行。旧 verification 属于旧工件，不是本次候选证据；零匹配、全跳过、不明缓存任务状态和阶段通过均不能单独充当完整验收。完成实际验证后再新增真实按次报告并更新本索引。

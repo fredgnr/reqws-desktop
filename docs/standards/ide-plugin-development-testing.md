@@ -11,7 +11,7 @@ updated: 2026-09-18
 
 ## 1. 生效范围与实现状态
 
-适用于 `integrations/goland/` 及后续获准开发的 IDE 适配，不代表当前已支持其他 IDE 或操作系统。本规范与[语言解耦技术方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义新的开发和验收方向；规范、文档清理和 Gradle Wrapper 的版本管理调整已落实；S1 已删除 Go 主成功门禁及直接错误链，必要回归状态见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖收尾和 V 最终验收尚未执行。
+适用于 `integrations/goland/` 及后续获准开发的 IDE 适配，不代表当前已支持其他 IDE 或操作系统。本规范与[语言解耦技术方案](../changes/ide-plugin-language-decoupling/technical-design.md)定义新的开发和验收方向；规范、文档清理和 Gradle Wrapper 的版本管理调整已落实；S1 已删除 Go 主成功门禁及直接错误链，必要回归状态见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖核心清理已落实，当前证据以 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)为准；V 最终验收尚未执行。
 
 旧 GoLand 需求、设计、指南和测试材料中，把 `go.mod`、Go Modules registry、Go package 配置或 Go 工具链可用性作为 ReqWS 成功条件的条款被本规范替代。其余 manifest、安全、项目模型所有权、生命周期和 VCS 只读约束继续有效。旧版本源码与按次验证报告仍用于说明当时行为，不能据此要求新候选重新执行已移出范围的验收。
 
@@ -88,6 +88,6 @@ Git mapping 的缺失、冲突或 retained 提示仍走独立的只读诊断语�
 
 Gradle 通过 Wrapper 的固定版本和官方 HTTPS `distributionUrl` 管理，当前为 9.3.0；不设置 `distributionSha256Sum`，也不在构建脚本、文档或自建清单里改放同一预期值。保留 `validateDistributionUrl=true`、现有超时、Wrapper 文件及缓存设置；升级时维护明确版本，不使用 latest、动态范围、个人镜像或本地 ZIP。这是用户选择的版本管理策略：不执行 Wrapper distribution 的预期 SHA-256 比对，版本号/HTTPS 不被描述为等价的字节完整性证明。[Gradle Wrapper API](https://docs.gradle.org/current/javadoc/org/gradle/api/tasks/wrapper/Wrapper.html)说明了该字段未设置时的行为。
 
-边界不得扩大：Release 自动生成/验证的 `SHA256SUMS`、依赖锁文件及其工具原生 integrity、现有 Wrapper JAR 验证、Action 提交固定和运行时 manifest 摘要均不属于本次删除对象。保留哈希算法和真正的测试向量，不做全仓 `sha256` 字样删除。Go API 依赖清理仍按 S1/S2，不能与这次 Wrapper 配置简化混称为已实现。
+边界不得扩大：Release 自动生成/验证的 `SHA256SUMS`、依赖锁文件及其工具原生 integrity、现有 Wrapper JAR 验证、Action 提交固定和运行时 manifest 摘要均不属于本次删除对象。保留哈希算法和真正的测试向量，不做全仓 `sha256` 字样删除。Go API 依赖清理的实现与证据见 S1/S2 阶段记录，不能与 Wrapper 配置简化混称为已验证。
 
 本次配置与文档调整只需确认 Wrapper 属性差异、版本/URL未漂移、删除文件无失效引用、文档与索引一致；在可用的完整 checkout 运行 `npm run docs:check` 和 `git diff --check`。不新增逐文件指纹门禁、不为了这一行配置重复 Go/IDE 功能回归。需要验证首次下载时使用获准的隔离 Gradle 缓存，不清空个人缓存；未实测就记录未运行。既有 CI 照常运行。

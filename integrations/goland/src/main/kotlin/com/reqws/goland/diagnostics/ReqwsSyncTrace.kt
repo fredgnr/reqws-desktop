@@ -33,9 +33,6 @@ internal enum class SyncTraceEvent {
   COORDINATOR_CLOSED,
   PROJECTION_STAGE_START,
   PROJECTION_STAGE_END,
-  REGISTRY_START,
-  REGISTRY_END,
-  ROOTS_NOTIFICATION,
 }
 
 internal enum class SyncTraceField {
@@ -47,7 +44,6 @@ internal enum class SyncTraceField {
   COUNT,
   RECEIVED_COUNT,
   MATCHED_COUNT,
-  EVENT_EPOCH,
   KIND,
   GUARDED,
   ACCEPTED,
@@ -56,15 +52,7 @@ internal enum class SyncTraceField {
   LIFECYCLE,
   STAGE,
   OUTCOME,
-  ELAPSED_NANOS,
-  READS,
-  WAITS,
-  NOTIFICATIONS,
-  NOTIFICATION_ATTEMPTS,
-  NOTIFICATION_REJECTED,
-  ALLOW_NOTIFICATION,
-  ACTIVE_COUNT,
-  EXCLUDED_COUNT;
+  ELAPSED_NANOS;
 
   operator fun invoke(value: Long): SyncTraceAttribute =
     SyncTraceAttribute.number(this, value)

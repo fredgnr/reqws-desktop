@@ -20,16 +20,12 @@ internal class SyncReadRequestTracker {
   private var nextReconcileEpoch = 0L
   private var pendingReconcileEpoch: Long? = null
   private var pendingReconcileTrigger: SyncTrigger? = null
-  private var pendingProjectModelOriginDigest: String? = null
-  private var pendingProjectModelEventEpoch: Long? = null
   private var pendingInitialProjectMetadataRecovery = false
   private var pendingProjectMetadataRecoveryAttempt = 0
 
   fun begin(
     trigger: SyncTrigger,
     armInitialProjectMetadataRecovery: Boolean = false,
-    projectModelOriginDigest: String? = null,
-    projectModelEventEpoch: Long? = null,
   ): SyncReadRequest = synchronized(lock) {
     if (armInitialProjectMetadataRecovery) {
       pendingInitialProjectMetadataRecovery = true
@@ -39,8 +35,6 @@ internal class SyncReadRequestTracker {
       trigger = trigger,
       cancellationRecoveryAttempt = 0,
       projectMetadataRecoveryAttempt = pendingProjectMetadataRecoveryAttempt,
-      projectModelOriginDigest = projectModelOriginDigest,
-      projectModelEventEpoch = projectModelEventEpoch,
     )
   }
 
@@ -48,8 +42,6 @@ internal class SyncReadRequestTracker {
   fun beginIf(
     trigger: SyncTrigger,
     armInitialProjectMetadataRecovery: Boolean = false,
-    projectModelOriginDigest: String? = null,
-    projectModelEventEpoch: Long? = null,
     condition: () -> Boolean,
   ): SyncReadRequest? = synchronized(lock) {
     if (!condition()) return@synchronized null
@@ -61,8 +53,6 @@ internal class SyncReadRequestTracker {
       trigger = trigger,
       cancellationRecoveryAttempt = 0,
       projectMetadataRecoveryAttempt = pendingProjectMetadataRecoveryAttempt,
-      projectModelOriginDigest = projectModelOriginDigest,
-      projectModelEventEpoch = projectModelEventEpoch,
     )
   }
 
@@ -82,8 +72,6 @@ internal class SyncReadRequestTracker {
       trigger = SyncTrigger.AUTOMATIC,
       cancellationRecoveryAttempt = predecessor.cancellationRecoveryAttempt + 1,
       projectMetadataRecoveryAttempt = predecessor.projectMetadataRecoveryAttempt,
-      projectModelOriginDigest = null,
-      projectModelEventEpoch = null,
     )
   }
 
@@ -104,8 +92,6 @@ internal class SyncReadRequestTracker {
       trigger = SyncTrigger.AUTOMATIC,
       cancellationRecoveryAttempt = predecessor.cancellationRecoveryAttempt,
       projectMetadataRecoveryAttempt = pendingProjectMetadataRecoveryAttempt,
-      projectModelOriginDigest = null,
-      projectModelEventEpoch = null,
     )
   }
 
@@ -113,38 +99,17 @@ internal class SyncReadRequestTracker {
     trigger: SyncTrigger,
     cancellationRecoveryAttempt: Int,
     projectMetadataRecoveryAttempt: Int,
-    projectModelOriginDigest: String?,
-    projectModelEventEpoch: Long?,
   ): SyncReadRequest {
-    val carriesProjectModelLineage =
-      projectModelOriginDigest != null && projectModelEventEpoch != null
-    require(
-      (trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) == carriesProjectModelLineage &&
-        (projectModelOriginDigest == null) == (projectModelEventEpoch == null),
-    ) {
-      "A project-model follow-up requires an origin digest and event epoch"
-    }
     latestGeneration += 1
     if (trigger.requiresReconciliation) {
-      armReconcileIntentLocked(
-        trigger = trigger,
-        projectModelOriginDigest = projectModelOriginDigest,
-        projectModelEventEpoch = projectModelEventEpoch,
-      )
+      armReconcileIntentLocked(trigger)
     }
-    val effectiveTrigger = pendingReconcileTrigger ?: trigger
     return SyncReadRequest(
       generation = latestGeneration,
       requestedTrigger = trigger,
       cancellationRecoveryAttempt = cancellationRecoveryAttempt,
       projectMetadataRecoveryAttempt = projectMetadataRecoveryAttempt,
       initialProjectMetadataRecoveryEligible = pendingInitialProjectMetadataRecovery,
-      projectModelOriginDigest = pendingProjectModelOriginDigest.takeIf {
-        effectiveTrigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-      },
-      projectModelEventEpoch = pendingProjectModelEventEpoch.takeIf {
-        effectiveTrigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-      },
     )
   }
 
@@ -170,11 +135,7 @@ internal class SyncReadRequestTracker {
       "Only a forced reconciliation trigger can be armed"
     }
     if (request.generation != latestGeneration) return@synchronized false
-    armReconcileIntentLocked(
-      trigger = trigger,
-      projectModelOriginDigest = null,
-      projectModelEventEpoch = null,
-    )
+    armReconcileIntentLocked(trigger)
     action()
     true
   }
@@ -194,8 +155,6 @@ internal class SyncReadRequestTracker {
     ) {
       pendingReconcileEpoch = null
       pendingReconcileTrigger = null
-      pendingProjectModelOriginDigest = null
-      pendingProjectModelEventEpoch = null
     }
     offered
   }
@@ -205,8 +164,6 @@ internal class SyncReadRequestTracker {
       latestGeneration += 1
       pendingReconcileEpoch = null
       pendingReconcileTrigger = null
-      pendingProjectModelOriginDigest = null
-      pendingProjectModelEventEpoch = null
       pendingInitialProjectMetadataRecovery = false
       pendingProjectMetadataRecoveryAttempt = 0
     }
@@ -231,24 +188,10 @@ internal class SyncReadRequestTracker {
   private fun effectiveTrigger(request: SyncReadRequest): SyncTrigger =
     pendingReconcileTrigger ?: request.requestedTrigger
 
-  private fun armReconcileIntentLocked(
-    trigger: SyncTrigger,
-    projectModelOriginDigest: String?,
-    projectModelEventEpoch: Long?,
-  ) {
+  private fun armReconcileIntentLocked(trigger: SyncTrigger) {
     nextReconcileEpoch += 1
     pendingReconcileEpoch = nextReconcileEpoch
-    val mergedTrigger = mergeReconcileTrigger(pendingReconcileTrigger, trigger)
-    pendingReconcileTrigger = mergedTrigger
-    if (mergedTrigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) {
-      if (trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) {
-        pendingProjectModelOriginDigest = projectModelOriginDigest
-        pendingProjectModelEventEpoch = projectModelEventEpoch
-      }
-    } else {
-      pendingProjectModelOriginDigest = null
-      pendingProjectModelEventEpoch = null
-    }
+    pendingReconcileTrigger = mergeReconcileTrigger(pendingReconcileTrigger, trigger)
   }
 }
 
@@ -258,6 +201,4 @@ internal data class SyncReadRequest(
   val cancellationRecoveryAttempt: Int,
   val projectMetadataRecoveryAttempt: Int,
   val initialProjectMetadataRecoveryEligible: Boolean,
-  val projectModelOriginDigest: String?,
-  val projectModelEventEpoch: Long?,
 )

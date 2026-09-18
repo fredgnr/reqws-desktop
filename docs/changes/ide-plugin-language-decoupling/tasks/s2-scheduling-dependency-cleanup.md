@@ -2,7 +2,7 @@
 title: S2：补偿调度与依赖清理
 type: technical-design
 status: active
-updated: 2026-09-13
+updated: 2026-09-18
 ---
 
 # S2：补偿调度与依赖清理
@@ -11,7 +11,7 @@ updated: 2026-09-13
 
 ## 1. 任务状态与前置结果
 
-- 计划状态：active；实现与本任务回归均未执行。
+- 计划状态：active；已接收 S1 提交，调度/依赖清理核心代码已落实，必要回归已通过。阶段记录见第 8 节。
 - 前置：[S1](s1-core-sync-decoupling.md)已形成可编译主路径，直接回归通过，并提供实际基线、修改项和剩余项。
 - 输入：S1 的真实代码结果与阶段记录，而不是旧 main 或旧验证报告。
 - 输出：清理完整的候选、S2 必要回归结果、V 所需工件/环境检查清单；不直接声明功能 GO。
@@ -116,5 +116,76 @@ V 需要的候选、工件和 GUI 条件：...
 是否修改 roots 订阅或关闭恢复路径（决定 V 是否补一次重开）：...
 结论：S2 必要回归通过 / 未完成；最终验收尚未执行
 ```
+
+## 8. 本轮实施记录（2026-09-18）
+
+- 接收基线：S1 提交 `8d2561a6b6492f437bad7709b591f72ee8ee3c2d`；本轮候选为该提交加 S2 未提交工作树差异。S1 的 108 项通过记录属于原阶段，不能替代当前依赖和调度配置下的验证。
+- 已落实代码：清理 `PROJECT_MODEL_FOLLOW_UP`、origin digest / event epoch 和 verify-only 合并/传播，保留普通 `PROJECT_MODEL_CHANGE` 范围漂移修复；清理共享 registry trace，删除 descriptor/Gradle 显式 Go 依赖，并扩展既有生产符号门禁及自检。
+- 通用保护：保留请求身份、generation、latest-wins、manual/trust intent、读取失败恢复、dirty baseline、PFI、trust/dispose 和 VCS 只读；继续用 mutation guard 抑制自身模型事件并防抖外部变更，不增加额外 notifier。
+- 编译与验证状态：生产与全部测试源码编译通过；S2-R1～R5 实际适用集合及 S2-X 平台主路径共执行 85 项，失败 0、错误 0、跳过 0。34 个选择器全部命中，包含 3 个类级选择器与 31 个方法级选择器；symbol gate 自检/扫描及配置/结构检查通过。详情见下表与精确命令。
+- V 交接：roots 事件分类与调度已纳入本轮修改范围，最终验收需按 V 条件增加一次同候选关闭重开；V 所需安装工件绑定和 GUI 验证环境待实际建立，不安装或重启真实 IDE。
+- 未执行范围：V 的完整保留插件回归、双版本兼容矩阵及必要 GUI；Desktop/shared 未修改，不重复执行 Desktop 全业务。S2 必要回归已通过，不产生完整功能 GO。
+
+### 验证环境、选择器与结果
+
+macOS arm64；JDK 21.0.12.1（现有 Homebrew JDK），Gradle Wrapper 9.3.0，GoLand 2026.1.3 测试平台，与 S1 相同。以下命令在仓库根目录执行；所有 `--tests` 紧跟 `test` 并置于后续任务之前，含空格的方法名整体引用。
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+  ./integrations/goland/gradlew -p integrations/goland test \
+  --tests 'com.reqws.goland.project.SyncReadRequestTrackerTest' \
+  --tests 'com.reqws.goland.sync.LatestWinsSyncCoordinatorTest' \
+  --tests 'com.reqws.goland.diagnostics.ReqwsSyncTraceTest' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testSafeModeTrustTransitionForcesSameDigestProjectModelReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testAutomaticTrustedRefreshBeforePollStillForcesSameDigestProjectModelReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testLatestRefreshPropagatesProcessCancellationAndRestoresManualSync' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testLatestRefreshPropagatesCoroutineCancellationAndRestoresManualSync' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testTracePreservesProcessCancellationAndManualRecoveryAcrossReadAndVcsSpans' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testTracePreservesCoroutineCancellationAndManualRecoveryAcrossReadAndVcsSpans' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testExternalProjectModelChangeForcesSameDigestReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testGuardedOwnedProjectModelChangeIsIgnored' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testTraceRecordsGuardedWorkspaceAndOrdinaryRootsWithoutSelfReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testProjectModelChangeWithoutValidSnapshotIsIgnored' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testProjectModelChangeBurstDebouncesToOneForcedReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testTraceSeparatesEightRootCallbacksFromOneForcedReplay' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testDisposeCancelsProjectModelDebounceAndClosesRegistration' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testLateOrdinaryProjectModelCallbackRacingDisposeIsDroppedWithoutFailure' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testThrowingProjectModelRegistrationCloseDoesNotSkipLaterCleanup' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testDisposeWinningBeforeCandidateCommitPreventsDurableDigestAdvance' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testProjectionFailureInvalidatesLiveProofAcrossALaterManifestReadError' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testQueuedReadFailureCannotResurrectProofInvalidatedByAnOlderApplyFailure' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testApplyCancellationInvalidatesLiveProofUntilARecoveryProjectionSucceeds' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testManifestProjectionIsIndependentOfGoModContentsAndLocation' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testAddsRemovesAndReaddsTargetAndPersistentMarkerTogether' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testVerifiesLiveProjectionAfterEveryApplyIncludingModelNoOp' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testPropagatesLiveFileIndexFailureAndRecoversWithTheSameSnapshot' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testTraceSpansCoverRealModelAndPfiAndKeepTheApplyIdentity' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testTracePreservesPfiPlatformCancellation' \
+  --tests 'com.reqws.goland.projectmodel.ReqwsProjectModelAdapterTest.testTracePreservesPfiCoroutineCancellation' \
+  --tests 'com.reqws.goland.project.ReqwsProjectionApplierTest.file index failure dirties the same digest until a successful retry commits it' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testLateOrdinaryEventForcesOneReplayWithoutLooping' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testOverlappingOrdinaryEventsEachForceReconciliation' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testFailedOrdinaryEventReadPreservesReconciliationForANewerManifestDigest' \
+  --tests 'com.reqws.goland.project.ReqwsProjectServiceTest.testFailedOrdinaryEventReadPreservesReconciliationForTheSameManifestDigest' \
+  verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure
+```
+
+构建用时 28 秒，共 18 个任务，17 个实际执行、1 个 UP-TO-DATE（`generateManifest`）；`compileKotlin`、`compileTestKotlin`、`test` 与各验证任务均实际执行。本轮最新源码及测试修改均早于这些任务，验证后仅补充文档证据。首次尝试将 `--tests` 参数放在 `verifyPluginStructure` 后导致命令配置失败、测试未执行；纠正参数顺序后的上述运行成功，未把首次零执行计为通过。
+
+| 测试类（完整包名前缀 `com.reqws.goland.`） | 选择方式 | 执行数 | 覆盖 |
+|---|---|---:|---|
+| `project.SyncReadRequestTrackerTest` | 完整类 | 19 | S2-R1/R3：请求/intent 合并、读取失败恢复与请求身份。 |
+| `sync.LatestWinsSyncCoordinatorTest` | 完整类 | 30 | S2-R1/R3：latest-wins、manual/trust intent、同 digest 重验、dirty baseline 与取消/关闭。 |
+| `diagnostics.ReqwsSyncTraceTest` | 完整类 | 5 | S2-R5：通用 trace、固定枚举/数字与脱敏、诊断不改变业务。 |
+| `project.ReqwsProjectServiceTest` | 上述 23 个精确方法 | 23 | S2-R1/R2/R3/R5：外部漂移、自事件抑制、防抖、后到/重叠事件、失败后新旧 digest 恢复及生命周期。 |
+| `projectmodel.ReqwsProjectModelAdapterTest` | 上述 7 个精确方法 | 7 | S2-X/R5：新依赖配置下真实平台语言无关主路径、增删重加、PFI/no-op、取消与 trace。 |
+| `project.ReqwsProjectionApplierTest` | 上述 1 个精确方法 | 1 | S2-X：注入 PFI 失败，验证同 digest 保持 dirty，修复重试后才提交；真实平台 PFI 主路径由 adapter 用例覆盖。 |
+| 合计 | 34 个选择器全部命中 | 85 | 失败 0、错误 0、跳过 0。 |
+
+结果位置为 `integrations/goland/build/test-results/test/TEST-<完整类名>.xml` 与 `integrations/goland/build/reports/tests/test/index.html`（本地生成输出，不提交）。跟踪器、协调器的共享签名/合并分支及 trace 消费者变化较广，采用直接受影响整类；service、adapter 和 applier 使用上述方法集合。UI/resource 在 S2 未改，不重复其 S1 回归；通用 UI 测试仍保留到 V。
+
+S2-R4：扩展后的 `verifyForbiddenProductionSymbols` 自检与扫描通过，覆盖 45 个 `src/main` 文件和装配 JAR 的 311 个 class；`verifyPluginProjectConfiguration`、`verifyPluginStructure` 通过。`build/libs/reqws-goland-0.1.0-base.jar`、`build/libs/reqws-goland-0.1.0-instrumented.jar` 和 `build/libs/reqws-goland-0.1.0.jar`（均相对 `integrations/goland/`）中的 descriptor 已核对：ID 为 `com.reqws.workspace`，版本为 `0.1.0`，只声明 platform/goland/vcs 依赖；没有恢复 `org.jetbrains.plugins.go` 或增加构建/测试替代依赖。该结果证明本轮局部装配与平台回归，双版本 Verifier 仍待 V。
+
+文档检查：`npm run docs:check` 与 `git diff --check` 通过。本轮没有 Desktop/shared 或用户文案变化；未运行 Desktop 全业务、完整保留插件套件、双版本 Verifier、真实 GUI，也未安装或重启 IDE。S2 必要回归通过，下一步仍须对最终组合候选执行 V，不能把两个阶段测试数量相加当作完整验收。
 
 下一步只执行[最终系统回归与验收](../testing/final-acceptance.md)，不要将 S1/S2 结果简单相加写成 GO；也不要为任务文档数量额外创建 PR、安装或重复完整验证。

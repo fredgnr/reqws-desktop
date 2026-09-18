@@ -23,7 +23,6 @@ import com.reqws.goland.sync.SyncCoordinatorEvent
 import com.reqws.goland.sync.SyncCoordinatorObserver
 import com.reqws.goland.sync.SyncFailureStage
 import com.reqws.goland.sync.SyncTrigger
-import com.reqws.goland.sync.mergeReconcileTrigger
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.ReqwsVcsDiagnosticsService
 import com.reqws.goland.vcs.VcsRootInspection
@@ -175,9 +174,6 @@ class ReqwsProjectService private constructor(
   private val projectModelChangeLifecycleLock = Any()
   private var projectModelChangeRegistration: AutoCloseable? = null
   private var projectModelChangeDebounceJob: Job? = null
-  private var projectModelChangePendingIntent: ProjectModelRefreshIntent? = null
-  private var projectModelChangeNextEventEpoch = 0L
-  private var projectModelChangeRefreshStarted = false
   private val projectModelMutationGuard = project.service<ReqwsProjectModelMutationGuard>()
   private val projectModelChangeRegistrar = runtimeOverrides?.projectModelChangeRegistrar
     ?: ReqwsProjectModelChangeRegistrar { listener ->
@@ -485,55 +481,28 @@ class ReqwsProjectService private constructor(
     val scheduled = synchronized(projectModelChangeLifecycleLock) {
       if (!shouldScheduleProjectModelChangeRefresh(eventSpanId)) return@synchronized null
       runtimeOverrides?.beforeProjectModelIntentCapture?.invoke()
-      val observedDigest = statePublisher.state.snapshot?.digestSha256
-        ?: run {
-          traceRootDecision(eventSpanId, ProjectModelTraceDecision.NO_SNAPSHOT)
-          return@synchronized null
-        }
-      projectModelChangeNextEventEpoch += 1
-      val incomingIntent = when (kind) {
-        ReqwsProjectModelChangeKind.WORKSPACE_MODEL_ONLY -> ProjectModelRefreshIntent(
-          trigger = SyncTrigger.PROJECT_MODEL_CHANGE,
-          originDigest = null,
-          eventEpoch = projectModelChangeNextEventEpoch,
-        )
-        ReqwsProjectModelChangeKind.ORDINARY -> ProjectModelRefreshIntent(
-          trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-          originDigest = observedDigest,
-          eventEpoch = projectModelChangeNextEventEpoch,
-        )
+      if (statePublisher.state.snapshot == null) {
+        traceRootDecision(eventSpanId, ProjectModelTraceDecision.NO_SNAPSHOT)
+        return@synchronized null
       }
-      val currentJob = projectModelChangeDebounceJob
-      val nextIntent = if (currentJob != null && !projectModelChangeRefreshStarted) {
-        mergeProjectModelRefreshIntent(projectModelChangePendingIntent, incomingIntent)
-      } else {
-        incomingIntent
-      }
-      currentJob?.cancel()
-      projectModelChangePendingIntent = nextIntent
-      projectModelChangeRefreshStarted = false
+      projectModelChangeDebounceJob?.cancel()
       if (trace.enabled) {
         trace.record(
           SyncTraceEvent.ROOTS_DECISION,
           SyncTraceField.SPAN_ID(eventSpanId),
           SyncTraceField.REASON(ProjectModelTraceDecision.QUEUED),
           SyncTraceField.GUARDED(false),
-          SyncTraceField.TRIGGER(nextIntent.trigger),
-          SyncTraceField.EVENT_EPOCH(nextIntent.eventEpoch),
+          SyncTraceField.TRIGGER(SyncTrigger.PROJECT_MODEL_CHANGE),
         )
       }
       coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
         val launchedJob = currentCoroutineContext()[Job]
         try {
           projectModelChangeDebounceWaiter.wait(PROJECT_MODEL_CHANGE_DEBOUNCE_MILLIS)
-          val intent = synchronized(projectModelChangeLifecycleLock) {
-            if (projectModelChangeDebounceJob !== launchedJob) {
-              null
-            } else {
-              projectModelChangeRefreshStarted = true
-              projectModelChangePendingIntent
-            }
-          } ?: return@launch
+          val isCurrent = synchronized(projectModelChangeLifecycleLock) {
+            projectModelChangeDebounceJob === launchedJob
+          }
+          if (!isCurrent) return@launch
           if (
             !disposed.get() &&
             !project.isDisposed &&
@@ -542,24 +511,15 @@ class ReqwsProjectService private constructor(
             if (trace.enabled) {
               trace.record(
                 SyncTraceEvent.ROOTS_DEBOUNCE_DISPATCH,
-                SyncTraceField.TRIGGER(intent.trigger),
-                SyncTraceField.EVENT_EPOCH(intent.eventEpoch),
+                SyncTraceField.TRIGGER(SyncTrigger.PROJECT_MODEL_CHANGE),
               )
             }
-            requestRefresh(
-              trigger = intent.trigger,
-              projectModelOriginDigest = intent.originDigest,
-              projectModelEventEpoch = intent.eventEpoch.takeIf {
-                intent.trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-              },
-            )?.join()
+            requestRefresh(trigger = SyncTrigger.PROJECT_MODEL_CHANGE)?.join()
           }
         } finally {
           synchronized(projectModelChangeLifecycleLock) {
             if (projectModelChangeDebounceJob === launchedJob) {
               projectModelChangeDebounceJob = null
-              projectModelChangePendingIntent = null
-              projectModelChangeRefreshStarted = false
             }
           }
         }
@@ -600,31 +560,12 @@ class ReqwsProjectService private constructor(
     }
   }
 
-  private fun mergeProjectModelRefreshIntent(
-    current: ProjectModelRefreshIntent?,
-    incoming: ProjectModelRefreshIntent,
-  ): ProjectModelRefreshIntent {
-    val mergedTrigger = mergeReconcileTrigger(current?.trigger, incoming.trigger)
-      ?: incoming.trigger
-    return ProjectModelRefreshIntent(
-      trigger = mergedTrigger,
-      originDigest = if (mergedTrigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) {
-        incoming.originDigest
-      } else {
-        null
-      },
-      eventEpoch = incoming.eventEpoch,
-    )
-  }
-
   private fun requestRefresh(
     trigger: SyncTrigger,
     armInitialProjectMetadataRecovery: Boolean = false,
     requiredVcsRegistrationVersion: Long? = null,
     cancellationRecovery: InitialCancellationRecovery? = null,
     projectMetadataRecovery: InitialProjectMetadataRecovery? = null,
-    projectModelOriginDigest: String? = null,
-    projectModelEventEpoch: Long? = null,
   ): Job? {
     if (disposed.get() || project.isDisposed) return null
     val request = when {
@@ -651,13 +592,9 @@ class ReqwsProjectService private constructor(
       requiredVcsRegistrationVersion == null -> readRequests.begin(
         trigger = trigger,
         armInitialProjectMetadataRecovery = armInitialProjectMetadataRecovery,
-        projectModelOriginDigest = projectModelOriginDigest,
-        projectModelEventEpoch = projectModelEventEpoch,
       )
       else -> readRequests.beginIf(
         trigger = trigger,
-        projectModelOriginDigest = projectModelOriginDigest,
-        projectModelEventEpoch = projectModelEventEpoch,
       ) {
         synchronized(vcsChangeLifecycleLock) {
           vcsChangeMonitoringState == VcsChangeMonitoringState.STARTED &&
@@ -1242,18 +1179,13 @@ class ReqwsProjectService private constructor(
         val accepted = readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
           rememberCandidate(request.generation, snapshot.digestSha256, prepared.state, request)
-          val projectionTrigger = projectionTriggerForDigest(
-            request = request,
-            trigger = trigger,
-            digestSha256 = snapshot.digestSha256,
-          )
           val offered = coordinator.offer(
             SyncCandidate(
               digestSha256 = snapshot.digestSha256,
               value = snapshot,
               sourceId = request.generation,
             ),
-            projectionTrigger,
+            trigger,
           )
           offered && completeVcsChangeMonitoringPreparation(
             prepared.monitoring,
@@ -1268,24 +1200,6 @@ class ReqwsProjectService private constructor(
       ReqwsLifecycleState.SYNCHRONIZING,
       ReqwsLifecycleState.DISPOSED,
       -> Unit
-    }
-  }
-
-  private fun projectionTriggerForDigest(
-    request: SyncReadRequest,
-    trigger: SyncTrigger,
-    digestSha256: String,
-  ): SyncTrigger {
-    if (trigger != SyncTrigger.PROJECT_MODEL_FOLLOW_UP) return trigger
-    return if (
-      request.projectModelOriginDigest == digestSha256 &&
-      request.projectModelEventEpoch != null
-    ) {
-      SyncTrigger.PROJECT_MODEL_FOLLOW_UP
-    } else {
-      // A newer manifest supersedes the verify-only event lineage. Its different digest must be
-      // allowed to publish the one ordinary roots notification required for fresh Go module roots.
-      SyncTrigger.AUTOMATIC
     }
   }
 
@@ -1691,8 +1605,6 @@ class ReqwsProjectService private constructor(
         registration = projectModelChangeRegistration,
       )
       projectModelChangeDebounceJob = null
-      projectModelChangePendingIntent = null
-      projectModelChangeRefreshStarted = false
       projectModelChangeRegistration = null
       resources
     }
@@ -1768,20 +1680,6 @@ class ReqwsProjectService private constructor(
     val debounceJob: Job?,
     val registration: AutoCloseable?,
   )
-
-  private data class ProjectModelRefreshIntent(
-    val trigger: SyncTrigger,
-    val originDigest: String?,
-    val eventEpoch: Long,
-  ) {
-    init {
-      require(
-        (trigger == SyncTrigger.PROJECT_MODEL_FOLLOW_UP) == (originDigest != null),
-      ) {
-        "Only a verify-only project-model follow-up may carry an origin digest"
-      }
-    }
-  }
 
   private enum class VcsChangeMonitoringState {
     NOT_STARTED,

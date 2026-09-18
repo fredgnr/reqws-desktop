@@ -9,7 +9,7 @@ updated: 2026-09-18
 
 本指南说明如何从可信源码编译、安装和使用 ReqWS GoLand 插件，并逐区解释 ReqWS Tool Window 的状态、仓库列表、诊断信息和操作入口。
 
-本指南的同步语义已随 S1 代码更新；阶段验证状态见 [S1 实施记录](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 与 V 尚未完成，历史截图仅用于界面导览，不代表本轮候选已通过验收。
+本指南的同步语义已随语言解耦代码更新；S1 阶段已完成，当前 S2 清理与必要回归状态见 [S2 实施记录](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。V 尚未执行，历史截图仅用于界面导览，不代表本轮候选已通过验收。
 
 ## 1. 插件解决什么问题
 
@@ -286,7 +286,7 @@ Go package 发现、SDK、依赖解析以及 run/test/debug configuration 由 Go
 - Safe Mode 下没有项目模型、roots event 或外部进程副作用；VCS 在所有模式下都只读。
 - 插件只删除能以持久 state 与当前模型双重证明归 ReqWS 所有的 Project Model 条目；不确定时保留并降级。
 - 插件不查询 Go registry，也不发布 Go 专属补偿通知；正常 Workspace Model 更新和必要平台事件仍保留。IDE 原生机制可能执行语言分析、启动进程或访问网络，不能把该平台行为表述为 ReqWS 的直接执行，也不能承诺 trusted IDE 全程无网络。
-- 已有有效 snapshot 后，外部 project-roots drift 会触发 force reconcile；ReqWS 自身 mutation guard 会抑制反咬，GoLand 的异步 follow-up 最多再触发一次有界重放，不形成事件循环。
+- 已有有效 snapshot 后，外部项目范围事件经防抖合并后触发目录范围重验，即使 manifest 未变化也能修复实际漂移；ReqWS 自身模型修改期间的事件由 mutation guard 抑制。后到的外部事件仍通过同一普通刷新流程处理，不再使用 Go 专属 follow-up 或 verify-only 通道。
 - 插件不调用 VCS mapping writer，也不直接写 `.idea/vcs.xml` 或 VCS ownership state；GoLand 原生自动检测仍由 IDE/用户设置控制。旧 ownership/lock inert 且不自动清理。
 - 逻辑移除和停用插件都不会删除磁盘仓库。
 - 插件不提供 Git 生命周期、仓库增删、分支、`go.work` 或 Desktop 控制按钮。

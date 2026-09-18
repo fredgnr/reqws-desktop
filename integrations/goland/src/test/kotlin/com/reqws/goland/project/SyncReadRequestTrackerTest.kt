@@ -176,19 +176,15 @@ class SyncReadRequestTrackerTest {
   }
 
   @Test
-  fun `a newer automatic read inherits the exact verify-only event lineage`() {
+  fun `a newer automatic read inherits project-model intent from a stale generation`() {
     val tracker = SyncReadRequestTracker()
-    val followUp = tracker.begin(
-      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-      projectModelOriginDigest = "a".repeat(64),
-      projectModelEventEpoch = 17,
+    val changed = tracker.begin(
+      trigger = SyncTrigger.PROJECT_MODEL_CHANGE,
     )
     val automatic = tracker.begin(SyncTrigger.AUTOMATIC)
     var offeredTrigger: SyncTrigger? = null
 
-    assertFalse(tracker.offerCandidateIfLatest(followUp) { true })
-    assertEquals("a".repeat(64), automatic.projectModelOriginDigest)
-    assertEquals(17L, automatic.projectModelEventEpoch)
+    assertFalse(tracker.offerCandidateIfLatest(changed) { true })
     assertTrue(
       tracker.offerCandidateIfLatest(automatic) { trigger ->
         offeredTrigger = trigger
@@ -196,26 +192,27 @@ class SyncReadRequestTrackerTest {
       },
     )
 
-    assertEquals(SyncTrigger.PROJECT_MODEL_FOLLOW_UP, offeredTrigger)
+    assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, offeredTrigger)
     assertEquals(null, tracker.pendingReconcileIntent())
   }
 
   @Test
-  fun `overlapping verify-only events keep the newer event lineage`() {
+  fun `an accepted older offer cannot consume a reentrant project-model intent`() {
     val tracker = SyncReadRequestTracker()
-    tracker.begin(
-      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-      projectModelOriginDigest = "a".repeat(64),
-      projectModelEventEpoch = 21,
-    )
-    val newer = tracker.begin(
-      trigger = SyncTrigger.PROJECT_MODEL_FOLLOW_UP,
-      projectModelOriginDigest = "b".repeat(64),
-      projectModelEventEpoch = 22,
-    )
+    val first = tracker.begin(SyncTrigger.PROJECT_MODEL_CHANGE)
+    var newer: SyncReadRequest? = null
 
-    assertEquals("b".repeat(64), newer.projectModelOriginDigest)
-    assertEquals(22L, newer.projectModelEventEpoch)
+    assertTrue(tracker.offerCandidateIfLatest(first) {
+      newer = tracker.begin(SyncTrigger.PROJECT_MODEL_CHANGE)
+      true
+    })
+    assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, tracker.pendingReconcileIntent())
+    assertFalse(tracker.offerCandidateIfLatest(first) { true })
+    assertTrue(tracker.offerCandidateIfLatest(requireNotNull(newer)) { trigger ->
+      assertEquals(SyncTrigger.PROJECT_MODEL_CHANGE, trigger)
+      true
+    })
+    assertEquals(null, tracker.pendingReconcileIntent())
   }
 
   @Test

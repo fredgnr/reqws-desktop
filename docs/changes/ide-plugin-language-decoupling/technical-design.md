@@ -11,7 +11,7 @@ updated: 2026-09-18
 
 ## 1. 状态、依据与范围
 
-S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误/UI 分支，并移除无效参数；本轮必要回归已通过，实际记录见 [S1 任务](tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 的调度/依赖及共享追踪清理、V 的整体验收尚未执行。Gradle Wrapper 仍为 9.3.0，官方 HTTPS URL 不变且不设置 `distributionSha256Sum`；本轮不升级依赖，不变更 CI/Release，也不安装、重启或发布插件。
+S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误/UI 分支，并移除无效参数；本轮必要回归已通过，实际记录见 [S1 任务](tasks/s1-core-sync-decoupling.md#8-本轮实施记录2026-09-18)。S2 调度/依赖及共享追踪核心清理已落实，必要回归已通过，见 [S2 实施记录](tasks/s2-scheduling-dependency-cleanup.md#8-本轮实施记录2026-09-18)。V 整体验收尚未执行。Gradle Wrapper 仍为 9.3.0，官方 HTTPS URL 不变且不设置 `distributionSha256Sum`；本轮不升级依赖，不变更 CI/Release，也不安装、重启或发布插件。
 
 源码核对基线是 [main@409b30e573d47348618620bbc0a52c0dd0710954](https://github.com/fredgnr/reqws-desktop/tree/409b30e573d47348618620bbc0a52c0dd0710954)。实施时按实际基线核对引用；以下路径和类名是清理入口，不是允许整体删除文件的名单。
 
@@ -36,7 +36,7 @@ S1 核心实现已删除 Go 同步成功门禁、专属 notifier 与直接错误
 
 [ReqwsProjectModelAdapter](../../../integrations/goland/src/main/kotlin/com/reqws/goland/projectmodel/ReqwsProjectModelAdapter.kt)历史实现先提交受管 excludes、验证公开文件范围，再调用 `goModulesProjection.synchronize()`；[ReqwsProjectionApplier](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectionApplier.kt)历史实现把 Go 失败与 PFI 失败都映射到 `PROJECT_CONTENT_NOT_CONVERGED`，但区分诊断 field。这条历史链曾使 Go 状态阻塞 ReqWS clean digest。S1 已删除 Go 调用与映射，保留模型/PFI 检查及其真实失败。
 
-[ReqwsProjectService](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectService.kt)、[协调器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/sync/LatestWinsSyncCoordinator.kt)及[请求跟踪器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/SyncReadRequestTracker.kt)仍保留通用 follow-up 调度。S1 已原子移除 `allowRootsChangeNotification` 参数及直接传递；剩余调度、共享追踪与构建依赖在 S2 核对，不能因存在旧 Go 用途就整体删除通用生命周期行为。
+[ReqwsProjectService](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/ReqwsProjectService.kt)、[协调器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/sync/LatestWinsSyncCoordinator.kt)及[请求跟踪器](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/SyncReadRequestTracker.kt)已清理专属 follow-up、origin digest / event epoch 和 verify-only 传播；S1 已原子移除 `allowRootsChangeNotification`。当前保留普通 `PROJECT_MODEL_CHANGE`、manual/trust intent 和 latest-wins；registry 专属追踪及显式 Go 依赖同步清理，编译和必要回归已通过，实际证据见 S2 阶段记录。
 
 ## 4. 目标执行链与状态
 
@@ -77,15 +77,15 @@ PFI 仍是目录范围的有效结果检查；`LIVE_FILE_INDEX_NOT_CONVERGED` �
 
 实施前核对 notifier 的全部生产调用点。只有存在独立的语言无关场景，且最小平台 fixture 证明正常模型提交不足以满足该场景，才将 notifier 移入独立平台 adapter 并保留；记录场景、调用条件和为何不能依赖正常事件。此保留项不允许读取 Go 状态或轮询语言结果。不能把旧 Go registry 滞后本身作为保留依据，也不能用 catch-and-ignore、无条件额外通知或私有 API 替代。
 
-follow-up 的删除粒度以剩余触发源为准。保留的通用事件处理必须证明 latest 内容生效、手动/信任 intent 不丢、同 digest 的真实范围漂移可恢复、ReqWS 自己的正常事件不会形成循环；不要求维持旧 Go 专用事件次数和延迟常量。
+S2 删除 `PROJECT_MODEL_FOLLOW_UP` 及其 lineage；未被 mutation guard 拦截且存在有效 snapshot 的项目范围事件，经同一有界防抖后提交普通 `PROJECT_MODEL_CHANGE`。后到事件重新读取最新 manifest，不消费旧 Go 补偿计数或 verify-only policy。保留的通用事件处理必须证明 latest 内容生效、手动/信任 intent 不丢、同 digest 的真实范围漂移可恢复、ReqWS 自己的正常事件不会形成循环；不要求维持旧 Go 专用事件次数和延迟常量。
 
 ## 7. 依赖与构建门禁
 
-移除全部 Go API 使用后，删除 `plugin.xml` 的 `org.jetbrains.plugins.go` 依赖；保留 `com.intellij.modules.goland`、platform/VCS 以及现有 GoLand 构建 target。产品限制与语言 API 依赖是不同问题，本变更不扩大安装范围。
+S2 已从 `plugin.xml` 删除 `org.jetbrains.plugins.go` 依赖；保留 `com.intellij.modules.goland`、platform/VCS 以及现有 GoLand 构建 target。产品限制与语言 API 依赖是不同问题，本变更不扩大安装范围。
 
-同时尝试删除 Gradle 的 `bundledPlugin("org.jetbrains.plugins.go")`，以当前 pinned toolchain 的编译、测试、结构验证和 261/262 Verifier 结果判断。若测试/产品装配确有依赖，先查明原因并将必要部分限定在构建/测试配置，记录证据，不通过恢复生产 Go API 依赖掩盖问题，也不把工具链假设写成已经验证的结论。GoLand 产品自带 Go 能力不等于 ReqWS 可以继续调用它。
+Gradle 的 `bundledPlugin("org.jetbrains.plugins.go")` 已同步删除，未增加构建/测试专属替代依赖；当前配置已通过 S2 编译、真实平台主路径与结构验证；261/262 Verifier 仍须在 V 分别确认。若测试/产品装配确有依赖，先查明原因并将必要部分限定在构建/测试配置，记录证据，不通过恢复生产 Go API 依赖掩盖问题，也不把工具链假设写成已经验证的结论。GoLand 产品自带 Go 能力不等于 ReqWS 可以继续调用它。
 
-复用现有 `verifyForbiddenProductionSymbols` 任务，在 production source/bytecode 上拒绝 `com.goide` / `com/goide`、`VgoModulesRegistry` 等 Go API 引用；继续保留 VCS writer、外部进程及既有私有 API 禁令。调整 scanner 的自检哨兵，使新增禁止项和原安全项均有覆盖，不新增另一套重复扫描框架。对构建文件探测的语义检查只针对可执行生产路径；文档、历史证据及语言无关对照 fixture 不应被简单文本匹配误杀。
+现有 `verifyForbiddenProductionSymbols` 任务已扩展，在 production source/bytecode 上拒绝 `com.goide` / `com/goide`、`VgoModulesRegistry` 等 Go API 引用；继续保留 VCS writer、外部进程及既有私有 API 禁令。调整 scanner 的自检哨兵，使新增禁止项和原安全项均有覆盖，不新增另一套重复扫描框架。对构建文件探测的语义检查只针对可执行生产路径；文档、历史证据及语言无关对照 fixture 不应被简单文本匹配误杀。
 
 依据：[JetBrains Project Model](https://plugins.jetbrains.com/docs/intellij/project-model.html)定义通用目录模型和 PFI；[GoLand Plugin Development](https://plugins.jetbrains.com/docs/intellij/goland.html)区分 Go API 依赖与 GoLand-only 产品依赖。以上依据核对于 2026-09-13，具体构建可用性仍需候选实测。
 
@@ -144,4 +144,4 @@ S1/S2 默认同一分支串行，不并发修改共享 adapter/service/coordinat
 
 LD-01～LD-06 的相关用例有结果；生产路径无 Go API、构建文件探测、Go gate 或专属轮询；剩余 notifier/follow-up 有明确通用职责或已删除；现有安全和恢复回归不被削弱；无无用 Go 依赖/空实现；代码、规范、当前指南与实际检查一致。
 
-当前 S1 核心实现与必要回归已完成；S2 与 V 尚未执行。阶段结果不能代替上述整体完成标准，也不产生新的完整功能 GO。
+当前 S1 已提交；S2 核心清理已落实、必要回归已通过，V 尚未执行。阶段结果不能代替上述整体完成标准，也不产生新的完整功能 GO。

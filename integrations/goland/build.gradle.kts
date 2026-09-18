@@ -46,6 +46,9 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
     val configuredSymbols = forbiddenSymbols.get()
     val scannerSentinels = listOf(
       "manager.setDirectoryMappings(emptyList())",
+      "import com.goide.project.GoProject",
+      "Lcom/goide/project/GoProject;",
+      "VgoModulesRegistry.getInstance(project)",
       "VgoStatusTracker.getInstance(project).trackModule(module)",
       "ProcessBuilder(\"go\", \"list\")",
     )
@@ -113,7 +116,6 @@ dependencies {
 
   intellijPlatform {
     goland("2026.1.3")
-    bundledPlugin("org.jetbrains.plugins.go")
     testFramework(TestFrameworkType.Platform)
   }
 }
@@ -157,6 +159,9 @@ intellijPlatform {
 }
 
 val forbiddenProductionSymbols = listOf(
+  "com.goide",
+  "com/goide",
+  "VgoModulesRegistry",
   "VgoIntegrationManager",
   "VgoStatusTracker",
   "trackModule",
@@ -196,7 +201,7 @@ val composedJarTask = tasks.named<ComposedJarTask>("composedJar")
 
 val verifyForbiddenProductionSymbols by tasks.registering(VerifyForbiddenProductionSymbolsTask::class) {
   group = "verification"
-  description = "Rejects forbidden Go integration and VCS mapping symbols in production sources and the composed plugin JAR."
+  description = "Rejects Go APIs, VCS mutation, process execution, and private API symbols in production sources and the composed plugin JAR."
   dependsOn(composedJarTask)
   productionSources.from(productionSourceFiles)
   sourceRoot.set(layout.projectDirectory.dir("src/main"))
