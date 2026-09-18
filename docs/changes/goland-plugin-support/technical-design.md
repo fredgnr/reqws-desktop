@@ -2,12 +2,14 @@
 title: GoLand 插件支持技术方案
 type: technical-design
 status: active
-updated: 2026-09-13
+updated: 2026-09-19
 ---
 
 # GoLand 插件支持技术方案
 
 本文定义 ReqWS GoLand 支持的当前实现方式、最终架构决策与安全边界。方案只覆盖跨 IDE manifest 契约、Desktop GoLand 入口和 GoLand 插件 v0.1，不建立范围外能力的协议或代码骨架。
+
+S1/S2 已实施，V 结果见 [2026-09-19 验收记录](../ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。原 Go registry 成功门禁、构建文件探测、专属通知/follow-up、Go API 依赖和语言工具链验收已由[语言解耦契约](../ide-plugin-language-decoupling/technical-design.md)替代；下文执行链、状态、依赖与测试已同步。被删除条款的原文仅见[固定基线的历史设计](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/docs/changes/goland-plugin-support/technical-design.md)；通用 manifest、ownership、PFI、取消恢复及 VCS 只读设计继续有效。
 
 ## 1. 方案结论
 
@@ -27,7 +29,7 @@ ReqWS GoLand Plugin（IDE adapter）
   ├─ 读取并校验 manifest
   ├─ 计算活动仓库目标状态
   ├─ 同步 authoritative Workspace Model
-  ├─ 验证 ProjectFileIndex 与 Go Modules registry 双 live gate
+  ├─ 验证 ProjectFileIndex 活动/排除目录边界
   ├─ 只读检查 Git VCS mappings
   ├─ 以 native dirty hint + 定向 VFS refresh 监听 manifest 原子替换
   ├─ 监听外部 Project Roots / Project Model drift
@@ -46,10 +48,10 @@ ReqWS GoLand Plugin（IDE adapter）
 7. 本次产物是本地可安装 ZIP；不实现签名、Marketplace、自动更新或发布服务。
 8. 本次不引入 Desktop 与插件的双向通信，不生成或修改 `go.work`。
 9. VCS Directory Mappings 完全由用户与 GoLand 所有；插件只读比较并提示手动配置，任何模式下都不调用 mapping mutation API。
-10. authoritative Workspace Model 之后必须分别通过 public `ProjectFileIndex` 和 public `VgoModulesRegistry` 两个 live gate；仅搜索可见不再足以证明 Go package model 可用。
-11. Go Modules registry mismatch 只在 trusted project 中通过一次 public Project Roots event 唤醒 GoLand 原生处理；ReqWS 不调用 Go tracker/scheduler，不直接执行 Go command 或下载，Safe Mode 不发布 event。
+10. authoritative Workspace Model 更新后必须通过 public `ProjectFileIndex` 目录边界验证；`Synced`/`Active` 不表示 Go package、SDK、依赖或运行配置已就绪。
+11. 不读取 Go registry，不发布语言专属 roots 补偿事件，不等待语言工具链；正常模型通知和通用 `PROJECT_MODEL_CHANGE` 处理保留，Safe Mode 不修改模型或发布 ReqWS roots event。
 
-本文状态为 active，表示上述设计是当前实现依据，不表示功能已完成交付。Desktop 自动化、插件单元/平台测试、261/262 Plugin Verifier、ZIP 哈希和真实 GUI 分属不同证据层；在同一 exact commit 的 Verifier 与 GUI 结果形成前，不给出兼容性或 `GO` 结论。
+本文状态为 active，表示通用设计与语言解耦后的当前契约有效；实际源码、工件、兼容与 GUI 结果分别绑定按次报告，不从旧 GO 推出新候选通过。
 
 ## 2. 现有实现基线
 
@@ -127,7 +129,7 @@ Initial version: 0.1.0
 | 用户自定义 module/root/mapping | 否 | module/root 只保留；mapping 绝不修改 |
 | repository/workspace 删除 | 当前不自动执行 | 绝不执行 |
 | `go.work` | 本次不写 | 本次不写 |
-| 外部进程 / Go module 更新 | 仅 Desktop 直接启动 GoLand | 插件不直接启动进程、Go command 或下载；trusted 下发布 public roots event 后，GoLand 可按其原生设置执行 `go list`/下载，需单独归因 |
+| 外部进程 / Go module 更新 | 仅 Desktop 直接启动 GoLand | 插件不直接启动进程、Go command 或下载；正常 Workspace Model 通知触发的 GoLand 原生处理需单独归因 |
 
 插件持久化状态只记录 Project Model 技术所有权和恢复所需摘要，不能成为 repository membership 的第二份事实来源。VCS 不保存 ownership、删除权或迁移状态；旧 `.idea/reqws-vcs-ownership.json` 及其 lock 不再读取，也不自动清理。
 
@@ -189,12 +191,12 @@ ManifestDigest = SHA-256(fileBytes)
 
 摘要用于：
 
-- 同一 live coordinator 生命周期内，只有 authoritative Workspace Model、public `ProjectFileIndex`、public `VgoModulesRegistry` 与 VCS 只读检查全部收敛后，自动/VFS 触发的相同 manifest 内容才可跳过项目模型重放；用户触发的 `Sync Now` 即使 digest 相同也强制重新核对实时 Workspace Model、两个 live projection、VCS mappings 和文件系统状态；
+- 同一 live coordinator 生命周期内，只有 authoritative Workspace Model 与 public `ProjectFileIndex` 验证通过并建立 clean baseline 后，自动/VFS 触发的相同 manifest 内容才可跳过项目模型重放；用户触发的 `Sync Now` 即使 digest 相同也强制重新核对实时 Workspace Model、live `ProjectFileIndex`、VCS mappings 和文件系统状态；
 - VFS 事件乱序或合并时重新识别最终内容；
 - 项目冷启动重新收敛和诊断关联；
 - 错误去重和诊断关联。
 
-持久化的最近摘要只供 UI 和诊断展示，不作为 project reopen 后跳过 apply 的依据，也不证明本次 service 已完成 live projection。每个新 project service 的 transient `validatedProjectionDigest` 必须从 `null` 开始；只有本 service 接受成功的 `Applied`，或基于本 service clean baseline 接受 `NoOp` 后，才可把对应 digest 写入该字段。manifest 读取与错误恢复可以在同一 service 内携带这份 transient proof，但 PersistentStateComponent 绝不能恢复或初始化它。每个新 project service 都从 manifest、当前 Workspace Model、两个 live projection、Project Model ownership state 和当前 VCS mappings 重新计算，避免把进程外变化或部分持久化状态误判为 no-op 或 UI `Active`。
+持久化的最近摘要只供 UI 和诊断展示，不作为 project reopen 后跳过 apply 的依据，也不证明本次 service 已完成 live projection。每个新 project service 的 transient `validatedProjectionDigest` 必须从 `null` 开始；只有本 service 接受成功的 `Applied`，或基于本 service clean baseline 接受 `NoOp` 后，才可把对应 digest 写入该字段。manifest 读取与错误恢复可以在同一 service 内携带这份 transient proof，但 PersistentStateComponent 绝不能恢复或初始化它。每个新 project service 都从 manifest、当前 Workspace Model、live `ProjectFileIndex`、Project Model ownership state 和当前 VCS mappings 重新计算，避免把进程外变化或部分持久化状态误判为 no-op 或 UI `Active`。
 
 不在 schema v1 中增加递增 revision，避免旧 Desktop、回滚内容和跨文件事务引入额外兼容路径。
 
@@ -375,8 +377,7 @@ ProjectModelAdapter
   ├─ diff planner
   ├─ ownership protection
   ├─ write transaction
-  ├─ public ProjectFileIndex live verifier
-  └─ public VgoModulesRegistry live verifier / one roots-event wake-up
+  └─ public ProjectFileIndex live verifier
 
 ProjectModelChangeMonitor
   ├─ public ModuleRootListener
@@ -403,14 +404,14 @@ ReqwsToolWindowFactory
 2. watcher 在第一次读取前安装，同时启动 lifecycle-owned 定向 refresh pump，因此固定 manifest 尚不存在时也能接收后续 create；项目状态保持 inactive，Tool Window 不显示；
 3. manifest 存在：后台读取、digest 和校验；首个有效 candidate 形成后才注册 VCS configuration listener，并在注册完成后对同一 snapshot 立即再做一次只读 inspection，关闭“读取完成但尚未监听”的窗口。latest-generation gate 内只预约单调 registration epoch，平台 registrar 与 inspection 均在 read-selection / VCS lifecycle 锁外执行。该 registration 在 latest gate 接受 valid candidate 前保持 provisional；更新的 valid read 可等待并承接同一 epoch，首个 registrar 失败时由仍有效的接力 read 重试；更新的 inactive/error read 若此前从未接受 valid candidate则立即撤销 epoch，仍在运行的 registrar 返回后自行关闭迟到 handle；当前 latest read 的注册后 inspection 取消或失败时同样关闭 provisional handle；
 4. Safe Mode：保存只读 snapshot 和 VCS 检查结果，但不执行 Project Model apply，也不发布 ReqWS roots change event；
-5. trusted：提交首次 Project Model 同步，依次验证 authoritative Workspace Model、public `ProjectFileIndex` 与 public `VgoModulesRegistry`，再完成 VCS 只读检查；
+5. trusted：提交首次 Project Model 同步，依次验证 authoritative Workspace Model 与 public `ProjectFileIndex`，再完成 VCS 只读检查；
 6. virgin root 的首次 apply 若 GoLand 尚未生成 `.idea`，只有 production startup request 携带的一次性 lineage、cold snapshot、pristine PSC mirror、从 service 创建起从未观察到真实 `.idea`，以及 exact path 首次 `NOFOLLOW_LINKS` attribute read 的 `NoSuchFileException` 可产生内部 readiness hint。service 保持 `SYNCHRONIZING`，用 single lifecycle job 每秒只 probe exact entry；第一次 latest failure 建立共享的 10 分钟 absolute deadline，更新 request 继承 lineage、deadline 与 attempt；
 7. readiness probe 在 deadline 前看到任意 entry 或非 `NoSuchFileException` 后只提交一次 normal automatic successor，重新读取最新 manifest 并重新执行全部 descriptor/containment/identity/ownership/generation 门禁。deadline 在 schedule、每轮 wait 前后、probe 后和 successor generation 创建的 latest-selection 边界内都检查；到期不再新增 wait、probe 或 successor，而以 predecessor generation + exact Applying state version/digest CAS 发布 `ERROR / PROJECT_MODEL_APPLY_FAILED`。调度或 probe 迟到不能延长这份预算，`Sync Now` 保持可达。插件从不创建、删除、清空或强制保存 `.idea`；
 8. 首次 valid read 或首次 Project Model apply 若收到一次瞬时 PCE/coroutine cancellation，exact rollback 完成和 provisional VCS cleanup 之后，由 project service 的 sibling coroutine 延迟提交一次 automatic successor；它不依赖 startup activity 再次执行、manifest 变化或 Tool Window 操作；
 9. `.reqws` 会被排除在 project content 之外，因此 watcher 对 canonical manifest parent 注册 non-recursive `LocalFileSystem` native root watch，并在 IO coroutine 中每 1,000 ms 只主动刷新 fixed manifest 与直接父目录；project-level VFS listener 只过滤 manifest exact path 及直接父目录。native watch 提供 dirty hint，定向 refresh 把外部替换物化为 VFS event，两者共同构成自动监听；
 10. project close/dispose：取消 targeted refresh job、debounce、初始 cancellation retry、project-metadata readiness monitor、IO 和 pending sync，断开 VFS listener，并恰好释放一次 native watch request；
 11. project service 从构造起订阅 public `ModuleRootListener`；没有 valid snapshot 或 `ReqwsProjectModelMutationGuard` active 时忽略事件，其余外部 roots/model 变化经 250 ms 防抖后用 `PROJECT_MODEL_CHANGE` 强制 same-digest reconcile；
-12. reopen：不使用持久摘要作 skip，从 manifest、当前模型、两个 live projection、Project Model ownership state 和当前 VCS 配置重新收敛/复核。
+12. reopen：不使用持久摘要作 skip，从 manifest、当前模型、live `ProjectFileIndex`、Project Model ownership state 和当前 VCS 配置重新收敛/复核。
 
 ### 7.3 状态机
 
@@ -435,13 +436,13 @@ DISPOSED
 - 首次 startup projection 的 `.idea` readiness failure 不是 `OWNERSHIP_CONFLICT`：等待期间继续显示 `SYNCHRONIZING` 且不推进 applied digest/validated proof；entry 出现才允许一次 full successor，超时则稳定进入 `ERROR / PROJECT_MODEL_APPLY_FAILED`。普通 automatic/manual/VFS request 不能自行创建 startup lineage，新 generation 只能继承同一 lineage、absolute deadline 与已消费 attempt；stale failure、timer、probe cancellation 或 dispose 都通过 generation + exact state version 防止晚到覆盖；
 - 单个活动仓库 missing 可同步其他有效仓库，整体为 `DEGRADED`；
 - project model 成功但缺失、冲突或仍有 retained Git mapping 时为 `DEGRADED`，提示用户手动配置；
-- authoritative Workspace Model、public `ProjectFileIndex`、public `VgoModulesRegistry` 和 VCS 快照四层都符合 candidate 后才更新持久化 `lastAppliedDigest` 和 coordinator 的内存 no-op baseline。文件索引 gate 要求活动且存在的 repository 满足 `isInContent && !isExcluded`，ReqWS 精确管理的 retained target 与 `.reqws` 满足 `isExcluded`；Go Modules gate 要求每个带普通顶层 `go.mod` 的活动 repository 出现在目标 module registry 中，且任何 excluded path 下都没有残留 module root。只有 authoritative model 与两个 live projection 均无差异、VCS 也无诊断时才显示 `SYNCHRONIZED`；
+- authoritative Workspace Model 与 public `ProjectFileIndex` 验证及最终 lifecycle gate 通过后才接受模型投影并推进 clean baseline；VCS 保留独立只读诊断。PFI 要求活动且存在的 repository 满足 `isInContent && !isExcluded`，ReqWS 精确管理的 retained target 与 `.reqws` 满足 `isExcluded`。只有模型/PFI 成功、活动目录存在且无 VCS 诊断时才显示 `SYNCHRONIZED`；
 - service 在接受上述成功 `Applied` 或该 service clean baseline 的 `NoOp` 时，同时更新 transient `validatedProjectionDigest`；持久化 `lastAppliedDigest` 只控制摘要展示，不能替代这份本 service live proof。进入 `Applying` 立即撤销旧 proof；apply failure 或 applier cancellation 均保持 proof 为 `null`，直到新的成功 projection 恢复。`READING` 与 `SYNCHRONIZING` 期间即使 transient proof 仍匹配也把 repository 标为“项目内容未生效”；后续 manifest read error 只有在保留 snapshot digest 仍匹配发布时刻仍有效的本 service proof、且错误不是 ownership/model/live-projection failure 时，才可继续显示旧 repository 为 `Active` 并标明 preserved snapshot。排队的 read failure 必须在发布时与当前 proof 做原子交集，不能用 read 开始时捕获的旧状态复活已被 apply failure/cancellation 撤销的 proof；
-- Workspace Model 已提交但任一 live gate 在有界等待内未收敛时进入 `DEGRADED / PROJECT_CONTENT_NOT_CONVERGED`，保持 baseline dirty；对应活动仓库显示“项目内容未生效”，不得显示 `Synced` 或 `Active`，missing repository 仍优先显示目录缺失；诊断 detail 必须区分 file index 与 Go Modules registry mismatch；
-- 相同 digest 只在同一个 coordinator 生命周期、内存 baseline 仍为 clean 且触发源不是手动 `Sync Now` 时 no-op；
-- 手动 `Sync Now` 始终进入 Project Model reconcile、重跑两个 live gate 并重新读取 VCS；它不会 add/remove mapping。若任一投影层失败，内存 baseline 保持 dirty，使后续自动或手动同 digest 请求继续尝试恢复；
-- `SAFE_MODE_BLOCKED → trusted` 使用独立的 trust-transition force-reconcile intent；即使同一 digest 已有 clean baseline，也必须重放 authoritative Project Model 与两个 live gate。latest blocked read 在任何可能阻塞的注册后 VCS inspection 前就 arm 该 intent，因此随后抢在 trust poll 前完成的 automatic read 也会继承它；低频 poll 只提交 automatic wake-up，不再次 arm。该 intent 与手动 intent 一样跨后到的 automatic read/candidate/read failure 保留到最新有效 candidate 真正开始 apply，但不会把 startup、VFS 或 VCS 配置事件误标为强制同步；
-- `ModuleRootListener` 接收的外部变化使用 `PROJECT_MODEL_CHANGE` reconcile intent，因此不受 clean same-digest no-op 影响；event burst 只保留一个 250 ms 后的请求。ReqWS Workspace Model transaction 与用于唤醒 GoLand 的 roots event 均包在同一个 project-level `ReqwsProjectModelMutationGuard` 语义中，同步 self-event 被忽略。若 GoLand 语言层在 guard 退出后发布一个迟到 ordinary roots event，可形成一次防抖 `PROJECT_MODEL_FOLLOW_UP`；该事件的 origin digest、event epoch 与 verify-only notification policy 必须作为不可变 lineage 从 debounce payload 传入 read generation/candidate，不能由多个重叠 read 共享全局槽。只有 read 得到同一 origin digest 时才保持 verify-only，不再发布 roots event；不同 manifest digest 自动恢复普通 notification 权限。read tracker 在 coordinator 接受 candidate 后把 lineage 所有权转交 coordinator；若 worker 正在 apply，pending follow-up 只能由同 digest 更新 candidate 继承，不得被 ordinary automatic 覆盖，且必须等 candidate 真正 dequeue/start 后才消费。这样既终止旧事件链，也不压制新内容收敛；
+- Workspace Model 已提交但 public `ProjectFileIndex` 在有界等待内未收敛时进入 `DEGRADED / PROJECT_CONTENT_NOT_CONVERGED`，保持 baseline dirty；诊断 field 为 `PROJECT_FILE_INDEX`。对应活动仓库显示“项目内容未生效”，不得显示 `Synced` 或 `Active`，missing repository 仍优先显示目录缺失；
+- 相同 digest 只在同一个 coordinator 生命周期、内存 baseline 仍为 clean 且没有 manual/trust/model-change 强制 intent 时 no-op；
+- 手动 `Sync Now` 始终进入 Project Model reconcile、重跑 public `ProjectFileIndex` 验证并重新读取 VCS；它不会 add/remove mapping。若任一投影层失败，内存 baseline 保持 dirty，使后续自动或手动同 digest 请求继续尝试恢复；
+- `SAFE_MODE_BLOCKED → trusted` 使用独立的 trust-transition force-reconcile intent；即使同一 digest 已有 clean baseline，也必须重放 authoritative Project Model 与 public `ProjectFileIndex` 验证。latest blocked read 在任何可能阻塞的注册后 VCS inspection 前就 arm 该 intent，因此随后抢在 trust poll 前完成的 automatic read 也会继承它；低频 poll 只提交 automatic wake-up，不再次 arm。该 intent 与手动 intent 一样跨后到的 automatic read/candidate/read failure 保留到最新有效 candidate 真正开始 apply，但不会把 startup、VFS 或 VCS 配置事件误标为强制同步；
+- `ModuleRootListener` 接收的外部变化使用 `PROJECT_MODEL_CHANGE` reconcile intent，不受 clean same-digest no-op 影响；event burst 只保留一个 250 ms 后的请求。正常 Workspace Model transaction 由 project-level `ReqwsProjectModelMutationGuard` 抑制同步 self-event；guard 退出后的迟到普通事件也经有界防抖重新读取最新 manifest。S2 已删除 `PROJECT_MODEL_FOLLOW_UP`、origin digest / event epoch 及 verify-only 通知策略，不恢复 Go 专属 lineage；pending 合并继续保留最新内容、manual/trust intent 和 dirty same-digest 恢复，不能形成 roots/apply 热循环；
 - 手动 reconcile intent 跨 manifest read generation 与 pending coalescing 保留：后到的自动 candidate 仍以最新内容为准但继承 manual trigger；后到的 read failure 仍作为最新失败发布，同时 intent 保留到下一份 valid candidate 真正开始 apply，不能通过应用旧 snapshot 隐藏读取错误；
 - 开始应用不同 digest 时先使内存 no-op baseline 失效；若后层失败，回退到先前 digest 也必须重放，不能把部分提交状态误判为 no-op；
 - 文件恢复后自动重新进入 `READING`。
@@ -456,13 +457,13 @@ DISPOSED
 - `ModuleRootListener` callback 同样不做 IO；只检查 dispose、valid snapshot 与 `ReqwsProjectModelMutationGuard`，重置 250 ms debounce，随后在 lifecycle-owned IO coroutine 中以 `PROJECT_MODEL_CHANGE` 重新读取最新 manifest；
 - Workspace Model snapshot 按平台 API 要求读取；
 - 项目模型 apply 在 write action / Workspace Model update transaction 中执行；
-- authoritative model 复核成功后，先有界验证 public `ProjectFileIndex`。随后从 public `VgoModulesRegistry.getInstance(project).getModules(targetModule)` 只读取得 module roots；expected roots 仅包含活动且存在、具有普通且不跟随 symlink 的顶层 `go.mod` 的 repository，任何 excluded path 本身或其后代均不得留在 registry；
-- Go Modules registry 首次读取不一致且 project 仍 trusted/active 时，只调用一次 `edtWriteAction { ReqwsProjectModelMutationGuard.withMutation { ProjectRootManagerEx.getInstanceEx(project).makeRootsChange({}, RootsChangeRescanningInfo.NO_RESCAN_NEEDED) } }`。event 后立即复核，再以 100 ms 间隔只读等待，最多 300 个 cycle（30 秒）；每轮重新检查 project dispose/trust。超时抛出 live projection failure，不推进 digest；Safe Mode、dispose 或 trust loss 都不发布 event；
-- Go Modules projection 生产代码不得调用 `VgoIntegrationManager`、`VgoStatusTracker`、任何 Go module scheduler、反射或 private API，也不得直接 spawn Go process、执行 `go list` 或发起下载。public roots event 之后由 GoLand 原生服务产生的 `go list`/下载是平台副作用，日志、GUI 与网络证据必须单独归因；
+- authoritative model 复核成功后，有界验证 public `ProjectFileIndex` 的活动/排除边界；不探测语言构建文件，也不读取 Go registry；
+- S1 已删除 Go mismatch 专属 roots notifier 与等待；正常 `WorkspaceModel.update()` 及必要平台通知保留。Safe Mode、dispose 或 trust loss 仍在通用模型写入与最终提交处 fail closed；
+- 生产代码不得引用 Go API、tracker/scheduler、反射或 private API，也不得 spawn Go process 或下载依赖；平台自身的语言处理、进程和下载必须单独归因；
 - VCS mapping 只在后台读取和 canonicalize：exact directory 最后一项胜出并保留完整 `rootSettings` 对象，再按 directory 自然排序。配置 listener 只在首个有效 manifest candidate 后 provisional 注册：latest-selection 边界内只预约 epoch，平台 registrar、等待接力和 handle close 均在 read-selection / VCS lifecycle 锁外。只有 latest valid candidate 接受后才成为 lifecycle registration；更新的 valid read 可等待并接力同一 epoch，更新的 inactive/error 在没有任何 accepted valid state 时撤销 epoch，任何 latest read 在接受 valid state 前取消或失败也通过 completion cleanup 撤销；迟到 handle 无法提交并恰好关闭一次。callback 绑定 registration epoch，并把 epoch 校验与 read generation 创建放在同一个 latest-selection 线性化边界；它只使只读结果失效并提交复核，不在 callback 中阻塞，也没有 self-event、mapping setter、quiescence 或 ownership checkpoint；
-- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是当前操作的终止信号，refresh、Project Model/双 live projection、coordinator apply/observer 与 VCS inspection 均不得包装或替换其实例。latest read 在恢复稳定状态后原样结束；初始自动恢复在该 read completion/provisional-listener cleanup 之后使用同一 project-service supervisor scope 的 sibling job，不持有 cancellation cause，也不改变原 job 的终止结果。coordinator 在 applier cancellation 路径中以非业务 cancellation event 交还 service、保持 baseline dirty 并继续 worker；`Applying` observer 通知在 applier cancellation catch 外执行，即使 observer 只取消一次也必须以原实例结束 worker，不发布 `Cancelled` 或调用 applier。retry waiter 前后都检查 owner/service/project activity，dispose 显式取消 pending slot；只有真实的 VCS 读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
+- IntelliJ `ProcessCanceledException` 与 coroutine `CancellationException` 是当前操作的终止信号，refresh、Project Model/live `ProjectFileIndex`、coordinator apply/observer 与 VCS inspection 均不得包装或替换其实例。latest read 在恢复稳定状态后原样结束；初始自动恢复在该 read completion/provisional-listener cleanup 之后使用同一 project-service supervisor scope 的 sibling job，不持有 cancellation cause，也不改变原 job 的终止结果。coordinator 在 applier cancellation 路径中以非业务 cancellation event 交还 service、保持 baseline dirty 并继续 worker；`Applying` observer 通知在 applier cancellation catch 外执行，即使 observer 只取消一次也必须以原实例结束 worker，不发布 `Cancelled` 或调用 applier。retry waiter 前后都检查 owner/service/project activity，dispose 显式取消 pending slot；只有真实的 VCS 读取或分类异常才转换为 `VCS_DIAGNOSTIC_FAILED`；
 - 正常 refresh 只有在 `readRequests.runIfLatest` 的 read-selection 边界内才可摘除 initial cancellation retry 与 metadata readiness monitor 各自的共享 slot，取得旧 job 后在锁外取消；若该 read 在 begin 后已被较新 generation 淘汰，就不得触碰较新的 slot。两类恢复任务的注册同样在 latest gate 内重新检查 predecessor generation、exact state version 与 owner/service/project activity；metadata monitor 另检查 digest、`SYNCHRONIZING` 和 deadline，initial cancellation retry 要求仍为回滚后的 blank `INACTIVE`。过期 read 的延迟取消或 completion 注册都不能替换、取消较新的恢复任务；被拒绝的 lazy job 在锁外终止。deadline 的最终检查与 metadata successor 的 generation 创建在同一个 latest-selection 边界内完成，防止 probe 返回到入队之间过期后仍启动恢复；
-- trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、两个 live gate、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
+- trust 与 dispose 不只在 orchestration 起点检查：project service 自身的 terminal dispose probe 与 `Project.isDisposed` 一起贯穿 Project Model 投影、public `ProjectFileIndex` 验证、VCS 读取、refresh 与 digest gate；Workspace Model transaction 的写入/提交边界重新 gate，事务内翻转通过异常回滚；
 - Project Model authoritative state 位于 `<workspace-root>/.idea/reqws-managed-project-model.json`。写事务通过平台已提供的公开 JNA POSIX binding，从 `/` 开始逐级 `open/openat(O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)`，把真实 `.idea` 绑定为 stable directory descriptor；routed `Path` 在遍历前后的公开 `unix:dev,ino` 必须同时等于 descriptor 的 native `fstat` identity。跨 JVM writer 使用该已打开 descriptor 上的非阻塞 exclusive advisory lock，锁与目录 inode 同生命周期；任何同名 lock 子文件都不是互斥权威，rename/unlink/recreate 不能产生第二个可并发提交 generation 的 writer。state 读取、能力探针、私有 temp 写入与 force、`renameat`、目录 `fsync` 和严格回读全部相对同一 descriptor 完成，末尾重新安全打开原路径并以 native identity 复验。普通文件先以 `O_NOFOLLOW | O_NONBLOCK` 打开并由 `fstat` 确认 regular file，再通过绕过 NIO provider 的 `java.io` fd bridge 取得 `FileChannel`。不支持 local file URI、目标 64-bit macOS/JNA/openat、稳定 directory lock、缺少稳定 identity 或未通过原子覆盖探针时一律 fail closed；生产代码不得依赖 IntelliJ internal NIO provider API。VCS 不存在插件写事务，也没有 authoritative ownership 文件；旧 VCS ownership/lock 只作为 inert 磁盘文件被忽略；
 - `.idea` readiness 分类只存在于上述 stable transaction 之前的 exact directory attribute read：首次 `NoSuchFileException` 可以成为受 startup lineage 限制的内部 hint；一旦观察到真实目录，或 PSC mirror 含 target/managed/pending/recovery 任一历史证明，后续 missing 都映射为 hard ownership failure。`.idea` file/symlink、权限/identity/canonicalization 异常，以及 stable handle、lock、state、temp、move、fsync、readback 阶段的任何异常绝不按 cause chain 转为 readiness；readiness probe 的 present 结果也不缓存为写权限；
 - 每次 Workspace Model mutation 前先把下一份 managed claims 与 recovery claims 一起落盘。当前 JVM 即使已经复核 model commit，也不清除 recovery claims；进程重启后的 foreign-JVM cold load 若仍看到同 token 的完整 target+marker pair，就必须保留 recovery 并完成精确删除，只有同时确认 target 与 marker 都已不存在时才可压缩该 recovery。partial、重复、跨集合或校验失败一律 fail closed，model 提交后的 trust/dispose gate 失败不推进 digest；
@@ -488,14 +489,13 @@ onManifestEvent {
 syncCoordinator {
   while (hasPendingCandidate()) {
     val latest = takeLatestCandidate()
-    if (trigger != MANUAL && latest.digest == inMemoryCleanAppliedDigest) continue
+    if (!trigger.requiresReconciliation && latest.digest == inMemoryCleanAppliedDigest) continue
     inMemoryCleanAppliedDigest = null
     val plan = planner.plan(currentModel(), state.ownership, latest)
     applyProjectModel(plan)
     verifyExpectedWorkspaceModel(plan)
     verifyLiveProjectFileIndex(plan)
-    verifyGoModulesRegistryOrNotifyRootsOnceAndAwait30Seconds(plan)
-    inspectVcsMappings(latest)
+    // VCS diagnostics are refreshed independently without mapping mutation.
     lifecycleCommitLock.withLock {
       requireServiceAndProjectAlive()
       state.markApplied(latest)
@@ -506,7 +506,7 @@ syncCoordinator {
 }
 ```
 
-新 service 的 `inMemoryCleanAppliedDigest` 从 `null` 开始；持久化摘要不注入它。任一不同 digest 的 apply 可能已提交 Project Model，因此进入 apply 前先清空 baseline，只有 authoritative model、两个 live gate 与 VCS snapshot read 都完成才恢复。coordinator 在 applier 返回后做最后一次 coroutine cancellation gate，再由 service committer 与 `dispose()` 共用同一非挂起 lifecycle lock：锁内重查 service/project 存活并写持久摘要，随后才推进内存 clean baseline 和发布 `Applied`。dispose 先取得该锁时 commit 必须拒绝且保持 digest 不变；commit 先取得时则成功明确线性化在 dispose 之前。VCS 配置事件不依赖 manifest digest，始终触发一次新的 VCS 只读检查；普通 automatic clean same-digest 走 no-op 并只发布新诊断，baseline 尚未建立或 dirty 时则可顺带完成本来就需要的 ReqWS-owned Project Model reconcile。`PROJECT_MODEL_CHANGE` 与 manual/trust transition 一样是 explicit reconcile trigger，但优先级低于 trust transition 和 manual，确保新的 manifest bytes 仍 latest-wins。
+新 service 的 `inMemoryCleanAppliedDigest` 从 `null` 开始；持久化摘要不注入它。任一不同 digest 的 apply 可能已提交 Project Model，因此进入 apply 前先清空 baseline，只有 authoritative model、public `ProjectFileIndex` 验证及最终生命周期提交 gate 都完成才恢复；VCS 快照保留独立只读诊断。coordinator 在 applier 返回后做最后一次 coroutine cancellation gate，再由 service committer 与 `dispose()` 共用同一非挂起 lifecycle lock：锁内重查 service/project 存活并写持久摘要，随后才推进内存 clean baseline 和发布 `Applied`。dispose 先取得该锁时 commit 必须拒绝且保持 digest 不变；commit 先取得时则成功明确线性化在 dispose 之前。VCS 配置事件不依赖 manifest digest，始终触发一次新的 VCS 只读检查；普通 automatic clean same-digest 走 no-op 并只发布新诊断，baseline 尚未建立或 dirty 时则可顺带完成本来就需要的 ReqWS-owned Project Model reconcile。`PROJECT_MODEL_CHANGE` 与 manual/trust transition 一样是 explicit reconcile trigger，但优先级低于 trust transition 和 manual，确保新的 manifest bytes 仍 latest-wins。
 
 生产实现使用固定平台版本的公开 coroutine/lifecycle API；以上伪代码只说明顺序，实际行为以代码和测试为准，不阻塞 EDT 或使用全局 unmanaged executor。
 
@@ -539,9 +539,9 @@ Workspace Model 不持久化单个 exclude 的自定义 entity-source tag，因�
 
 marker URL 是故意不存在的虚拟路径，和 target 一样使用现有 Content Root 的 entity source，从而由标准 `.iml` exclude 序列化保存；插件不在磁盘创建 marker directory 或文件。`<workspace-root>/.idea/reqws-managed-project-model.json` 保存 target module、workspace-relative target、128-bit random marker token、managed claims 和 recovery claims；写入必须原子发布并回读验证。legacy PSC v2/v3 只允许在 atomic 文件尚不存在时迁移，迁移成功后所有权判断只读 atomic 文件。删除权必须同时由 verified managed/recovery claim、唯一 exact target entity 和唯一 exact marker entity 三者证明，target 与 marker 在同一事务中增删；filesystem-equivalent alias 不能接替缺失的 persisted target 或 marker 取得删除权。任何变更前先落盘下一份 managed + recovery 集合，且同一 JVM 不清 recovery。marker namespace 真实存在、为 symlink，或 file/state/target/marker 缺失、重复、跨集合冲突时均 fail closed。只有 exact target URL 的现存 user exclude 可借用；filesystem symlink alias 不会让真实 target 在 `ProjectFileIndex` 中变为 excluded，因此保留 alias 并另加 ReqWS-owned exact target+marker。
 
-authoritative entity graph 是事实层，live `ProjectFileIndex` 与 live Go Modules registry 是两个独立成功门禁。Workspace Model transaction 删除 target/marker 时使用显式 entity removal；transaction 后先有界验证 ProjectFileIndex 的活动/排除边界，再验证目标 module 的 `VgoModulesRegistry` 已加入所有带普通顶层 `go.mod` 的活动 repository 且移除 excluded roots；任何失败都不得推进 digest。
+authoritative entity graph 是事实层，live `ProjectFileIndex` 是目录边界成功门禁。Workspace Model transaction 删除 target/marker 时使用显式 entity removal；transaction 后有界验证活动/排除边界，失败不得推进 digest。原 Go registry 附加门禁已由[语言无关执行链](../ide-plugin-language-decoupling/technical-design.md#4-目标执行链与状态)替代。
 
-该策略会保留 workspace root 的一般内容范围；被排除的保留 repository 在用户显式显示 excluded files 时仍可能可见。其真实 Project/Search/Go 行为仍必须由 GUI smoke 证明，不能仅由 API spike 推断。
+该策略会保留 workspace root 的一般内容范围；被排除的保留 repository 在用户显式显示 excluded files 时仍可能可见。必要的真实项目范围集成仍按[最终验收计划](../ide-plugin-language-decoupling/testing/final-acceptance.md)验证，不能由 API spike 推断语言运行能力。
 
 ### 8.3 策略 C 不执行
 
@@ -549,7 +549,7 @@ authoritative entity graph 是事实层，live `ProjectFileIndex` 与 live Go Mo
 
 ### 8.4 选择证据与后续复核
 
-策略 B 的最终源码与产物绑定、两版 Plugin Verifier、add/remove/re-add、restart、双 live gate、Project/Search 隔离及规模结果已归入[统一修复交付与验证报告](testing/verification-2026-09-13.md)。原生 Go 验收按[测试方案 8.4](testing/test-plan.md#84-go-功能)区分 `PACKAGE` 配置校验/测试执行与 `MAIN` 运行/断点调试，避免将两类配置混记。
+策略 B 原交付的源码与产物绑定、两版 Verifier、add/remove/re-add、restart、原双 live gate 和规模结果保留在[历史验证报告](testing/verification-2026-09-13.md)。其中 Go registry 与 PACKAGE run/test 只属于原候选，原流程见[固定基线测试方案](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/docs/changes/goland-plugin-support/testing/test-plan.md)。当前语言解耦候选另见 [2026-09-19 验收记录](../ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)，不继承旧 GO。
 
 后续改变源码或构建输入时必须重新绑定候选并完成受影响的验证；设计选择、旧候选或单独 API 测试不能替代相应的真实 GUI 验收。
 
@@ -583,7 +583,7 @@ ReqwsSynchronization PersistentStateComponent
 
 模型删除使用 verified managed/recovery claim + target entity + companion marker entity 三份可重建证据；任一证据不唯一或不能验证 filesystem identity 都不删除。recovery claim 不是仅凭文件字段即可转移的删除权，必须和同 token 的完整 model proof 一起解释；partial proof 必须冲突。状态只保存相对路径、marker nonce 和恢复元数据，不保存 repository URL 或完整 manifest。
 
-同一 JVM 在 model mutation 后保留 recovery claim 是 crash-recovery 协议，不代表对应 target exclude 仍存在，也不能据此判断 live projection。当前 entity graph、序列化 `.iml`、public `ProjectFileIndex` 与 public `VgoModulesRegistry` 必须分别核对；只有 foreign-JVM cold load 才按上述规则压缩 recovery。
+同一 JVM 在 model mutation 后保留 recovery claim 是 crash-recovery 协议，不代表对应 target exclude 仍存在，也不能据此判断 live projection。当前 entity graph、序列化 `.iml`、public `ProjectFileIndex` 必须分别核对；只有 foreign-JVM cold load 才按上述规则压缩 recovery。
 
 ## 10. VCS Mapping
 
@@ -622,7 +622,7 @@ Desktop 的原子写入可能在 VFS 中表现为临时文件 create、target de
 - 连续变化 latest-wins，只 apply 最新完整 candidate；
 - invalid candidate 保留上次有效模型；
 - manifest 恢复后自动清除可恢复错误；
-- “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 Project Model candidate、两个 live gate，重新读取 VCS 与文件系统状态；VCS 阶段始终只读。
+- “Sync Now” 绕过等待但进入同一串行 coordinator，并强制重放当前 Project Model candidate、public `ProjectFileIndex` 验证，重新读取 VCS 与文件系统状态；VCS 阶段始终只读。
 - 已有 manifest 的首次 read/apply cancellation recovery 不等待新的 VFS event：只有 exact rollback 到 blank `INACTIVE`、source generation 仍 latest、rollback state version 未变化且 fixed manifest entry 仍存在时，才延迟执行一次 automatic reread；新的 VFS/manual/VCS read、owner cancellation 或 dispose 使旧 retry 失效。
 - VCS configuration listener 只能在 callback 所需依赖全部初始化、且首个有效 manifest candidate 已确认后 provisional 注册；注册完成后立即对该 snapshot 再做一次只读 inspection。第一个 latest gate 只在 `read-selection → VCS-lifecycle` 锁序下预约单调 epoch，随后在两把锁外调用或等待平台 registrar。只有通过最终 latest gate 的 valid candidate 才接受 registration；若该 read 被更新的 valid generation 淘汰，更新 generation 等待并接力同一 epoch，registrar 失败时仍有效的接力 read 可在该 epoch 重试；若被 inactive/error generation 淘汰且此前没有 accepted valid state，则在线性化接受更新状态时撤销 epoch，正在运行的 registrar 返回后拒绝提交并在锁外恰好关闭一次迟到 handle。任何 latest read 在进入/完成 acceptance 前取消或异常结束，也由 generation completion hook 撤销未接受 epoch/handle。callback 的 registration epoch 校验与 read generation 创建使用同一锁序线性化，旧 publisher snapshot 即使已通过前置检查，在关闭或重新注册后也不能唤醒读取。普通非 ReqWS project 永不订阅该 listener，配置事件也不会触发 `READING` 或 manifest IO；有效项目中的配置事件不在 callback 读取 manifest 或 mapping，只提交一次后台复核。dispose 后不再接收或提交刷新。
 
@@ -716,7 +716,7 @@ Last applied: a1b2c3d4e5f6
 - 面板按状态徽标、workspace 摘要、紧凑 repository rows、诊断摘要和操作区分层；repository rows 顶部对齐且高度固定，不随 viewport 拉伸；只有 repository 区域滚动。
 - 状态徽标保持内容宽度并靠右，不拉伸成整行边框；workspace 摘要使用独立卡片边界，并显示活动仓库数量。
 - repository 区域使用独立卡片：标题与 count 分列，列表高度按可见行数计算，行间有主题感知分隔线；1–6 行不显示滚动条，7 行起固定显示六行并只在卡片内部滚动，少量仓库时卡片不吞满整个 Tool Window 高度。
-- `Sync Now` 使用全宽主操作视觉，`Open Manifest File` 与 `Copy Diagnostics` 居中作为次级动作；它只重放 Project Model reconcile 与两个 live gate 并重新检查 VCS，不自动修改 Directory Mappings。既有 enable 规则和可访问名称保持不变。
+- `Sync Now` 使用全宽主操作视觉，`Open Manifest File` 与 `Copy Diagnostics` 居中作为次级动作；它只重放 Project Model reconcile 与 public `ProjectFileIndex` 验证并重新检查 VCS，不自动修改 Directory Mappings。既有 enable 规则和可访问名称保持不变。
 - 状态色使用稳定的 JetBrains 主题颜色并始终伴随文字；浅色/深色主题、键盘焦点、窄 Tool Window、长 workspace/branch/repository name 和 tooltip 都进入 GUI 验收。
 - manifest 文本继续设置 `html.disable=true`，避免 Swing 把不可信值解释为 HTML；颜色、图标和截断不得削弱现有错误码、Safe Mode 提示或动作 enable 规则。
 - 长名称 tooltip 以当前 JToolTip 字体度量和 320 个缩放单位的目标行宽，在 Unicode 字符簇边界显式换行；继续转义 HTML，保留首尾与连续普通空格。单个超宽字符簇优先完整保留，不改 label 或完整辅助功能名称。
@@ -740,36 +740,24 @@ Safe Mode 下禁止：
 
 261 的 trust listener 带 `@Experimental`，生产实现不订阅它。插件只使用稳定的 `TrustedProjects.isProjectTrusted(project)`：latest valid read 接受 `SAFE_MODE_BLOCKED` 时、且在注册后 VCS inspection 前就 arm 一次 sticky trust-transition force intent；项目 blocked 期间以 1 秒间隔低频检查，poll 观察到用户通过 JetBrains 原生流程完成信任后只提交 automatic wake-up。无论 poll 还是其他 automatic refresh 先读到 trusted，下一份 valid candidate 都继承同一 intent并强制 reconcile；先到的 automatic 会取消 poll，迟到 poll 最多产生 ordinary same-digest no-op，不会再次强制重放。项目 trusted、inactive 或 dispose 后没有常驻轮询；插件不会自行修改 trust。
 
-VCS Directory Mappings 在所有信任状态下都只读；trusted 只决定能否修改 ReqWS-owned Project Model 条目、能否发布 public roots event，不会为插件授予任何 VCS 写权限。
+VCS Directory Mappings 在所有信任状态下都只读；trusted 只决定能否修改 ReqWS-owned Project Model 条目并产生必要的正常平台通知，不会为插件授予任何 VCS 写权限。
 
 ## 15. Go Modules registry、运行配置与 `go.work`
 
 ### 15.1 双 live gate 中的 Go Modules registry
 
-Project View、Find in Files 和 public `ProjectFileIndex` 收敛只证明 file-index layer；GoLand 的 package run configuration 依赖目标 module 的 Go Modules registry，不能从上述证据推断。生产投影因此采用以下顺序：
-
-1. 写入并复核 authoritative Workspace Model；
-2. 有界验证 public `ProjectFileIndex`；
-3. 从 public `VgoModulesRegistry` 读取目标 module 的 module roots；
-4. expected active roots 是具有普通、`NOFOLLOW_LINKS` 顶层 `go.mod` 的活动 repository，excluded path 及其后代不得仍出现在 registry；
-5. 首次 mismatch 且 project trusted/active 时，在 `edtWriteAction` 与 `ReqwsProjectModelMutationGuard` 内调用一次 public `ProjectRootManagerEx.makeRootsChange({}, RootsChangeRescanningInfo.NO_RESCAN_NEEDED)`；随后最多 30 秒只读等待 registry；
-6. 仍不一致时以 `PROJECT_CONTENT_NOT_CONVERGED` 降级并保持 digest dirty，后续 manifest、external project-model event 或 `Sync Now` 可重试。
-
-这个 roots event 是普通 public Project Roots 通知，不是 Go-specific command。ReqWS 不调用 `VgoIntegrationManager`、`VgoStatusTracker` 或 scheduler，不通过反射/private API 强制 tracker，也不直接 spawn `go`、执行 `go list` 或下载依赖。GoLand 可能响应 roots event 运行自己的 Go module refresh、`go list` 或依赖下载；它们属于平台原生行为，需按事件时间线、logger/category 与进程来源单独归因。Safe Mode 不发布该 event，因此不能借此间接触发原生 Go 刷新。
+**历史条款，已替代。** S1 已删除原 `VgoModulesRegistry` 读取、顶层 `go.mod` 筛选、30 秒等待及专属 roots notifier；S2 已删除配套 follow-up、追踪和显式 Go API 依赖。此标题仅保留原入链，原实现步骤见[历史设计第 15 节](https://github.com/fredgnr/reqws-desktop/blob/409b30e573d47348618620bbc0a52c0dd0710954/docs/changes/goland-plugin-support/technical-design.md#15-go-modules-registry运行配置与-gowork)，不得恢复为当前成功条件。当前仅按[语言无关执行链](../ide-plugin-language-decoupling/technical-design.md#4-目标执行链与状态)验证受管模型/PFI 及通用生命周期 gate。
 
 ### 15.2 `PACKAGE` run configuration 语义
 
-验收必须使用 GoLand 原生、module 指向 workspace module 且 `kind=PACKAGE` 的 Go run/test configuration：`package` 填写活动 repository 的 import path（测试配置可附带 test pattern）。通过条件是在 configuration validation 阶段即可解析 package，且 Run/Debug 可直接开始；点击 “Continue Anyway”、改用 FILE/DIRECTORY、或仅在 Terminal 中运行 `go test` 成功都不能证明 Go Modules registry 已收敛。插件不创建、改写或保存 run configuration，这项检查只验证 GoLand 对受管项目内容的原生语义。
+**历史验收，已替代。** PACKAGE run/test、Go completion/navigation、用户项目 `go test` 和 run/debug 不再是 ReqWS 同步或常规验收门禁；具体边界见[开发与测试规范](../../standards/ide-plugin-development-testing.md)。`Synced` 不保证语言模型即时可用，重新加入仓库也不保证运行配置立即恢复；插件不创建、改写或保存这些配置。原候选的验证结论保留在[历史报告](testing/verification-2026-09-13.md)。
 
 ### 15.3 `go.work` 边界
 
-- 不生成、不修改、不删除 `go.work`；
-- 不在插件状态中声明 `go.work` ownership；
-- 用户已有 `go.work` 继续由 GoLand 和用户管理；
-- W2/W5 验证多个独立 `go.mod` 在选定项目模型策略下的基础分析、`PACKAGE` test/run 和调试；
-- 有 root `go.work` 的 fixture 只用于证明插件不会覆盖，并记录 GoLand 原生识别行为；
-- 如果跨仓本地依赖必须依赖 `go.work` 才能解析，本次记录为已知限制，不通过生成文件或私有 API规避；
-- 独立仓库的基础 GoLand 使用能力若因此完全不可用，则返回 W2 重新评估项目模型策略。
+- 不生成、不修改、不删除 `go.work`，也不在插件状态中声明其 ownership；
+- 用户已有语言和构建配置继续由用户与 IDE 管理，ReqWS 只保护其不被自身覆盖；
+- 不以多个 `go.mod`、跨仓依赖解析、SDK 或运行配置就绪作为项目模型成功条件；普通文本 Git fixture 足以验证 ReqWS 的目录范围契约；
+- 活动仓库被错误排除、retained 边界错误或用户条目被破坏仍是 ReqWS 缺陷，不能归为语言工具链问题。
 
 ## 16. 构建与兼容策略
 
@@ -779,8 +767,8 @@ Project View、Find in Files 和 public `ProjectFileIndex` 收敛只证明 file-
 - Gradle wrapper；
 - IntelliJ Platform Gradle Plugin 2.x；
 - target product 为 GoLand；
-- plugin descriptor 声明实际使用的平台、VCS 和 Go plugin 依赖；
-- 唯一用于 live gate 的 Go-specific production API 是经 spike 验证的 public read-only `VgoModulesRegistry`；触发收敛使用平台通用 public Project Roots event，不引用 `VgoIntegrationManager`、`VgoStatusTracker` 或 scheduler；
+- plugin descriptor 保留 platform、`com.intellij.modules.goland` 产品限制和 VCS 依赖；S2 已删除 `org.jetbrains.plugins.go` 及对应 `bundledPlugin`；
+- 生产源码和字节码由现有 `verifyForbiddenProductionSymbols` 门禁拒绝 Go API 以及原有 VCS writer、外部进程和私有 API；保留完整自检，不引入替代 Go adapter；
 - 禁止 production 依赖 `@Internal`、`@Experimental`、反射或私有类。
 
 ### 16.2 Java 与 build baseline
@@ -806,8 +794,8 @@ Project View、Find in Files 和 public `ProjectFileIndex` 收敛只证明 file-
 
 ```bash
 cd integrations/goland
-./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
-./gradlew buildPlugin
+./gradlew test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
+./gradlew verifyForbiddenProductionSymbols buildPlugin
 ./gradlew runIde
 ```
 
@@ -836,7 +824,7 @@ CI 边界：
 integrations/goland/build/distributions/reqws-goland-0.1.0.zip
 ```
 
-ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → Plugins → Install Plugin from Disk 安装。插件不签名；仓库本次不建立 Marketplace、custom repository、updater 或 Release asset 配置。
+ZIP 不提交 Git。报告用 Git 源码身份、命令和工件入口绑定验证，临时工件比对留在测试输出；不在文档复制具体摘要。真实安装通过 GoLand Settings → Plugins → Install Plugin from Disk，并遵守精确工件授权。插件保持 unsigned；版本与发布附件另按[CI 与 Release 契约](../github-actions-ci-release/README.md)，本次解耦不改变发布流程。
 
 ## 17. 测试设计
 
@@ -859,7 +847,7 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - TypeScript/Kotlin 共同消费 versioned URL safety corpus；
 - root identity、relative path、Unicode、symlink escape；
 - Project Model planner/ownership 与 VCS 只读 configured/missing/conflict/retained 分类；
-- Go Modules registry expected-root 分类、single roots-event bound、30 秒只读等待边界、trust/dispose/cancellation 和 no-top-level-`go.mod` 语义；
+- 无语言构建文件的 Git fixture 与仅增加普通 `go.mod` 的对照具有相同成员/状态语义；通用 trust/dispose/cancellation 保护继续覆盖；
 - debounce、single-flight、latest-wins 和 dispose；
 - diagnostics redaction。
 
@@ -868,8 +856,8 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - selected Content Root/Workspace Model strategy；
 - non-recursive native watch + 1,000 ms fixed manifest/parent refresh pump；external hidden temp + atomic replace 不经测试侧 manual refresh 仍产生 exact event，并经 350 ms debounce 只提交一次同步；refresh 普通异常后下一 tick 继续，dispose 后不再 refresh/提交；
 - add/remove/re-add；
-- remove/re-add 后分别断言 authoritative Workspace Model、序列化 contract、public `ProjectFileIndex` 与 public `VgoModulesRegistry`；registry mismatch 只在 trusted 下由 `edtWriteAction` + `ReqwsProjectModelMutationGuard` + public `ProjectRootManagerEx.makeRootsChange({}, NO_RESCAN_NEEDED)` 发布一次 event，随后只读有界等待，任一 live verifier 失败不得记录 clean digest；
-- public `ModuleRootListener` 的外部 roots burst 经 250 ms 防抖只提交一个 `PROJECT_MODEL_CHANGE` same-digest forced replay；ReqWS Workspace Model update 和 roots notifier 的同步 self-event 在 guard 内被忽略，GoLand 语言层迟到 event 最多触发一个收敛 follow-up，registry clean 后不再发布 event或循环 apply；
+- remove/re-add 后分别断言 authoritative Workspace Model、序列化 contract 与 public `ProjectFileIndex`；PFI 失败不得记录 clean digest，同 digest 自动或手动请求可在条件恢复后重试；
+- public `ModuleRootListener` 的外部 roots burst、混合/迟到普通事件经 250 ms 防抖提交 `PROJECT_MODEL_CHANGE`；正常模型更新的同步 self-event 在 guard 内被忽略。覆盖重叠读取、pending 合并、manual/trust intent 与 latest-wins，不能因删除旧补偿而丢事件或循环 apply；
 - target/companion marker 成对增删、state reload 和独立 JPS exclude 序列化契约；真实 IDE close/reopen 仍由 GUI 覆盖；
 - `.idea/reqws-managed-project-model.json` 的 stable-directory-inode lock/write/readback、持锁后 lock 子文件替换仍拒绝第二 writer、parent rename/symlink swap 拒绝、managed+recovery pre-mutation 持久化、同 JVM recovery 保留、cold-load 压缩与 legacy PSC migration；
 - marker/target 缺失或重复、旧 state version、物理 marker namespace 和 filesystem alias 均 fail closed；
@@ -884,28 +872,16 @@ ZIP 不提交 Git。验证报告记录 SHA-256，并通过 GoLand Settings → P
 - 旧 `.idea/reqws-vcs-ownership.json` 与 lock 保持 inert、不读取、不迁移、不自动删除；
 - user module/root preservation 与全部 VCS mapping preservation；
 - Safe Mode gate；
-- Safe Mode 下 Go Modules mismatch 只读可见，但 ReqWS 不发布 roots event；恢复 trusted 后强制完整双 live-gate reconcile；
+- Safe Mode 下不修改模型或发布 ReqWS roots event；恢复 trusted 后强制模型/PFI reconcile，最终 trust/dispose gate 仍必须生效；
 - trust/dispose 在 model transaction boundary 翻转时 fail closed；VCS 读取无 mutation boundary；
 - malformed manifest no mutation；
 - model failure recovery 与 VCS 读取/诊断恢复。
 
 ### 17.4 真实 macOS GUI
 
-- active repo-a/repo-b + retained repo-c；
-- 从 Desktop 打开 GoLand；
-- first trust flow；
-- Project、Search、Git Tool Window；
-- 按 Tool Window 提示在 Settings → Version Control → Directory Mappings 手动添加活动 Git Roots、复核 retained mapping，并确认配置事件自动更新状态；
-- add repo-c、remove repo-b、re-add repo-b；
-- 每次 Desktop 外部 atomic manifest replacement 都记录写入完成、generic automatic log、Tool Window digest/count 与 authoritative model、Project/Search/file index、Go Modules registry 的时间点，不得先点击 `Sync Now`；repo-c/repo-b 恢复后同步核对 Project、Search、Go 与两个 live gate，并确认 idle pump 没有周期性 sync/apply/roots event/indexing；
-- Go completion/navigation，以及原生 `kind=PACKAGE` run/test configuration 在 validation 阶段无 package error、无需 “Continue Anyway” 即可 run/debug；FILE/DIRECTORY 或 Terminal Go command 不作为替代证据；
-- 若 roots event 后 GoLand 原生执行 `go list` 或下载，记录进程/日志时间线并与 ReqWS 的零 direct-spawn 边界分开归因；
-- restart、Desktop not running、plugin disable/enable/reinstall；
-- existing user `go.work` 不被修改；
-- 50 active + 20 retained；
-- rapid manifest rewrite 和 malformed → valid recovery。
+原 Go Modules、PACKAGE run/test、原生 Git 全流程与固定全矩阵已被替代。当前必要 GUI 链和触发条件统一见[最终验收计划](../ide-plugin-language-decoupling/testing/final-acceptance.md)，使用普通文本 Git fixture，验证自动 add/remove/re-add、手动幂等复核及必要关闭重开，并区分 ReqWS 调用与 IDE 原生配置变化。
 
-完整矩阵见[测试方案](testing/test-plan.md)。
+具体环境、范围、证据和限制见 [2026-09-19 验收记录](../ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)；该次 GUI 是 manifest 边界集成，不是完整 Desktop E2E。规模、sleep/wake、视觉/无障碍及长时间 idle 等只在受影响风险需要时扩展，不把旧报告结果沿用为当前证据。
 
 ## 18. 可观测性与诊断
 
@@ -936,7 +912,7 @@ manifest watcher 的默认 failure logger 只能记录稳定码和异常类型�
 - 完整 home path；
 - repository 文件内容。
 
-ReqWS 日志可以记录 public roots event 的开始/完成与 registry mismatch 摘要，但不能把随后由 GoLand 原生 logger/process 产生的 `go list`、module refresh 或下载宣称为 ReqWS 命令。GUI 报告若观察到这些行为，必须同时记录 roots event 时间点和 GoLand 侧来源以便独立归因。
+ReqWS 保留通用模型/PFI、roots monitor 和 VCS 只读诊断；Go registry mismatch 与专属 roots notification 追踪已删除。若观察到 GoLand 原生进程、下载或 VCS auto-detection，按实际日志来源和时间线单独归因，不能把平台行为宣称为 ReqWS 命令。
 
 用户主动执行 `Copy Diagnostics` 时可包含 canonical root，但 UI 必须提示路径可能敏感，并优先提供 home 脱敏形式。
 
@@ -944,9 +920,9 @@ Desktop 继续使用现有 `ReqwsError` payload；GoLand 启动失败只增加�
 
 ### 18.2 可选同步追踪
 
-为实际测量[测试方案](testing/test-plan.md)第 10 节既有的 tick、event、apply、registry 与阶段耗时，增加 JVM 参数 `-Dreqws.sync.trace=true`。默认关闭；开关在 project service 创建时确定，关闭时不输出追踪、不调用 formatter 或 sink，不为追踪增加定时任务、文件读取或额外平台查询。它是当前同步路径上的诊断旁路，不改变默认日志、同步策略、用户 UI 或验收门槛。
+需要排查事件或性能问题时，按[当前测试方案](../ide-plugin-language-decoupling/testing/test-plan.md)使用 JVM 参数 `-Dreqws.sync.trace=true`。默认关闭；开关在 project service 创建时确定，关闭时不输出追踪、不调用 formatter 或 sink，不为追踪增加定时任务、文件读取或额外平台查询。它是当前同步路径上的诊断旁路，不改变默认日志、同步策略、用户 UI 或验收门槛。
 
-每个 project service 只建立一个不含业务信息的数字 trace identity，并传给 watcher、roots monitor、coordinator 和 adapter/registry 阶段。每条记录携带该 identity、单调递增 event sequence 和相对 trace 起点的单调时间；有 coordinator 上下文时关联数字 attempt/source ID，触发来源与结果使用固定枚举。新 service 重新建立身份，外部采集另绑定 JVM/run，不能把两个 service 或两个 JVM 的相同数字 ID 合并。
+每个 project service 只建立一个不含业务信息的数字 trace identity，并传给 watcher、roots monitor、coordinator 和 adapter 阶段。每条记录携带该 identity、单调递增 event sequence 和相对 trace 起点的单调时间；有 coordinator 上下文时关联数字 attempt/source ID，触发来源与结果使用固定枚举。新 service 重新建立身份，外部采集另绑定 JVM/run，不能把两个 service 或两个 JVM 的相同数字 ID 合并。
 
 追踪 API 只接受固定枚举代码和数值；布尔状态用 0/1 表示，不接受任意字符串、对象 `toString()` 或 Throwable。原生日志使用固定前缀 `REQWS_SYNC_TRACE schema=1`，基础字段为 `service_id`、`seq`、`mono_ns`、`event`、`request_id`、`source_id`；没有 request/source 上下文时记为 0，其余字段名来自小写 enum 名，值只为数字或固定 enum 名。记录不得包含 manifest 路径、workspace/repository 名称、digest、URL、文件内容、异常 message/stack 或这些数据的编码替代物。生产 sink 仅在 opt-in 时调用现有 native Logger 的 INFO；不新增日志文件 writer、网络、进程、IPC、持久化状态或导出入口。
 
@@ -955,8 +931,9 @@ Desktop 继续使用现有 `ReqwsError` payload；GoLand 启动失败只增加�
 | Manifest watcher | 实际 refresh tick；接收与匹配的 VFS event/batch 数；防抖后实际 shared-sync dispatch。不能用名义 1 Hz 推算 tick，或把收到事件当成已经提交同步。 |
 | Project roots monitor | 实际事件类型（包括 Workspace Model-only 标志）、mutation guard 状态、拒绝原因及防抖后 trigger；区分接收、抑制、排队与实际 dispatch。 |
 | Coordinator | submit、实际开始 apply、clean same-digest no-op、终态及 elapsed；保留 attempt/source 关联，不能把合并前 submissions 数当作 apply 数。 |
-| Adapter | authoritative model、PFI、registry 和只读 VCS 各阶段的开始、结束、结果及 elapsed；失败或取消在实际结束边界留证，不补造未进入的后续阶段。 |
-| Go Modules registry | 每次 invocation 均有结果与 elapsed，包括首次读取已成功的快速路径；区分实际 read 次数、wait 次数和 ordinary roots notification 次数，零等待/零通知也明确可见。 |
+| Adapter | authoritative model、PFI 和只读 VCS 各阶段的开始、结束、结果及 elapsed；失败或取消在实际结束边界留证，不补造未进入的后续阶段。 |
+
+S2 已删除 `REGISTRY_START`/`REGISTRY_END`、`EVENT_EPOCH` 和 follow-up 专属字段；当前 schema 仍为 1，通用枚举按名称输出。原 registry 计数要求仅见历史设计，不恢复为当前埋点。
 
 计数、序号、计时只属于诊断状态，不能成为调度、debounce、retry、trust/dispose、ownership、digest 或 no-op 的新 gate；已有次数与 deadline 不变。只隔离追踪 sink 自身的失败，不把它传播到同步 worker，也不据其失败重试业务；真实 read/apply/observer 的 PCE 或 coroutine cancellation 仍保持原实例和原有传播边界。不得为追踪扩大既有 catch 范围、改变 observer 与 applier 的取消归属，或在 callback 中增加阻塞 IO。实现继续仅使用当前公开平台 API。
 
@@ -975,8 +952,8 @@ Desktop 继续使用现有 `ReqwsError` payload；GoLand 启动失败只增加�
 | 单个活动目录缺失 | 不创建目录；同步其他有效仓库并标记 degraded。 |
 | 项目模型更新失败 | 使用平台事务保证不提交部分 model 变更，记录 error。 |
 | Workspace Model 已提交但 `ProjectFileIndex` 未收敛 | 保持 digest/baseline dirty，发布 `DEGRADED / PROJECT_CONTENT_NOT_CONVERGED`；仓库行不显示 `Active`，自动事件或 `Sync Now` 可重试。 |
-| `ProjectFileIndex` 已收敛但 Go Modules registry mismatch | trusted 下在 guard 内发布一次 public no-rescan roots event 并最多只读等待 30 秒；Safe Mode 不发 event。超时保持 dirty 并发布 `PROJECT_CONTENT_NOT_CONVERGED`，不得用 Project/Search 或 Go CLI 成功掩盖。 |
-| 外部 Project Roots / Project Model drift | `ModuleRootListener` burst 经 250 ms 防抖后以 `PROJECT_MODEL_CHANGE` 强制 same-digest reconcile；guard 抑制 ReqWS self-event，registry clean 的 follow-up 不再发 event，避免循环。 |
+| 语言模型、SDK 或运行配置未就绪 | 不作为 ReqWS 失败条件，不发 Go 专属补偿通知；插件状态只表达其负责的仓库视图、模型/PFI 和只读 VCS 诊断。 |
+| 外部 Project Roots / Project Model drift | `ModuleRootListener` burst 与迟到普通事件经 250 ms 防抖后以 `PROJECT_MODEL_CHANGE` 强制 same-digest reconcile；guard 抑制 ReqWS self-event，保留 latest-wins、manual/trust intent 与取消恢复，不引入专属 follow-up 或循环。 |
 | latest read 瞬时取消 | 原样结束该 read；仍为 latest 且 service 存活时恢复最近稳定状态，不写业务错误。已有可见稳定态时 `Sync Now` 仍可用；首次 blank `INACTIVE` 自动延迟重试一次。 |
 | 单次 apply 瞬时取消 | 不发布业务 failure，保持 baseline dirty并恢复稳定状态；首次 blank `INACTIVE` 复用一次性 automatic retry，同一 coordinator 接受下一份 submission。 |
 | VCS 读取失败 | 保留成功项目内容与用户配置，状态 degraded；配置事件或 Sync Now 重新读取。 |

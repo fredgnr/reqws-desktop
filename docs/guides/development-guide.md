@@ -298,6 +298,6 @@ CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag �
 - [全局设置需求包](../changes/global-settings/README.md)记录 settings、持久化兼容、typed IPC、启动语言解析和验证证据。
 - [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)记录 GitHub Actions 触发器、权限、缓存与并行、arm64 应用/独立插件资产和发布限制。
 - [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)保留原实现、通用 manifest/ownership/VCS 契约及原工件验证记录；其 Go 成功条件不再约束后续候选。
-- [IDE 插件语言解耦](../changes/ide-plugin-language-decoupling/README.md)定义新的开发/测试边界与待实施清理，不代表代码已经完成。
+- [IDE 插件语言解耦](../changes/ide-plugin-language-decoupling/README.md)定义当前开发/测试边界；S1/S2 已实施，V 结果与适用范围见 [2026-09-19 验收记录](../changes/ide-plugin-language-decoupling/testing/acceptance-2026-09-19.md)。
 - [MVP 实现快照](../changes/mvp/README.md)保存初始范围、交付与验证历史；其状态为 archived，只用于理解演进背景。
 - [历史参考](../reference/README.md)是冻结输入，不作为当前开发决策。没有 active 设计覆盖的现状必须回到代码与测试核实。
