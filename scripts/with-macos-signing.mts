@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import { chmod, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -7,6 +7,27 @@ import { z } from 'zod';
 import { buildProfile, releaseCertificatePath, validateReleaseCertificate } from './macos-build-profile.mts';
 
 export type SigningRunner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<string>;
+
+type SigningStage = 'context' | 'credentials' | 'public-certificate' | 'temporary-files'
+  | 'keychain-search-list' | 'create-keychain' | 'unlock-keychain' | 'import-p12'
+  | 'key-access' | 'code-signing-trust' | 'trusted-identity' | 'packaging' | 'cleanup';
+
+class SigningFailure extends Error {
+  readonly stage: SigningStage;
+
+  constructor(stage: SigningStage) {
+    super(`macOS signing failed at ${stage}. Check the protected job setup and cleanup step.`);
+    this.stage = stage;
+  }
+}
+
+export function signingFailureMessage(error: unknown): string {
+  // Only our fixed stage labels may cross this boundary. Native errors can
+  // contain a password, command arguments, subprocess output, or private paths.
+  return error instanceof SigningFailure
+    ? new SigningFailure(error.stage).message
+    : 'macOS signing failed. Check the protected job setup and cleanup step.';
+}
 
 // No command-line or stderr interpolation: security arguments and diagnostics
 // can contain passwords. Only the trusted packaging child inherits stdio.
@@ -59,6 +80,23 @@ export function parseKeychainList(output: string): string[] {
   });
 }
 
+export async function importSigningIdentity(
+  p12: string,
+  password: string,
+  keychain: string,
+  certificateBytes: Buffer,
+  run: SigningRunner = runSigningCommand,
+) {
+  // macOS auto-detection misreads modern OpenSSL 3 PKCS12 containers and reports
+  // a MAC/password failure. Select the format explicitly; keep AES/SHA-256 intact.
+  await run('/usr/bin/security', ['import', p12, '-k', keychain, '-f', 'pkcs12', '-P', password, '-T', '/usr/bin/codesign']);
+  const imported = await run('/usr/bin/security', ['find-certificate', '-a', '-p', keychain]);
+  const certificates = imported.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu) ?? [];
+  if (certificates.length !== 1 || !new X509Certificate(certificates[0]!).raw.equals(certificateBytes)) {
+    throw new Error('P12 must contain exactly the pinned public signing certificate.');
+  }
+}
+
 const cleanupSchema = z.strictObject({
   directory: z.string(),
   originalSearchList: z.array(z.string().startsWith('/')),
@@ -93,6 +131,14 @@ async function cleanupSigningState(state: CleanupState, run: SigningRunner) {
 }
 
 export async function cleanupMacosSigning(environment = process.env, run = runSigningCommand) {
+  try {
+    await performMacosSigningCleanup(environment, run);
+  } catch {
+    throw new SigningFailure('cleanup');
+  }
+}
+
+async function performMacosSigningCleanup(environment: NodeJS.ProcessEnv, run: SigningRunner) {
   assertSigningContext(environment);
   const root = await realpath(environment.RUNNER_TEMP!);
   const journal = path.join(root, 'reqws-signing-cleanup.json');
@@ -124,19 +170,38 @@ export async function withMacosSigning(
   execute?: (command: string[], env: NodeJS.ProcessEnv) => Promise<void>,
   publicCertificate = releaseCertificatePath,
 ) {
+  let stage: SigningStage = 'context';
+  try {
+    await performMacosSigning(command, environment, run, execute, publicCertificate, (next) => { stage = next; });
+  } catch (error) {
+    throw error instanceof SigningFailure ? error : new SigningFailure(stage);
+  }
+}
+
+async function performMacosSigning(
+  command: string[],
+  environment: NodeJS.ProcessEnv,
+  run: SigningRunner,
+  execute: ((command: string[], env: NodeJS.ProcessEnv) => Promise<void>) | undefined,
+  publicCertificate: string,
+  setStage: (stage: SigningStage) => void,
+) {
   assertSigningContext(environment);
   if (!command[0]) throw new Error('A packaging command is required after --.');
+  setStage('credentials');
   const encoded = environment.MAC_SIGNING_P12_BASE64;
   const password = environment.MAC_SIGNING_P12_PASSWORD;
   if (!encoded || !password || encoded.length > 48 * 1024
     || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
     throw new Error('A valid Base64 P12 and its password are required.');
   }
+  setStage('public-certificate');
   const certificateBytes = await readFile(publicCertificate);
   const certificate = validateReleaseCertificate(certificateBytes, environment.MAC_SIGNING_CERT_SHA256);
   if (certificate.expiresAt - Date.now() < 90 * 24 * 60 * 60 * 1000) {
     console.warn('::warning::The signing certificate expires within 90 days; plan a verified identity migration.');
   }
+  setStage('temporary-files');
   const root = await realpath(environment.RUNNER_TEMP!);
   const journal = path.join(root, 'reqws-signing-cleanup.json');
   // Reserve before creating any keychain or trust; an interrupted run must be
@@ -172,34 +237,37 @@ export async function withMacosSigning(
     await save();
     await writeFile(p12, Buffer.from(encoded, 'base64'), { flag: 'wx', mode: 0o600 });
     await writeFile(certificatePath, certificateBytes, { flag: 'wx', mode: 0o600 });
+    setStage('keychain-search-list');
     state.originalSearchList = parseKeychainList(await system('/usr/bin/security', ['list-keychains', '-d', 'user']));
     // create-keychain itself can add the new keychain to the search list.
     state.searchListChanged = true;
     state.keychainCreated = true;
     await save();
+    setStage('create-keychain');
     await system('/usr/bin/security', ['create-keychain', '-p', keychainPassword, keychain]);
     await system('/usr/bin/security', ['set-keychain-settings', '-lut', '21600', keychain]);
+    setStage('unlock-keychain');
     await system('/usr/bin/security', ['unlock-keychain', '-p', keychainPassword, keychain]);
-    await system('/usr/bin/security', ['import', p12, '-k', keychain, '-P', password, '-T', '/usr/bin/codesign']);
     // Check every imported certificate before importing trust. Importing a P12
     // with an extra or substituted identity is a hard failure, including same-CN keys.
-    const imported = await system('/usr/bin/security', ['find-certificate', '-a', '-p', keychain]);
-    const certificates = imported.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu) ?? [];
-    const { X509Certificate } = await import('node:crypto');
-    if (certificates.length !== 1 || !new X509Certificate(certificates[0]!).raw.equals(certificateBytes)) {
-      throw new Error('P12 must contain exactly the pinned public signing certificate.');
-    }
+    setStage('import-p12');
+    await importSigningIdentity(p12, password, keychain, certificateBytes, system);
+    setStage('key-access');
     await system('/usr/bin/security', ['set-key-partition-list', '-S', 'apple-tool:,apple:', '-s', '-k', keychainPassword, keychain]);
     state.searchListChanged = true;
     await save();
+    setStage('keychain-search-list');
     await system('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...state.originalSearchList, keychain]);
     state.trustAdded = true;
     await save();
+    setStage('code-signing-trust');
     await system('/usr/bin/sudo', ['-n', '/usr/bin/security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-p', 'codeSign', '-k', keychain, certificatePath]);
+    setStage('trusted-identity');
     const identities = await system('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
     const found = [...identities.matchAll(/^\s*\d+\) ([A-F0-9]{40}) /gmu)].map((match) => match[1]);
     if (found.length !== 1 || found[0] !== certificate.identity) throw new Error('The pinned signing identity is not uniquely trusted.');
     if (interrupted) throw new Error('Signing was interrupted.');
+    setStage('packaging');
     const childEnvironment = signingChildEnvironment(environment, certificate.identity, keychain);
     if (execute) await execute(command, childEnvironment);
     else await new Promise<void>((resolve, reject) => {
@@ -213,9 +281,11 @@ export async function withMacosSigning(
     try {
       await cleanupSigningState(state, run);
       await rm(journal);
-    } catch (error) {
-      await save();
-      cleanupError = error;
+    } catch {
+      // Even a journal write failure must remain a cleanup failure, rather than
+      // being attributed to an earlier packaging/import stage.
+      cleanupError = new SigningFailure('cleanup');
+      await save().catch(() => undefined);
     } finally {
       process.removeListener('SIGINT', onSignal);
       process.removeListener('SIGTERM', onSignal);
