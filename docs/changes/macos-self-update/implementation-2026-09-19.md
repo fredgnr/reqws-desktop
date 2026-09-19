@@ -11,7 +11,7 @@ updated: 2026-09-19
 
 ## 1. 候选与实现
 
-开发起点为 `e06d400`（`docs: document macOS self-update design`），本记录随自更新实现、公开证书及维护技能一并提交，源码身份以 Git 提交和 diff 为准。应用版本仍为 0.1.2；没有创建 tag/Release，也没有替换真实 ReqWS 或访问其业务数据。单独获授权的私有凭据仓库备份提交见 §4。
+开发起点为 `e06d400`（`docs: document macOS self-update design`），本记录随自更新实现、公开证书及维护技能一并提交，源码身份以 Git 提交和 diff 为准。实现与本地打包验证时应用版本为 0.1.2；随后按维护者要求将源码版本及 lockfile 根版本同步为 0.1.3，未重建的既有测试工件仍属于 0.1.2，不作为 0.1.3 包的验收证据。没有创建 tag/Release，也没有替换真实 ReqWS 或访问其业务数据。单独获授权的私有凭据仓库备份提交见 §4。
 
 - 精确锁定 `electron-updater@6.8.9`；保持 Electron 43.4.0、Forge/Vite、生产入口、Bundle ID 和 userData 路径。
 - 实现 `local` / `personal-release` profile、固定签名资源、Hardened Runtime、DER/RSA 4096/Code Signing EKU/有效期/证书 pin 校验。缺正式 CER 或凭据立即失败，没有一次性证书占位或 ad-hoc 回退。
