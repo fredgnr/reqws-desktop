@@ -57,7 +57,15 @@ jobs:
         run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
 
       - name: Run project checks
-        run: npm run check
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          if ! brew list --versions openssl@3 >/dev/null 2>&1; then
+            brew install openssl@3
+          fi
+          export REQWS_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          npm run check
 
       - name: Package and verify the arm64 app
         run: npm run package:macos -- --skip-ci --skip-check --arch arm64
