@@ -18,6 +18,7 @@ ReqWS 是 macOS-only 的 Electron、TypeScript 和 React 项目。开发环境�
 - macOS；部分集成测试和全部 package/install 流程依赖 Darwin 工具与语义。
 - Node.js 24.x；版本范围由 `.nvmrc` 和 `package.json#engines` 共同约束。
 - npm 和 Git。
+- OpenSSL 3；原生 P12 导入回归使用 Homebrew 的 `openssl@3` 或 PATH 中的 OpenSSL 3，也可用 `REQWS_OPENSSL` 指定已有可执行文件。测试生成一次性身份和临时钥匙串，不读取发布 Secrets、不修改证书信任，结束后恢复搜索列表并清理。
 - 构建 GoLand 插件时需要 JDK 21；本机真实 GUI smoke 需要 GoLand 2026.1.3 或验证矩阵指定的 exact build。
 - 首次安装依赖和 Electron runtime 时可访问 npm registry 与 GitHub。
 - GUI smoke 按改动范围安装 VS Code、Cursor 或 GoLand。
@@ -274,6 +275,10 @@ GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需
 CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
 
 Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后清理信任、钥匙串及 P12。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
+
+P12 导入必须使用 `security import -f pkcs12`；macOS 的自动格式识别可能把有效 OpenSSL 3 P12 误报为密码错误。wrapper 使用固定阶段日志，不回显秘密或原生异常。`tests/integration/macos-signing-import.test.ts` 使用真实系统命令覆盖正确密码导入、身份匹配和错误密码拒绝；不会运行发布 wrapper 或伪造 GitHub 上下文。CI 与 Release 的项目检查在一次性 runner 缺少 `openssl@3` 时通过 Homebrew 安装，并显式选择其路径；本地检查只使用已有工具，缺失时报告错误。
+
+排查 Release 时搜索 `[release]`：`context` 提供当前 run/commit/runner；`signing` 和 `macos-package` 记录阶段的 started/success/failed 与耗时；`signing-command` 只记录启动失败或退出码；`assets` 给出已验证资产名称和大小；`publish` 区分上传、下载复验、正式公开及失败草稿清理。Forge 普通输出实时可见。先找失败阶段，再核对清理结果；不要开启 shell tracing、转储环境或打印签名系统命令的原始 stderr 来排错。
 
 证书有效期核对、P12/PEM 包装密码更新、Secrets 修复和身份迁移使用项目级 [reqws-signing-maintenance](../../.agents/skills/reqws-signing-maintenance/SKILL.md)。既有身份从指定私有备份的明确 commit 临时恢复；不重新建立固定 home/桌面备份。只更新包装密码不改公开 CER 或 pin；续签/换密钥按身份迁移处理，不能预设旧客户端继续接受。完成备份读回恢复后清理本地秘密材料，保留源码公开 CER；技能不自动授权发布或真实安装。
 

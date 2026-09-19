@@ -212,7 +212,7 @@ wrapper 负责在 `try/finally` 中完成下列动作，而不是让构建脚本
 |---|---|
 | 1 | 仅在 macOS、明确 personal-release profile、受控发布上下文运行；检查所需 Secrets，创建权限 0700 的随机 `$RUNNER_TEMP` 子目录。 |
 | 2 | Base64 解码 P12 到该目录，文件权限 0600；生成本次随机 keychain password 并 mask；不复用 P12 密码作为 keychain 密码。 |
-| 3 | 保存原钥匙串搜索列表；创建、解锁临时 keychain；以参数数组执行 `security import`，授权 `/usr/bin/codesign`，不使用 `-A` 全程序授权。 |
+| 3 | 保存原钥匙串搜索列表；创建、解锁临时 keychain；以参数数组执行 `security import -f pkcs12`，授权 `/usr/bin/codesign`，不使用 `-A` 全程序授权。必须显式指定格式，避免 macOS 自动识别将 OpenSSL 3 P12 误报为密码错误。 |
 | 4 | 使用临时 keychain 的密码执行 `set-key-partition-list -S apple-tool:,apple: -s -k ...`，并将临时 keychain 加入搜索列表而非盲目覆盖原列表。 |
 | 5 | 核对仓库公开 CER 的 SHA-256 与 Environment pin，核对 P12 中证书与该 CER 一致；只允许这一签名身份。 |
 | 6 | 在一次性 GitHub-hosted runner 上，按 Code Signing policy 导入对该自签证书的信任；确认 `security find-identity -v -p codesigning <keychain>` 能发现它。导入 P12 不等于证书已受信任。 |
@@ -223,7 +223,7 @@ wrapper 负责在 `try/finally` 中完成下列动作，而不是让构建脚本
 
 ```bash
 security import "$P12_PATH" -k "$KEYCHAIN_PATH" \
-  -P "$P12_PASSWORD" -T /usr/bin/codesign
+  -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple: -s \
   -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
@@ -236,6 +236,10 @@ security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 # 清理时：还必须删除 keychain、P12，并恢复原搜索列表。
 sudo security remove-trusted-cert -d "$CERT_PATH"
 ```
+
+签名 wrapper 通过 `[release][signing]` 输出固定阶段名（如 `import-p12`、`code-signing-trust`、`packaging`、`cleanup`）的开始、成功/失败和耗时；清理中的搜索列表恢复、信任移除、钥匙串/P12/目录删除分别记录。系统命令只额外报告启动失败或退出码，不输出原始异常、参数数组、密码或系统命令 stderr。业务阶段失败先记录，再开始清理；清理失败优先报告为 `cleanup`，同时保留原有 `always()` 重试。导入失败不能自动换证、重传 Secrets、关闭 MAC 校验或降级 P12 加密；先使用一次性 OpenSSL 3 P12 重现实际导入路径。
+
+各 Release job 的上下文日志仅列出 run/attempt/job、event/ref/commit、runner OS/架构及系统版本，使用 JSON 转义控制字符，不转储环境。移除长期 Secrets 后的打包子进程实时输出普通构建日志；`[release][macos-package]` 标出 Forge 打包、App 验证、ZIP 创建/解压/复验、元数据和校验文件生成。publish 对检查既有 Release、创建草稿、上传、资产清单检查、下载复验和公开分别记录结果与耗时，失败保留原退出码和仅清理本 run 草稿的条件；资产验证仅报告允许发布的文件名、字节数及结果，不上传整个工作目录或签名临时目录作为日志附件。
 
 具体 trust-setting 命令必须先在选择的 runner 上做一次验证；交互授权或信任导入失败就中止，不能使用只为测试而存在的“接受不受信任身份”开关。GitHub 官方的 P12/keychain 操作参考 [macOS runner 签名指南](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)；这里额外加入的是自签证书信任和固定身份校验。
 
