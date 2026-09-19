@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { randomBytes, X509Certificate } from 'node:crypto';
+import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 import { chmod, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { buildProfile, releaseCertificatePath, validateReleaseCertificate } from './macos-build-profile.mts';
+import { buildProfile, releaseCertificatePath, repositoryRoot, validateReleaseCertificate } from './macos-build-profile.mts';
 import { runReleaseStage, startReleaseStage, type ReleaseStage } from './release-log.mts';
 
 export type SigningRunner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<string>;
@@ -30,26 +30,51 @@ export function signingFailureMessage(error: unknown): string {
 
 // No command-line or stderr interpolation: security arguments and diagnostics
 // can contain passwords. Only the trusted packaging child inherits stdio.
-export const runSigningCommand: SigningRunner = async (command, args, env) => await new Promise((resolve, reject) => {
-  const child = spawn(command, args, { shell: false, env, stdio: ['ignore', 'pipe', 'ignore'] });
-  let startFailed = false;
-  let output = '';
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => { output = (output + chunk).slice(-128 * 1024); });
-  child.once('error', () => {
-    startFailed = true;
-    console.error('[release][signing-command] status=start-failed');
-    reject(new Error('Signing system command could not start.'));
-  });
-  child.once('close', (code) => {
-    if (startFailed) return;
-    if (code === 0) resolve(output);
-    else {
-      console.error(`[release][signing-command] status=failed exit_code=${code ?? 'signal'}`);
-      reject(new Error(`Signing system command failed (exit ${code ?? 'signal'}).`));
+export function createSigningRunner(timeoutSeconds = 60): SigningRunner {
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 60) {
+    throw new Error('Signing system command timeout must be between 1 and 60 seconds.');
+  }
+  return async (command, args, env) => await new Promise((resolve, reject) => {
+    // alarm survives exec. For sudo, install it inside the privileged process:
+    // an unprivileged parent cannot reliably kill a hung root security command.
+    const alarm = ['-e', 'alarm shift; exec { $ARGV[0] } @ARGV; exit 127;', String(timeoutSeconds)];
+    let binary = '/usr/bin/perl';
+    let parameters = [...alarm, command, ...args];
+    if (command === '/usr/bin/sudo') {
+      if (args[0] !== '-n' || args[1] !== '/usr/bin/security') {
+        reject(new Error('Only non-interactive security commands may run with elevated signing privileges.'));
+        return;
+      }
+      binary = command;
+      parameters = ['-n', '/usr/bin/perl', ...alarm, ...args.slice(1)];
     }
+    const child = spawn(binary, parameters, { shell: false, env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let startFailed = false;
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { output = (output + chunk).slice(-128 * 1024); });
+    child.once('error', () => {
+      startFailed = true;
+      console.error('[release][signing-command] status=start-failed');
+      reject(new Error('Signing system command could not start.'));
+    });
+    child.once('close', (code, signal) => {
+      if (startFailed) return;
+      if (signal === 'SIGALRM' || code === 128 + 14) {
+        console.error('[release][signing-command] status=timed-out');
+        reject(new Error('Signing system command timed out.'));
+        return;
+      }
+      if (code === 0) resolve(output);
+      else {
+        console.error(`[release][signing-command] status=failed exit_code=${code ?? 'signal'}`);
+        reject(new Error(`Signing system command failed (exit ${code ?? 'signal'}).`));
+      }
+    });
   });
-});
+}
+
+export const runSigningCommand = createSigningRunner();
 
 export function assertSigningContext(environment: NodeJS.ProcessEnv, platform = process.platform) {
   if (platform !== 'darwin' || buildProfile(environment) !== 'personal-release'
@@ -105,8 +130,28 @@ export async function importSigningIdentity(
   }
 }
 
+export async function revokeSigningTrust(certificatePath: string, identity: string, run = runSigningCommand) {
+  const bytes = await readFile(certificatePath);
+  if (createHash('sha1').update(bytes).digest('hex').toUpperCase() !== identity) {
+    throw new Error('Cleanup certificate does not match the managed signing identity.');
+  }
+  // Removing the last admin entry can wait for GUI authorization on hosted
+  // macOS. Revoke only this certificate's Code Signing trust instead. The deny
+  // record remains until this disposable runner is recycled; no trust is granted.
+  await run('/usr/bin/sudo', ['-n', '/usr/bin/security', 'add-trusted-cert', '-d', '-r', 'deny', '-p', 'codeSign', certificatePath]);
+  const snapshot = path.join(path.dirname(certificatePath), 'revoked-trust.plist');
+  await writeFile(snapshot, '', { flag: 'wx', mode: 0o600 });
+  try {
+    await run('/usr/bin/security', ['trust-settings-export', '-d', snapshot]);
+    await run('/usr/bin/python3', [path.join(repositoryRoot, 'scripts/verify-signing-trust.py'), '--settings', snapshot, '--identity', identity]);
+  } finally {
+    await rm(snapshot, { force: true });
+  }
+}
+
 const cleanupSchema = z.strictObject({
   directory: z.string(),
+  certificateIdentity: z.string().regex(/^[A-F0-9]{40}$/u),
   originalSearchList: z.array(z.string().startsWith('/')),
   keychainCreated: z.boolean(),
   trustAdded: z.boolean(),
@@ -125,8 +170,8 @@ async function cleanupSigningState(state: CleanupState, run: SigningRunner) {
     await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...state.originalSearchList]);
     state.searchListChanged = false;
   });
-  if (state.trustAdded) await attempt('remove-trust', async () => {
-    await run('/usr/bin/sudo', ['-n', '/usr/bin/security', 'remove-trusted-cert', '-d', path.join(state.directory, 'public.cer')]);
+  if (state.trustAdded) await attempt('revoke-code-signing-trust', async () => {
+    await revokeSigningTrust(path.join(state.directory, 'public.cer'), state.certificateIdentity, run);
     state.trustAdded = false;
   });
   if (state.keychainCreated) await attempt('delete-keychain', async () => {
@@ -228,7 +273,8 @@ async function performMacosSigning(
     throw error;
   }
   const state: CleanupState = {
-    directory, originalSearchList: [], keychainCreated: false, trustAdded: false, searchListChanged: false,
+    directory, certificateIdentity: certificate.identity,
+    originalSearchList: [], keychainCreated: false, trustAdded: false, searchListChanged: false,
   };
   const save = async () => await writeFile(journal, JSON.stringify(state), { mode: 0o600 });
   const keychain = path.join(directory, 'signing.keychain-db');

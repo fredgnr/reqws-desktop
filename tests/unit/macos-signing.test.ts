@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertTrustedSigningIdentity, buildProfile, releaseSigningConfiguration, validateReleaseCertificate } from '../../scripts/macos-build-profile.mts';
 import { signingTargets } from '../../scripts/verify-macos-signature.mts';
-import { assertSigningContext, cleanupMacosSigning, parseKeychainList, signingChildEnvironment, signingFailureMessage, withMacosSigning, type SigningRunner } from '../../scripts/with-macos-signing.mts';
+import { assertSigningContext, cleanupMacosSigning, createSigningRunner, parseKeychainList, signingChildEnvironment, signingFailureMessage, withMacosSigning, type SigningRunner } from '../../scripts/with-macos-signing.mts';
 
 const execute = promisify(execFile);
 let directory: string;
@@ -178,7 +178,10 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     if (scenario === 'success' || scenario === 'child failure') {
       expect(child).toHaveBeenCalledOnce();
       expect(calls).toContainEqual(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', '/original/login.keychain-db']);
-      expect(calls.some((call) => call.includes('remove-trusted-cert'))).toBe(true);
+      expect(calls.some((call) => call.includes('remove-trusted-cert'))).toBe(false);
+      expect(calls.some((call) => call.includes('deny') && call.includes('codeSign'))).toBe(true);
+      expect(calls.some((call) => call.includes('trust-settings-export'))).toBe(true);
+      expect(calls.some((call) => call.some((arg) => arg.endsWith('/verify-signing-trust.py')))).toBe(true);
     } else expect(child).not.toHaveBeenCalled();
   });
   it('keeps a public cleanup journal on cleanup failure and retries only the remaining operations', async () => {
@@ -189,7 +192,7 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
       if (args[0] === 'list-keychains' && !args.includes('-s')) return '"/original/login.keychain-db"\n';
       if (args[0] === 'find-certificate') return new X509Certificate(certificate).toString();
       if (args[0] === 'find-identity') return `1) ${identity} "Test"\n`;
-      if (args.includes('remove-trusted-cert') && failCleanup) throw new Error('test trust cleanup failure');
+      if (args.some((arg) => arg.endsWith('/verify-signing-trust.py')) && failCleanup) throw new Error('test trust cleanup failure');
       return '';
     };
     await expect(withMacosSigning(['npm'], environment(root), run, async () => {}, certificatePath)).rejects.toThrow('cleanup');
@@ -200,9 +203,27 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     await cleanupMacosSigning(environment(root), run);
     expect(await readdir(root)).toEqual([]);
     const output = log.mock.calls.map(([line]) => String(line)).join('\n');
-    expect(output).toContain('stage=remove-trust status=failed');
+    expect(output).toContain('stage=revoke-code-signing-trust status=failed');
     expect(output).toContain('stage=cleanup status=failed');
     expect(output).toContain('stage=cleanup status=success');
     expect(output).not.toContain('test trust cleanup failure');
+  });
+});
+
+describe('bounded signing system commands', () => {
+  it('terminates a hung command and omits its arguments and stderr from diagnostics', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = createSigningRunner(1);
+    await expect(run(process.execPath, ['-e', 'process.stderr.write("private-password"); setInterval(() => {}, 1000)', 'secret-argument'])).rejects.toThrow('timed out');
+    expect(log.mock.calls).toEqual([['[release][signing-command] status=timed-out']]);
+  });
+
+  it('executes literal arguments without a shell and preserves successful stdout', async () => {
+    const run = createSigningRunner(5);
+    const literal = '$(do-not-run); `do-not-run` space';
+    expect(await run(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', literal])).toBe(literal);
+    await expect(run('/usr/bin/sudo', ['-n', '/bin/sh', '-c', 'echo unsafe'])).rejects.toThrow('Only non-interactive security commands');
+    expect(() => createSigningRunner(0)).toThrow();
+    expect(() => createSigningRunner(61)).toThrow();
   });
 });
