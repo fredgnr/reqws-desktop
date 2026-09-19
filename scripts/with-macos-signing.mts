@@ -139,7 +139,9 @@ export async function revokeSigningTrust(certificatePath: string, identity: stri
   // macOS. Revoke only this certificate's Code Signing trust instead. The deny
   // record remains until this disposable runner is recycled; no trust is granted.
   await run('/usr/bin/sudo', ['-n', '/usr/bin/security', 'add-trusted-cert', '-d', '-r', 'deny', '-p', 'codeSign', certificatePath]);
-  const snapshot = path.join(path.dirname(certificatePath), 'revoked-trust.plist');
+  // An interrupted export may leave a public snapshot behind. Reserve a fresh
+  // name so always() can retry; final directory cleanup removes stale snapshots.
+  const snapshot = path.join(path.dirname(certificatePath), `revoked-trust-${randomBytes(8).toString('hex')}.plist`);
   await writeFile(snapshot, '', { flag: 'wx', mode: 0o600 });
   try {
     await run('/usr/bin/security', ['trust-settings-export', '-d', snapshot]);

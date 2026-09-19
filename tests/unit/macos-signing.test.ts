@@ -199,6 +199,9 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     const journal = JSON.parse(await readFile(path.join(root, 'reqws-signing-cleanup.json'), 'utf8'));
     expect(await readdir(journal.directory)).toEqual(['public.cer']);
     expect(journal).toMatchObject({ trustAdded: true, keychainCreated: false, searchListChanged: false });
+    // A killed process may leave its read-back file behind. It must not prevent
+    // the always() retry from verifying a fresh export and removing the directory.
+    await writeFile(path.join(journal.directory, 'revoked-trust.plist'), 'interrupted public read-back');
     failCleanup = false;
     await cleanupMacosSigning(environment(root), run);
     expect(await readdir(root)).toEqual([]);
