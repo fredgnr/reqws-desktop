@@ -2,7 +2,7 @@
 title: GitHub Actions CI 与 Release 技术方案
 type: technical-design
 status: active
-updated: 2026-09-13
+updated: 2026-09-19
 ---
 
 # GitHub Actions CI 与 Release 技术方案
@@ -61,11 +61,11 @@ Gradle 的 `releaseVersion` property 覆盖 project/plugin 版本；没有参数
 
 ## 资产汇总与发布事务
 
-发布 job 只接受两个约定 ZIP 和两个 checksum 片段，拒绝缺失或额外文件，生成并反向校验 `SHA256SUMS`。公开附件恰好为两个 ZIP 和一个清单。
+发布 job 使用 `verify-release-assets.py` 接受两个约定 ZIP、`latest-mac.yml` 及三份 checksum 片段，拒绝缺失或额外文件，验证 Desktop 元数据与最终 ZIP 后生成 `SHA256SUMS`。公开附件恰好为两个 ZIP、更新元数据和清单。固定身份签名、临时钥匙串及秘密隔离详见[自更新方案](../macos-self-update/technical-design.md)。
 
-保留既有事务：拒绝覆盖既有 Release；用内置短期 token 创建带 run/attempt 标识的 draft；上传后远端检查精确附件集合、非空大小和 draft 状态；通过后才公开。失败清理同时核对 draft 与本次运行标识；无法确认或删除失败则告警，不删除 tag 或人工创建的 Release。
+保留既有事务：拒绝覆盖既有 Release；用内置短期 token 创建带 run/attempt 标识的 draft；上传后远端检查精确附件集合、非空大小和 draft 状态；重新下载全部附件，与本地清单比较并验证 SHA-256、SHA-512/size/版本后才公开。失败清理同时核对 draft 与本次运行标识；无法确认或删除失败则告警，不删除 tag 或人工创建的 Release。
 
-默认权限仍为 `contents: read`，只有 tag 触发的 `publish` 获得 `contents: write`，不读取自定义 secrets。页面区分 arm64 app 的 ad-hoc/未公证限制与 GoLand 插件的 unsigned/磁盘安装方式。
+默认权限仍为 `contents: read`，只有 tag 触发的 `publish` 获得 `contents: write`；只有 Desktop package 的受保护签名步骤读取 P12/密码 Secrets，发布 job 不读取私钥。页面区分 arm64 app 的个人自签名/未公证限制与 GoLand 插件的 unsigned/磁盘安装方式。
 
 ## 测试与回滚
 

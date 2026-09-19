@@ -2,7 +2,7 @@
 title: ReqWS 使用说明
 type: guide
 status: active
-updated: 2026-08-18
+updated: 2026-09-19
 ---
 
 # ReqWS 使用说明
@@ -38,6 +38,8 @@ npm run install:macos
 
 更新已安装版本时，退出 ReqWS，在目标源码版本上再次执行同一命令。替换应用不会删除仓库目录，也不会迁移或清空用户数据。
 
+默认 `local` 构建会拒绝覆盖含 `Contents/Resources/app-update.yml` 的安装版，包括配置已损坏的情况。需要源码调试时选择独立安装目录，不要删除该文件来绕过保护。设置页已提供“应用更新”区；源码开发和默认本地包会显示禁用原因。长期身份与签名环境已配置，正式签名发布仍待验收，见[实施记录](../changes/macos-self-update/implementation-2026-09-19.md)。
+
 常用变体：
 
 ```bash
@@ -55,6 +57,42 @@ REQWS_APPLICATIONS_DIR="$HOME/Applications" npm run install:macos
 ```
 
 完整参数见 `npm run install:macos -- --help`。当前本机构建使用 ad-hoc 签名，没有 Developer ID 和 Apple 公证，不是 Gatekeeper-ready 的公开分发包；只应从可信源码在本机使用。
+
+### 个人签名版本的应用内更新
+
+这条安装路径适用于 macOS Apple silicon（arm64）的个人签名版本。当前代码与签名环境已配置，真实正式发布、两版本升级及未导入私钥的干净用户验收仍待完成，见[实施记录](../changes/macos-self-update/implementation-2026-09-19.md)。下面给出受控试运行步骤，不代表任意 Mac 已完成兼容验证。
+
+#### 首次手动安装
+
+1. 从[项目 Releases](https://github.com/fredgnr/reqws-desktop/releases)选择明确标注固定证书签名、内置更新器的 `ReqWS-<版本>-macos-arm64.zip`，按该版本发布说明核对 ZIP 校验信息。旧 ad-hoc 版本不能自动迁移，默认源码安装命令也不会生成支持自更新的个人签名包。
+2. 退出已有 ReqWS，备份 `~/Library/Application Support/ReqWS` 等应用数据；解压后只将 `ReqWS.app` 替换到正常 Applications 目录，不删除用户数据或 workspace。
+3. 优先选择自己可写的 `~/Applications/ReqWS.app`；也可使用当前用户对 App 和父目录均可写的 `/Applications/ReqWS.app`。保留应用名称，在这个安装位置启动，避免从 ZIP、Downloads 或临时目录尝试应用内更新。
+
+#### 安装与信任公开证书
+
+若维护者针对该试运行版本要求用户级代码签名信任，可按下列步骤配置。是否在所有目标 Mac 上都需要这一步仍待[干净用户验收](../changes/macos-self-update/technical-design.md#9-最小验证计划与发布门禁)；已经能够正常更新时不必额外添加信任。
+
+1. 在 GitHub 源码页面切换到与安装包相同的版本 tag，从[公开 CER 路径](../../build/certificates/reqws-signing.cer)下载原始 `reqws-signing.cer` 文件。确认来源、有效期及 SHA-256 指纹与维护者通过可信渠道提供的信息一致；名称 `ReqWS Personal Code Signing` 相同不代表是同一证书。没有可核对的信息时先联系维护者。
+2. 通过 Spotlight 搜索并打开“钥匙串访问”，在左侧选中“登录（login）”钥匙串，将 `.cer` 拖入窗口导入。只导入公开证书，不选择“系统”钥匙串，不导入 `.p12` 或私钥。[Apple：将证书添加到钥匙串](https://support.apple.com/zh-cn/guide/keychain-access/kyca2431/mac)。
+3. 在“证书”分类中找到并双击 `ReqWS Personal Code Signing`，再次核对其详细信息，展开“信任”。仅把“代码签名（Code Signing）”改为“始终信任（Always Trust）”，其他用途保留默认；不要在顶部“使用此证书时”选择统一的“始终信任”，也不要额外信任 SSL、邮件等用途。[Apple：更改证书信任设置](https://support.apple.com/zh-cn/guide/keychain-access/kyca11871/mac)、[各用途的信任策略](https://support.apple.com/zh-cn/guide/keychain-access/mchlp2824/11.0/mac/26)。
+4. 关闭证书详情窗口，按 macOS 弹窗完成本机授权；重新打开该证书，确认“代码签名”设置已保存，再重启 ReqWS 重试。
+
+需要从终端查看公开证书信息时，可对下载的文件执行以下只读命令，再与可信的维护者信息比较；命令输出自身不是可信来源的证明：
+
+```bash
+/usr/bin/openssl x509 -inform DER -in "/实际下载路径/reqws-signing.cer" \
+  -noout -subject -dates -fingerprint -sha256
+```
+
+此操作信任这张证书签署的代码，请在核实来源后进行。运行 ReqWS 无需维护者的 P12、私钥、密码或私有备份仓库访问权。证书更换也不是普通版本更新，不要因更新失败而改为信任另一张同名证书。
+
+#### 首次启动与后续更新
+
+自签名不等于 Developer ID 或 Apple 公证。若首次启动显示未知开发者提示，在核实该 App 后，打开“系统设置 → 隐私与安全性”，在安全性区域按提示为 ReqWS 选择“仍要打开”并完成本机授权；不同 macOS 版本的按钮文案可能略有差异。[Apple：打开来自未知开发者的 App](https://support.apple.com/zh-cn/guide/mac-help/mh40616/mac)。不要全局关闭 Gatekeeper，也不要把批量删除隔离属性当作常规安装步骤；若提示应用损坏、恶意软件或签名不匹配，应停止并向维护者核实。
+
+在设置页依次选择“检查更新”“下载更新”，下载完成后确认“安装并重启”。下载完成只表示文件已下载，原生代码签名在安装时验证。应用不会后台检查、自动下载或在普通退出时安装。Git、工作区或状态写入仍在进行时，安装会提示忙碌；等待完成后重试。下载或网络失败可以重新检查，原生安装失败后按提示重启再试，错误不会清除业务数据。更新只替换 Desktop App，GoLand 插件继续单独安装。
+
+“此本地构建未配置更新源”表示当前包没有启用更新，导入证书不能改变这一点；请手动安装维护者提供的正确版本。证书信任和首次启动放行也不能修复更新包篡改或身份不一致，不应通过扩大信任重试这些错误。
 
 ## 4. 首次使用前配置 Git
 
@@ -220,7 +258,7 @@ macOS 上的典型全局状态位置是：
 - GoLand 插件不生成或修改 `go.work`，也不提供从 IDE 回写 ReqWS、仓库增删或分支操作。
 - GoLand 插件只读 VCS Directory Mappings；Git Roots 由用户在 GoLand Settings 中手动维护。旧开发候选留下的 VCS ownership/lock 文件不会自动迁移或清理。
 - 逻辑移除和遗忘操作有意保留磁盘文件；需要删除时由用户在核对路径后自行处理。
-- 本机构建采用 ad-hoc 签名，不含 Developer ID、公证、DMG 或自动更新。
+- 默认本机构建采用 ad-hoc 签名并禁用更新；个人签名版本提供手动应用内更新，没有 Developer ID、公证或 DMG。
 
 ## 12. 依据与进一步资料
 

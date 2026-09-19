@@ -18,6 +18,9 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { buildProfile, type BuildProfile } from './macos-build-profile.mts';
+import { assertNoUpdateFeed, verifyReleaseSignature } from './verify-macos-signature.mts';
+
 export const REQWS_BUNDLE_ID = 'com.reqws.desktop';
 export const LEGACY_REQWS_BUNDLE_ID = 'com.electron.reqws';
 export const REQWS_APP_NAME = 'ReqWS.app';
@@ -73,6 +76,8 @@ export interface ReplaceAppBundleOptions {
 interface BundleExpectation {
   arch: 'arm64' | 'x64';
   version: string;
+  profile?: BuildProfile;
+  certificatePin?: string;
 }
 
 interface LockMetadata {
@@ -596,6 +601,15 @@ export async function validateAppBundle(
     );
   }
 
+  if (expectation.profile === 'personal-release') {
+    if (expectation.arch !== 'arm64' || architectures.length !== 1 || architectures[0] !== 'arm64') {
+      throw new Error('Personal releases support only arm64.');
+    }
+    await verifyReleaseSignature(appBundle, expectation.certificatePin);
+  } else {
+    await assertNoUpdateFeed(appBundle);
+  }
+
   await runChecked(
     '/usr/bin/codesign',
     ['--verify', '--deep', '--strict', '--verbose=2', appBundle],
@@ -637,8 +651,12 @@ export function machArchitecture(architecture: 'arm64' | 'x64'): 'arm64' | 'x86_
   return architecture === 'x64' ? 'x86_64' : 'arm64';
 }
 
-export async function validateExistingReqwsBundle(appBundle: string): Promise<void> {
+export async function validateExistingReqwsBundle(
+  appBundle: string,
+  profile: BuildProfile = 'local',
+): Promise<void> {
   await assertRealDirectory(appBundle, 'Installed app');
+  if (profile === 'local') await assertNoUpdateFeed(appBundle);
   const [bundleId, executableName] = await Promise.all([
     plistValue(appBundle, 'CFBundleIdentifier'),
     plistValue(appBundle, 'CFBundleExecutable'),
@@ -862,6 +880,10 @@ async function buildPackageAndInstall(
   sourceApp: string,
   version: string,
 ): Promise<void> {
+  const profile = buildProfile();
+  if (profile === 'personal-release' && options.arch !== 'arm64') {
+    throw new Error('Personal releases support only arm64.');
+  }
 
   if (!options.skipCi) {
     const npm = npmInvocation(['ci']);
@@ -885,6 +907,8 @@ async function buildPackageAndInstall(
   const expectation: BundleExpectation = {
     arch: options.arch,
     version,
+    profile,
+    certificatePin: process.env.MAC_SIGNING_CERT_SHA256,
   };
   await validateAppBundle(sourceApp, expectation);
   console.log(`Packaged and verified: ${sourceApp}`);
@@ -909,7 +933,7 @@ async function buildPackageAndInstall(
       operations: createInstallOperations(privileged),
       sourceApp,
       validate: async (target) => await validateAppBundle(target, expectation),
-      validateExisting: validateExistingReqwsBundle,
+      validateExisting: async (target) => await validateExistingReqwsBundle(target, profile),
     });
     console.log(`Installed and verified: ${installedApp}`);
     console.log('ReqWS user data was not modified by the installer.');

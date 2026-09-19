@@ -1,5 +1,10 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { VitePlugin } from '@electron-forge/plugin-vite';
+import path from 'node:path';
+
+import { buildProfile, releaseSigningConfiguration, repositoryRoot } from './scripts/macos-build-profile.mts';
+
+const profile = buildProfile();
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -7,10 +12,10 @@ const config: ForgeConfig = {
     appBundleId: 'com.reqws.desktop',
     appCategoryType: 'public.app-category.developer-tools',
     name: 'ReqWS',
-    // Local source installs still need a complete, internally consistent code
-    // signature. Public distribution must replace this ad-hoc identity with a
-    // Developer ID identity and add notarization.
-    osxSign: {
+    extraResource: profile === 'personal-release'
+      ? [path.join(repositoryRoot, 'build/update/app-update.yml')]
+      : [],
+    osxSign: profile === 'personal-release' ? releaseSigningConfiguration() : {
       identity: '-',
       identityValidation: false,
       preAutoEntitlements: false,
@@ -19,7 +24,8 @@ const config: ForgeConfig = {
       // Electron binaries as different identities on macOS 26 and refuses to
       // load Electron Framework at launch. Keep it disabled for this local-only
       // ad-hoc build. A Developer ID distribution build must use its own signing
-      // profile, Hardened Runtime, and notarization instead.
+      // profile, Hardened Runtime, and notarization instead. The personal
+      // profile is self-signed and must be validated separately on macOS.
       optionsForFile: () => ({ hardenedRuntime: false, timestamp: 'none' }),
     },
   },

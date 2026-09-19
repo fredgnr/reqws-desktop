@@ -1,4 +1,9 @@
 import type { IpcMain } from 'electron';
+import { serializeReqwsError } from '../../shared/errors';
+import { IPC_CHANNELS } from '../../shared/ipc-channels';
+import { updateStateSchema } from '../../shared/update-schemas';
+import type { ApplicationActivityGate } from '../services/application-activity-gate';
+import { createUpdateHandlers, type UpdateHandlerDependencies } from './update-handlers';
 
 import { createDialogHandlers } from './dialog-handlers';
 import type { DialogHandlerDependencies } from './dialog-handlers';
@@ -18,14 +23,15 @@ export type RegisterIpcDependencies = RepositoryHandlerDependencies &
   WorkspaceHandlerDependencies &
   SettingsHandlerDependencies &
   EditorHandlerDependencies &
-  DialogHandlerDependencies;
+  DialogHandlerDependencies & UpdateHandlerDependencies & { activityGate: ApplicationActivityGate };
 
 export type IpcMainPort = Pick<IpcMain, 'handle' | 'removeHandler'>;
 
-const registrations = new WeakMap<IpcMainPort, symbol>();
+const registrations = new WeakMap<IpcMainPort, { token: symbol; unsubscribe: () => void }>();
 
 function handlerMap(dependencies: RegisterIpcDependencies): IpcHandlerMap {
   return {
+    ...createUpdateHandlers(dependencies),
     ...createRepositoryHandlers(dependencies),
     ...createWorkspaceHandlers(dependencies),
     ...createSettingsHandlers(dependencies),
@@ -45,15 +51,29 @@ export function registerIpcHandlers(
 ): () => void {
   const handlers = handlerMap(dependencies);
   const registration = Symbol('reqws-ipc-registration');
+  registrations.get(ipcMain)?.unsubscribe();
+  const updateChannels = new Set<string>(Object.values(IPC_CHANNELS.updates));
 
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, handler);
+    ipcMain.handle(channel, updateChannels.has(channel) ? handler : async (event, ...args: unknown[]) => {
+      let release: (() => void) | undefined;
+      try {
+        release = dependencies.activityGate.enter();
+        return await handler(event, ...args);
+      } catch (error) {
+        return { ok: false, error: serializeReqwsError(error) };
+      } finally { release?.(); }
+    });
   }
-  registrations.set(ipcMain, registration);
+  const unsubscribe = dependencies.updateService.onStateChanged((state) => {
+    dependencies.broadcastUpdateState(updateStateSchema.parse(state));
+  });
+  registrations.set(ipcMain, { token: registration, unsubscribe });
 
   return () => {
-    if (registrations.get(ipcMain) !== registration) return;
+    if (registrations.get(ipcMain)?.token !== registration) return;
+    unsubscribe();
     for (const channel of Object.keys(handlers)) ipcMain.removeHandler(channel);
     registrations.delete(ipcMain);
   };

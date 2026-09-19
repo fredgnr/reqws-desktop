@@ -24,7 +24,11 @@ export async function startApplication(
 
   await app.whenReady();
   const services = await createServices(app.getPath('userData'));
-  registerHandlers(ipcMain, services);
+  const unregister = registerHandlers(ipcMain, services);
+  app.on('will-quit', () => {
+    unregister();
+    services.updateService.dispose();
+  });
   createMainWindow();
 
   app.on('activate', () => {

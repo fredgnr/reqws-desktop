@@ -32,6 +32,7 @@ describe('preload ReqwsAPI contract', () => {
       'repositories',
       'workspaces',
       'settings',
+      'updates',
       'dialogs',
       'editors',
       'operations',
@@ -108,6 +109,28 @@ describe('preload ReqwsAPI contract', () => {
       code: 'WORKSPACE_NOT_FOUND',
       message: 'Workspace not found.',
     });
+  });
+
+  it('uses fixed update channels, validates snapshots, and never forwards Electron events', async () => {
+    const state = { phase: 'idle', revision: 1, currentVersion: '0.1.2' };
+    electronMock.invoke.mockResolvedValue({ ok: true, value: state });
+    expect(await api.updates.getState()).toEqual(state);
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.updates.getState);
+    await api.updates.check();
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.updates.check);
+    await api.updates.download();
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.updates.download);
+    await api.updates.install();
+    expect(electronMock.invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.updates.install);
+    const listener = vi.fn();
+    const unsubscribe = api.updates.onStateChanged(listener);
+    const [channel, wrapped] = electronMock.on.mock.calls.at(-1)!;
+    wrapped({ sender: 'must not cross bridge' }, { ...state, percent: Infinity });
+    expect(listener).not.toHaveBeenCalled();
+    wrapped({ sender: 'must not cross bridge' }, state);
+    expect(listener).toHaveBeenCalledWith(state);
+    unsubscribe();
+    expect(electronMock.removeListener).toHaveBeenCalledWith(channel, wrapped);
   });
 
   it('subscribes to one fixed progress channel and precisely unsubscribes', () => {

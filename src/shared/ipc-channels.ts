@@ -1,4 +1,11 @@
 export const IPC_CHANNELS = {
+  updates: {
+    getState: 'updates:get-state',
+    check: 'updates:check',
+    download: 'updates:download',
+    install: 'updates:install',
+    stateChanged: 'updates:state-changed',
+  },
   repositories: {
     list: 'repositories:list',
     create: 'repositories:create',

@@ -105,6 +105,18 @@ afterEach(async () => {
 });
 
 describe('macOS install scaffold', () => {
+  it('protects update-enabled installations, including damaged feed files, from local replacement', async () => {
+    const directory = await temporaryDirectory();
+    const app = await identityApp(directory, 'com.reqws.desktop');
+    await mkdir(path.join(app, 'Contents/Resources'));
+    const feed = path.join(app, 'Contents/Resources/app-update.yml');
+    await writeFile(feed, 'damaged update config');
+    await expect(validateExistingReqwsBundle(app)).rejects.toThrow('local build');
+    await rm(feed);
+    await symlink(path.join(directory, 'missing-feed'), feed);
+    await expect(validateExistingReqwsBundle(app)).rejects.toThrow('local build');
+  });
+
   it('rejects the ad-hoc plus Hardened Runtime combination that macOS cannot launch', () => {
     expect(parseCodeSigningDetails(`
 flags=0x10002(adhoc,runtime) hashes=3+7 location=embedded

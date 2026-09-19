@@ -339,7 +339,51 @@
       "MANIFEST_WRITE_FAILED": "The workspace manifest could not be saved.",
       "WORKSPACE_FILE_WRITE_FAILED": "The workspace file could not be written.",
       "OPERATION_IN_PROGRESS": "Another operation is already in progress.",
-      "UNKNOWN": "An unknown error occurred."
+      "UNKNOWN": "An unknown error occurred.",
+      "UPDATE_DISABLED": "In-app updates are currently unavailable.",
+      "UPDATE_BUSY": "A task or update installation is in progress. Try again later.",
+      "UPDATE_NOT_AVAILABLE": "Check for updates and select an available version first.",
+      "UPDATE_NOT_DOWNLOADED": "Finish downloading the update first.",
+      "UPDATE_CHECK_FAILED": "Could not check for updates. Check your network connection and try again.",
+      "UPDATE_DOWNLOAD_FAILED": "Could not download the update. Check for updates again, then retry the download.",
+      "UPDATE_SIGNATURE_INVALID": "The update package failed code signature verification. The previous version of the app has been preserved.",
+      "UPDATE_INSTALL_FAILED": "Could not install the update. The previous version of the app has been preserved.",
+      "UPDATE_UNSUPPORTED_LOCATION": "Before updating, install ReqWS in a writable Applications folder, either the system folder or your personal folder.",
+      "UPDATE_CONFIG_INVALID": "The update configuration is invalid. Use an app release from a trusted source.",
+      "UPDATE_RESTART_REQUIRED": "Restart ReqWS before trying to update again.",
+      "UPDATE_TIMEOUT": "The update request timed out. Check for updates again."
+    }
+  },
+  "updates": {
+    "title": "App updates",
+    "description": "Manually check for, download, and install new versions.",
+    "loading": "Loading update status…",
+    "currentVersion": "Current version {{version}}",
+    "nextVersion": "Target version {{version}}",
+    "check": "Check for updates",
+    "download": "Download update",
+    "install": "Install and restart",
+    "progress": "Download progress",
+    "releaseNotes": "Release notes",
+    "confirmTitle": "Install the update and restart?",
+    "confirmDescription": "Version {{version}} will be installed and ReqWS will restart. ReqWS will check for tasks in progress before installation. Your workspaces and app data will be preserved.",
+    "phases": {
+      "disabled": "In-app updates are not enabled in this version.",
+      "idle": "Updates have not been checked yet.",
+      "checking": "Checking for updates…",
+      "available": "A new version is available.",
+      "not-available": "You have the latest version.",
+      "downloading": "Downloading update…",
+      "downloaded": "Downloaded. The code signature will be verified during installation.",
+      "installing": "Verifying and installing update…",
+      "error": "The update did not complete."
+    },
+    "reasons": {
+      "development": "Updates cannot be checked in development mode.",
+      "unsupported-platform": "In-app updates are supported only on macOS with Apple silicon (arm64).",
+      "local-build": "No update source is configured for this local build.",
+      "invalid-config": "The update configuration is invalid. Other features remain available.",
+      "restart-required": "Restart ReqWS before retrying the update. Other features remain available."
     }
   }
 }

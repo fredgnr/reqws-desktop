@@ -1,9 +1,9 @@
 # GitHub Actions CI 与 Release
 
-本目录定义 ReqWS 的 GitHub 质量门禁和版本 tag 发布渠道，并明确当前 macOS 资产的分发边界。
+本目录定义 ReqWS 的 GitHub 质量门禁和版本 tag 发布渠道，并明确 macOS 资产的分发边界。2026-09-19 的[自更新方案](../macos-self-update/README.md)扩展固定个人签名、四资产契约和 draft 下载校验；正式发布验收尚待完成。
 
 - 状态：active
-- 更新日期：2026-09-13
+- 更新日期：2026-09-19
 
 ## 文档
 

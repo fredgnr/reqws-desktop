@@ -20,6 +20,7 @@ Use [the development guide](docs/guides/development-guide.md) for commands and a
 - Use [reqws-documentation](.agents/skills/reqws-documentation/SKILL.md) when documented behavior, acceptance criteria, developer workflows, or document organization changes, or for an explicit documentation audit. A read-only lookup or spelling fix does not require a lifecycle-document exercise.
 - Use [reqws-i18n](.agents/skills/reqws-i18n/SKILL.md) for UI copy, catalog keys/placeholders/plurals, localized error/status/message mappings, or stale translation checks. Its gated, read-only translation subagent and validated writeback are mandatory; do not bypass the gate or acknowledge an unreviewed baseline. Ordinary code refactoring or Markdown prose is not a translation delta.
 - [reqws-goland-plugin-install](.agents/skills/reqws-goland-plugin-install/SKILL.md) is manual-only. A GoLand code, documentation, or build request does not activate installation. Exact-artifact installation confirmation and the Computer Use boundary remain in force.
+- Use [reqws-signing-maintenance](.agents/skills/reqws-signing-maintenance/SKILL.md) for actual macOS signing-identity audits, credential/password maintenance, or certificate/key migration. It is project-local and automatically discoverable; ordinary updater code or documentation work does not authorize credential changes. Keep the designated private backup and temporary-local-material policy, and distinguish same-identity maintenance from identity migration.
 
 ## Work and verification
 

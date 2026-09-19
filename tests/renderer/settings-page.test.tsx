@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ResolvedGlobalSettings } from '../../src/shared/types';
 import i18n, { initializeI18n } from '../../src/renderer/i18n';
 import { SettingsPage } from '../../src/renderer/pages/settings/SettingsPage';
+import { disabledUpdates } from '../fixtures/disabled-updates';
 
 const settings: ResolvedGlobalSettings = {
   localePreference: 'system',
@@ -34,6 +35,7 @@ beforeEach(async () => {
   Object.defineProperty(window, 'reqws', {
     configurable: true,
     value: {
+      updates: disabledUpdates(),
       settings: { save: saveSettings },
       dialogs: { selectDirectory },
     },

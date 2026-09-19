@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/types';
 import { ErrorNotice } from '../../components/ErrorNotice';
 import { toDisplayError, type DisplayError } from '../../error-utils';
+import { UpdateSection } from './UpdateSection';
 
 interface SettingsPageProps {
   settings: ResolvedGlobalSettings | null;
@@ -203,6 +204,7 @@ export function SettingsPage({
             'settings.workspaceFileDirectory.description',
           )}
         </div>
+        <UpdateSection />
         {error && <div className="settings-error"><ErrorNotice error={error} /></div>}
         <div className="settings-actions">
           <button

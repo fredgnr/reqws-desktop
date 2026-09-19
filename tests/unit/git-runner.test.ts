@@ -6,6 +6,7 @@ import type {
   SpawnOptionsWithoutStdio,
 } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApplicationActivityGate } from '../../src/main/services/application-activity-gate';
 
 import {
   GIT_OUTPUT_LIMIT_BYTES,
@@ -50,7 +51,45 @@ function successfulSpawn(
 }
 
 describe('GitRunner', () => {
+  it('holds update admission through a running Git child and rejects new Git after shutdown admission', async () => {
+    const gate = new ApplicationActivityGate();
+    let pending!: ChildProcessWithoutNullStreams;
+    const spawnProcess: SpawnGitProcess = (_command, args) => {
+      const child = fakeChild();
+      if (args[0] === '--version') queueMicrotask(() => child.emit('close', 0, null));
+      else pending = child;
+      return child;
+    };
+    const runner = await GitRunner.fromPath('/usr/bin/git', spawnProcess, { activityGate: gate });
+    const operation = runner.run(['fetch']);
+    expect(() => gate.acquireShutdown()).toThrow();
+    pending.emit('close', 0, null);
+    await operation;
+    const release = gate.acquireShutdown();
+    await expect(runner.run(['clone'])).rejects.toMatchObject({ code: 'UPDATE_BUSY' });
+    expect(pending.kill).not.toHaveBeenCalled();
+    release();
+  });
+
   afterEach(() => vi.unstubAllEnvs());
+
+  it('retains a live child lease after an error until its close event', async () => {
+    const gate = new ApplicationActivityGate();
+    let pending!: ChildProcessWithoutNullStreams;
+    const spawnProcess: SpawnGitProcess = (_command, args) => {
+      const child = Object.assign(fakeChild(), { pid: 12345 });
+      if (args[0] === '--version') queueMicrotask(() => child.emit('close', 0, null));
+      else pending = child;
+      return child;
+    };
+    const runner = await GitRunner.fromPath('/usr/bin/git', spawnProcess, { activityGate: gate });
+    const operation = runner.run(['fetch']);
+    pending.emit('error', new Error('Unable to signal child'));
+    await expect(operation).rejects.toMatchObject({ code: 'GIT_PROCESS_FAILED' });
+    expect(() => gate.acquireShutdown()).toThrow();
+    pending.emit('close', 1, null);
+    gate.acquireShutdown()();
+  });
 
   it('resolves PATH Git to an absolute path and validates it with git --version', async () => {
     const calls: SpawnCall[] = [];

@@ -1,0 +1,25 @@
+{
+  "skill_name": "reqws-signing-maintenance",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "仅检查当前 ReqWS 公开证书的有效期和维护安排，不改变任何凭据。本机没有私钥。请只读解析公开证书并说明结果与未验证范围。",
+      "expected_output": "Reads the current public certificate, reports actual dates and renewal planning, does not interpret missing local private material as a missing identity, and does not retrieve secrets, sign, create trust or schedule reminders.",
+      "files": [
+        "build/certificates/reqws-signing.cer"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "上次授权的 P12 包装密码更新中断了。源码、Environment 和候选证书 pin 相同，固定候选备份的恢复和精确 P12 探针已验证。P12 Secret 写入成功，密码写入响应超时未知；允许按同一候选恢复两个 Environment Secrets，保持身份、不发布。只做非执行演练。",
+      "expected_output": "Checks no active or waiting signing consumers and preserves protections; binds the exact candidate and probe evidence, never reads back Secret plaintext, retries unknown fields or justifies same-candidate paired recovery within existing authorization; no regeneration, pin change or redundant approval. Distinguishes accepted writes from CI consumption and cleans restored temporary material.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "签名证书快过期了，帮我更新证书和密钥，并让已安装用户继续更新。已有分发版本，旧 DR 固定叶证书；尚无自动身份迁移桥接，也未授权发布或安装。请只做非执行演练。",
+      "expected_output": "Treats this as identity migration; allows isolated candidate preparation, preserves the active identity, identifies the old leaf-certificate requirement as a continuity barrier, prepares a concrete manual-bootstrap or separately designed bridge path, and stops before unapproved activation/release/install without weakening DR.",
+      "files": []
+    }
+  ]
+}

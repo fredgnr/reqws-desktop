@@ -9,6 +9,7 @@ import { createRepositoryHandlers } from '../../src/main/ipc/repository-handlers
 import { registerIpcHandlers } from '../../src/main/ipc/register-ipc';
 import { createSettingsHandlers } from '../../src/main/ipc/settings-handlers';
 import { createWorkspaceHandlers } from '../../src/main/ipc/workspace-handlers';
+import { ApplicationActivityGate } from '../../src/main/services/application-activity-gate';
 
 const event = {
   sender: { isDestroyed: () => false, send: vi.fn() },
@@ -277,12 +278,19 @@ describe('main IPC handlers', () => {
     });
   });
 
-  it('replaces every registered handler and cleanup is ownership-safe', () => {
+  it('protects complete IPC operations, replaces handlers and cleans up only its own registration', async () => {
     const ipcMain = {
       handle: vi.fn(),
       removeHandler: vi.fn(),
     };
     const services = {
+      activityGate: new ApplicationActivityGate(),
+      updateService: {
+        getState: vi.fn(), check: vi.fn(), download: vi.fn(), install: vi.fn(),
+        onStateChanged: vi.fn(() => vi.fn()), dispose: vi.fn(),
+      },
+      isTrustedUpdateSender: () => true,
+      broadcastUpdateState: vi.fn(),
       repositoryService: {
         list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(),
       },
@@ -306,13 +314,25 @@ describe('main IPC handlers', () => {
     const cleanupFirst = registerIpcHandlers(ipcMain, services);
     const channels = ipcMain.handle.mock.calls.map(([channel]) => channel);
     expect(new Set(channels).size).toBe(channels.length);
-    expect(channels).toHaveLength(21);
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(21);
+    expect(channels).toHaveLength(25);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(25);
+
+    let complete!: (value: unknown[]) => void;
+    services.repositoryService.list.mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
+    const list = ipcMain.handle.mock.calls.find(([channel]) => channel === IPC_CHANNELS.repositories.list)![1];
+    const operation = list(event);
+    expect(() => services.activityGate.acquireShutdown()).toThrow();
+    complete([]);
+    await expect(operation).resolves.toMatchObject({ ok: true });
+    const releaseShutdown = services.activityGate.acquireShutdown();
+    await expect(list(event)).resolves.toMatchObject({ ok: false, error: { code: 'UPDATE_BUSY' } });
+    expect(services.repositoryService.list).toHaveBeenCalledOnce();
+    releaseShutdown();
 
     const cleanupSecond = registerIpcHandlers(ipcMain, services);
     cleanupFirst();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(42);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(50);
     cleanupSecond();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(63);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(75);
   });
 });

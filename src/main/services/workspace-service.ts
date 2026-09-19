@@ -150,7 +150,10 @@ function summaryFromManifest(
 export class WorkspaceMutationCoordinator {
   private tail: Promise<void> = Promise.resolve();
 
+  constructor(private readonly activity?: import('./application-activity-gate').ApplicationActivityGate) {}
+
   async run<T>(operation: () => Promise<T>): Promise<T> {
+    const releaseActivity = this.activity?.enter();
     let release: (() => void) | undefined;
     const previous = this.tail;
     this.tail = new Promise<void>((resolve) => {
@@ -161,6 +164,7 @@ export class WorkspaceMutationCoordinator {
       return await operation();
     } finally {
       release?.();
+      releaseActivity?.();
     }
   }
 }

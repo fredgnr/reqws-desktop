@@ -1,0 +1,7 @@
+{
+  "provider": "github",
+  "owner": "fredgnr",
+  "repo": "reqws-desktop",
+  "private": false,
+  "updaterCacheDirName": "reqws-desktop-updater"
+}

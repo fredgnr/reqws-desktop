@@ -238,6 +238,7 @@ export interface ReqwsAPI {
     get(): Promise<ResolvedGlobalSettings>;
     save(settings: GlobalSettings): Promise<ResolvedGlobalSettings>;
   };
+  updates: import('./update-types').UpdatesAPI;
   dialogs: {
     selectDirectory(input: SelectDirectoryInput): Promise<string | null>;
   };

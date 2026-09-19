@@ -90,7 +90,7 @@ for (const file of await sourceFiles(rendererDirectory)) {
     }
   }
   for (const match of source.matchAll(
-    /['"]((?:app|common|confirmDialog|createWorkspace|errors|navigation|operation|repositories|repositoryDialog|settings|shell|workspaceDetail|workspaces)(?:\.[\w-]+)+)['"]/gu,
+    /['"]((?:app|common|confirmDialog|createWorkspace|errors|navigation|operation|repositories|repositoryDialog|settings|shell|updates|workspaceDetail|workspaces)(?:\.[\w-]+)+)['"]/gu,
   )) {
     const key = match[1];
     if (!zhCN.has(key)) {
@@ -117,6 +117,16 @@ for (const status of unionMembers(sharedTypes, 'WorkspaceStatus')) {
 }
 
 const sharedErrors = await readFile(sharedErrorsPath, 'utf8');
+const updateTypes = await readFile(path.join(repositoryRoot, 'src/shared/update-types.ts'), 'utf8');
+for (const [constant, prefix] of [
+  ['updatePhases', 'updates.phases'], ['updateReasons', 'updates.reasons'], ['updateErrorCodes', 'errors.codes'],
+]) {
+  const body = new RegExp(`export const ${constant}\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*as const`, 'u').exec(updateTypes)?.[1];
+  if (!body) failures.push(`Missing update localization contract: ${constant}`);
+  for (const match of (body ?? '').matchAll(/['"]([^'"]+)['"]/gu)) {
+    if (!zhCN.has(`${prefix}.${match[1]}`)) failures.push(`localized update mapping is missing: ${prefix}.${match[1]}`);
+  }
+}
 const errorCodeDeclaration = /export const reqwsErrorCodes\s*=\s*\[([\s\S]*?)\]\s*as const/u
   .exec(sharedErrors)?.[1] ?? '';
 for (const match of errorCodeDeclaration.matchAll(/['"]([^'"]+)['"]/gu)) {

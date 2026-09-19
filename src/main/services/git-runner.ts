@@ -62,6 +62,7 @@ export interface GitRunOptions {
 }
 
 export interface GitRunnerOptions {
+  activityGate?: import('./application-activity-gate').ApplicationActivityGate;
   /** Test-only escape hatch for isolated local bare-repository fixtures. */
   allowLocalRepositoryPaths?: boolean;
 }
@@ -286,6 +287,9 @@ export class GitRunner {
   }
 
   async run(args: readonly string[], options: GitRunOptions = {}): Promise<GitRunResult> {
+    const release = this.options.activityGate?.enter();
+    let childStarted = false;
+    let childClosed = false;
     return new Promise<GitRunResult>((resolve, reject) => {
       const stdout = new TailBuffer(GIT_OUTPUT_LIMIT_BYTES);
       const stderr = new TailBuffer(GIT_OUTPUT_LIMIT_BYTES);
@@ -303,6 +307,7 @@ export class GitRunner {
           stdio: 'pipe',
           windowsHide: true,
         });
+        childStarted = child.pid !== undefined;
       } catch (error) {
         reject(
           new GitServiceError('GIT_PROCESS_FAILED', 'Unable to start Git.', {
@@ -344,6 +349,8 @@ export class GitRunner {
 
       child.once('error', rejectOnce);
       child.once('close', (code) => {
+        childClosed = true;
+        release?.();
         if (settled) return;
         settled = true;
         cleanupTimers();
@@ -364,6 +371,10 @@ export class GitRunner {
         }, options.timeoutMs);
         timeout.unref();
       }
+    }).finally(() => {
+      // A failed kill/send can emit error while Git is still alive. Keep its
+      // lease until close; only failed spawns have no child left to protect.
+      if (!childStarted || childClosed) release?.();
     });
   }
 

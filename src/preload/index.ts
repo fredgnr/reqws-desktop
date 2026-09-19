@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { IpcResult } from '../shared/ipc-channels';
 import { IPC_CHANNELS } from '../shared/ipc-channels';
 import type { OperationProgress, ReqwsAPI } from '../shared/types';
+import { updateStateSchema } from '../shared/update-schemas';
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   const result = (await ipcRenderer.invoke(channel, ...args)) as IpcResult<T>;
@@ -35,6 +36,20 @@ const api: ReqwsAPI = {
   settings: {
     get: () => invoke(IPC_CHANNELS.settings.get),
     save: (settings) => invoke(IPC_CHANNELS.settings.save, settings),
+  },
+  updates: {
+    getState: async () => updateStateSchema.parse(await invoke(IPC_CHANNELS.updates.getState)),
+    check: async () => updateStateSchema.parse(await invoke(IPC_CHANNELS.updates.check)),
+    download: async () => updateStateSchema.parse(await invoke(IPC_CHANNELS.updates.download)),
+    install: () => invoke(IPC_CHANNELS.updates.install),
+    onStateChanged: (listener) => {
+      const wrapped = (_event: IpcRendererEvent, value: unknown): void => {
+        const state = updateStateSchema.safeParse(value);
+        if (state.success) listener(state.data);
+      };
+      ipcRenderer.on(IPC_CHANNELS.updates.stateChanged, wrapped);
+      return () => { ipcRenderer.removeListener(IPC_CHANNELS.updates.stateChanged, wrapped); };
+    },
   },
   dialogs: {
     selectDirectory: (input) =>
