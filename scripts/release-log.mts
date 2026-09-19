@@ -2,7 +2,7 @@ const stages = {
   signing: [
     'context', 'credentials', 'public-certificate', 'temporary-files', 'keychain-search-list',
     'create-keychain', 'unlock-keychain', 'import-p12', 'key-access', 'code-signing-trust',
-    'trusted-identity', 'packaging', 'cleanup', 'restore-search-list', 'remove-trust',
+    'trusted-identity', 'packaging', 'cleanup', 'restore-search-list', 'revoke-code-signing-trust',
     'delete-keychain', 'delete-p12', 'delete-temporary-directory',
   ],
   'macos-package': [

@@ -217,7 +217,7 @@ wrapper 负责在 `try/finally` 中完成下列动作，而不是让构建脚本
 | 5 | 核对仓库公开 CER 的 SHA-256 与 Environment pin，核对 P12 中证书与该 CER 一致；只允许这一签名身份。 |
 | 6 | 在一次性 GitHub-hosted runner 上，按 Code Signing policy 导入对该自签证书的信任；确认 `security find-identity -v -p codesigning <keychain>` 能发现它。导入 P12 不等于证书已受信任。 |
 | 7 | 以只包含临时钥匙串路径与公开 identity 的子进程环境执行 Forge；从子进程环境移除 Base64/P12 密码及无关发布 token；签名任务仍可使用已解锁私钥，不宣称密钥不可窃取。 |
-| 8 | finally 清理 P12、临时 keychain 和本次新增的证书信任，恢复搜索列表；中断清理另有 job 的 `always()` 兜底，不能收集整个临时目录为 artifact。 |
+| 8 | finally 恢复搜索列表，将本轮证书的管理员 Code Signing 信任改为明确 `deny` 并读回验证，再删除临时 keychain、P12 和目录；拒绝记录保留到一次性 runner 回收。失败仍尝试其余清理，保留公开 CER/日志供 job 的 `always()` 重试，不能收集整个临时目录为 artifact。 |
 
 核心系统命令应形如以下片段；变量均由 wrapper 生成或严格校验，不能复用现有会打印完整命令行的普通 runner 处理密码参数：
 
@@ -233,11 +233,17 @@ sudo security add-trusted-cert -d -r trustRoot -p codeSign \
   -k "$KEYCHAIN_PATH" "$CERT_PATH"
 security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-# 清理时：还必须删除 keychain、P12，并恢复原搜索列表。
-sudo security remove-trusted-cert -d "$CERT_PATH"
+# 清理时：先撤销 Code Signing 信任并读回，随后删除 keychain/P12。
+# 不带 -k，不向 System keychain 安装证书；只保留拒绝记录直到 runner 回收。
+sudo -n security add-trusted-cert -d -r deny -p codeSign "$CERT_PATH"
+security trust-settings-export -d "$TRUST_READBACK_PATH"
+python3 scripts/verify-signing-trust.py \
+  --settings "$TRUST_READBACK_PATH" --identity "$CERT_IDENTITY"
 ```
 
-签名 wrapper 通过 `[release][signing]` 输出固定阶段名（如 `import-p12`、`code-signing-trust`、`packaging`、`cleanup`）的开始、成功/失败和耗时；清理中的搜索列表恢复、信任移除、钥匙串/P12/目录删除分别记录。系统命令只额外报告启动失败或退出码，不输出原始异常、参数数组、密码或系统命令 stderr。业务阶段失败先记录，再开始清理；清理失败优先报告为 `cleanup`，同时保留原有 `always()` 重试。导入失败不能自动换证、重传 Secrets、关闭 MAC 校验或降级 P12 加密；先使用一次性 OpenSSL 3 P12 重现实际导入路径。
+GitHub-hosted macOS 上删除最后一条管理员信任记录可能等待交互授权，见 [runner-images 问题记录](https://github.com/actions/runner-images/issues/12116)；[Apple TrustSettings 实现](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_keychain/lib/TrustSettings.cpp) 对空信任数据与非空数据走不同授权路径。因此此处撤销信任采用同证书、仅 Code Signing 的明确拒绝，不宣称管理员信任数据库恢复为空。读回必须定位原身份且仅包含预期 CodeSigning deny 规则，不接受信任授予、其他 policy 或例外。该策略仅适用于一次性发布 runner，不替代维护者本机的证书维护清理；不能更改 authorizationdb、SIP 或扩大信任用途来使流程通过。
+
+每个签名系统命令最多执行 60 秒；macOS 自带 Perl 的 alarm 在 exec 后继续生效，`sudo` 命令在提权后设置 alarm，避免普通用户无法终止挂起的 root 进程。所有命令仍使用参数数组、无 shell，不给完整 Forge 打包施加这项短时限。签名 wrapper 通过 `[release][signing]` 输出固定阶段名（如 `import-p12`、`code-signing-trust`、`packaging`、`cleanup`）的开始、成功/失败和耗时；清理中的搜索列表恢复、`revoke-code-signing-trust`、钥匙串/P12/目录删除分别记录。系统命令只额外报告启动失败、超时或退出码，不输出原始异常、参数数组、密码或系统命令 stderr。业务阶段失败先记录，再开始清理；清理失败优先报告为 `cleanup`，同时保留原有 `always()` 重试。导入失败不能自动换证、重传 Secrets、关闭 MAC 校验或降级 P12 加密；先使用一次性 OpenSSL 3 P12 重现实际导入路径。
 
 各 Release job 的上下文日志仅列出 run/attempt/job、event/ref/commit、runner OS/架构及系统版本，使用 JSON 转义控制字符，不转储环境。移除长期 Secrets 后的打包子进程实时输出普通构建日志；`[release][macos-package]` 标出 Forge 打包、App 验证、ZIP 创建/解压/复验、元数据和校验文件生成。publish 对检查既有 Release、创建草稿、上传、资产清单检查、下载复验和公开分别记录结果与耗时，失败保留原退出码和仅清理本 run 草稿的条件；资产验证仅报告允许发布的文件名、字节数及结果，不上传整个工作目录或签名临时目录作为日志附件。
 

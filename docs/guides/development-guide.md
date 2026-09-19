@@ -274,11 +274,13 @@ GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需
 
 CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
 
-Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后清理信任、钥匙串及 P12。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
+Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后把本轮证书的管理员 Code Signing 信任改为明确拒绝并读回验证，再删除钥匙串及 P12。拒绝记录保留到一次性 runner 回收，避免删除最后一条管理员信任记录时等待交互授权；不修改系统授权规则，不适用于维护者本机的身份清理。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
 
 P12 导入必须使用 `security import -f pkcs12`；macOS 的自动格式识别可能把有效 OpenSSL 3 P12 误报为密码错误。wrapper 使用固定阶段日志，不回显秘密或原生异常。`tests/integration/macos-signing-import.test.ts` 使用真实系统命令覆盖正确密码导入、身份匹配和错误密码拒绝；不会运行发布 wrapper 或伪造 GitHub 上下文。CI 与 Release 的项目检查在一次性 runner 缺少 `openssl@3` 时通过 Homebrew 安装，并显式选择其路径；本地检查只使用已有工具，缺失时报告错误。
 
-排查 Release 时搜索 `[release]`：`context` 提供当前 run/commit/runner；`signing` 和 `macos-package` 记录阶段的 started/success/failed 与耗时；`signing-command` 只记录启动失败或退出码；`assets` 给出已验证资产名称和大小；`publish` 区分上传、下载复验、正式公开及失败草稿清理。Forge 普通输出实时可见。先找失败阶段，再核对清理结果；不要开启 shell tracing、转储环境或打印签名系统命令的原始 stderr 来排错。
+排查 Release 时搜索 `[release]`：`context` 提供当前 run/commit/runner；`signing` 和 `macos-package` 记录阶段的 started/success/failed 与耗时；`signing-command` 只记录启动失败、超时或退出码；`assets` 给出已验证资产名称和大小；`publish` 区分上传、下载复验、正式公开及失败草稿清理。每个签名系统命令有 60 秒时限，提权命令在 root 进程内设 alarm；清理失败仍尝试删除私密材料并由 `always()` 重试剩余操作。Forge 普通输出实时可见。先找失败阶段，再核对清理结果；不要开启 shell tracing、转储环境或打印签名系统命令的原始 stderr 来排错。
+
+`tests/integration/macos-signing-trust.test.ts` 在本机仅用 `security ... -o` 生成离线拒绝记录并验证格式，不改变实际信任。完整管理员信任回归只在真实 GitHub-hosted macOS runner 执行：使用一次性证书验证信任有效，调用生产撤销函数并读回精确 CodeSigning deny，最后确认系统验证拒绝该证书。禁止伪造 GitHub 环境变量使其在本机运行；本地该项跳过不计为通过，合入前必须确认实际 CI 执行结果。
 
 签后证书抽取使用单个 `--extract-certificates=<prefix>` 参数。`tests/integration/macos-certificate-extraction.test.ts` 在临时目录复制系统自带的已签名程序，通过实际 Node/`codesign` 检查带空格路径的 DER 输出，不执行该副本、不创建身份或修改信任；测试需要正常访问 macOS 安全服务，受限沙箱下命令返回 0 但没有证书输出不能算通过。`tests/unit/macos-signature-verification.test.ts` 使用模拟系统命令覆盖完整遍历、身份/Runtime 拒绝及抽取目录清理。
 
