@@ -12,6 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.ComponentOrientation
 import java.awt.image.BufferedImage
 import java.awt.event.ActionListener
 import javax.swing.JButton
@@ -248,7 +249,7 @@ class ReqwsToolWindowPanelTest {
   fun `repository lists remain horizontally compressible for long names`() {
     val repository = ReqwsRepositoryViewModel(
       name = "repository-" + "x".repeat(255),
-      statusKey = "repository.active",
+      statusKey = "repository.loaded",
       statusTone = ReqwsStatusTone.SUCCESS,
     )
     val model = DefaultListModel<ReqwsRepositoryViewModel>().apply { addElement(repository) }
@@ -282,7 +283,7 @@ class ReqwsToolWindowPanelTest {
     row.doLayout()
     val status = row.descendants()
       .filterIsInstance<JBLabel>()
-      .single { it.text == "Active" }
+      .single { it.text == "Loaded" }
 
     assertTrue(status.x >= 0)
     assertTrue(status.x + status.width <= row.width)
@@ -350,9 +351,9 @@ class ReqwsToolWindowPanelTest {
     assertEquals(REPOSITORY_ROW_HEIGHT, list.fixedCellHeight)
     val tooltip = firstRow.toolTipText
     assertTrue(tooltip.contains("repo-a"))
-    assertTrue(tooltip.contains("Active"))
+    assertTrue(tooltip.contains("Loaded"))
     assertTrue(firstRow.accessibleContext.accessibleName.contains("repo-a"))
-    assertTrue(firstRow.accessibleContext.accessibleName.contains("Active"))
+    assertTrue(firstRow.accessibleContext.accessibleName.contains("Loaded"))
 
     assertFalse(firstBorder.outsideBorder is EmptyBorder)
     assertTrue(firstBorder.insideBorder is EmptyBorder)
@@ -451,6 +452,88 @@ class ReqwsToolWindowPanelTest {
   }
 
   @Test
+  fun `user root coverage preserves repo3 name and complete explanation in narrow rows`() {
+    SwingUtilities.invokeAndWait {
+      val renderer = ReqwsRepositoryListCellRenderer()
+      val repository = ReqwsRepositoryViewModel(
+        name = "repo3",
+        statusKey = "repository.userRootCoverage",
+        statusTone = ReqwsStatusTone.WARNING,
+        statusDetailKey = "repository.userRootCoverageDetail",
+      )
+      val statusText = ReqwsBundle.message(repository.statusKey)
+      val detailText = ReqwsBundle.message(requireNotNull(repository.statusDetailKey))
+      listOf(160, NARROW_TOOL_WINDOW_WIDTH, 480).forEach { width ->
+        listOf(ComponentOrientation.LEFT_TO_RIGHT, ComponentOrientation.RIGHT_TO_LEFT).forEach { orientation ->
+          listOf(false, true).forEach { selected ->
+            val list = JList(arrayOf(repository)).apply { componentOrientation = orientation }
+            val row = renderer.getListCellRendererComponent(list, repository, 0, selected, false) as JComponent
+            row.setSize(width, REPOSITORY_ROW_HEIGHT)
+            row.doLayout()
+            val labels = row.descendants().filterIsInstance<JBLabel>().toList()
+            val name = labels.single { it.text == "repo3" }
+            val status = labels.single { it.text == statusText }
+            assertTrue("repo3 must remain fully readable", name.width >= name.preferredSize.width)
+            assertRepositoryLabelsFit(row, name, status)
+            assertEquals(detailText, row.accessibleContext.accessibleDescription)
+            assertEquals(detailText, status.accessibleContext.accessibleDescription)
+            assertEquals("repo3 — $statusText · $detailText", renderedTooltipText(row.toolTipText))
+            if (orientation.isLeftToRight) assertTrue(name.x < status.x) else assertTrue(status.x < name.x)
+          }
+        }
+      }
+
+      val loaded = repository("repo1")
+      val row = renderer.getListCellRendererComponent(JList(arrayOf(loaded)), loaded, 0, false, false) as JComponent
+      row.setSize(NARROW_TOOL_WINDOW_WIDTH, REPOSITORY_ROW_HEIGHT)
+      row.doLayout()
+      val status = row.descendants().filterIsInstance<JBLabel>().single { it.text == "Loaded" }
+      assertEquals("Loaded", status.accessibleContext.accessibleDescription)
+      assertEquals("Loaded", row.accessibleContext.accessibleDescription)
+      assertEquals("repo1 — Loaded", renderedTooltipText(row.toolTipText))
+      assertEquals(status.preferredSize.width, status.width)
+    }
+  }
+
+  @Test
+  fun `scrolling viewport bounds long status and untrusted name without losing accessible text`() {
+    SwingUtilities.invokeAndWait {
+      val name = "<html><img src='https://example.test/tracker'>repository-" + "x".repeat(512)
+      val repository = ReqwsRepositoryViewModel(
+        name = name,
+        // A real long localized message exercises the renderer's budget independently of copy length.
+        statusKey = "repository.userRootCoverageDetail",
+        statusTone = ReqwsStatusTone.WARNING,
+      )
+      val model = DefaultListModel<ReqwsRepositoryViewModel>().apply { repeat(7) { addElement(repository) } }
+      val list = ReqwsRepositoryList(model)
+      val viewport = createRepositoryViewport(list)
+      viewport.setSize(NARROW_TOOL_WINDOW_WIDTH, 6 * REPOSITORY_ROW_HEIGHT)
+      viewport.doLayout()
+      viewport.viewport.doLayout()
+      val row = ReqwsRepositoryListCellRenderer().getListCellRendererComponent(
+        list, repository, 0, true, false,
+      ) as JComponent
+      row.setSize(list.width, REPOSITORY_ROW_HEIGHT)
+      row.doLayout()
+      val labels = row.descendants().filterIsInstance<JBLabel>().toList()
+      val nameLabel = labels.single { it.text == name }
+      val statusText = ReqwsBundle.message(repository.statusKey)
+      val status = labels.single { it.text == statusText }
+      assertRepositoryLabelsFit(row, nameLabel, status)
+      assertTrue(nameLabel.width >= nameLabel.getFontMetrics(nameLabel.font).stringWidth("repo3"))
+      assertTrue(nameLabel.getClientProperty("html.disable") == true)
+      assertEquals(name, nameLabel.accessibleContext.accessibleName)
+      assertTrue(row.accessibleContext.accessibleName.contains(statusText))
+      assertFalse(row.toolTipText.contains("<img"))
+      assertEquals("$name — $statusText", renderedTooltipText(row.toolTipText))
+      assertEquals(REPOSITORY_ROW_HEIGHT, list.fixedCellHeight)
+      assertEquals(6 * REPOSITORY_ROW_HEIGHT, viewport.preferredSize.height)
+      assertEquals(viewport.viewport.extentSize.width, list.width)
+    }
+  }
+
+  @Test
   fun `primary and secondary actions preserve hierarchy in a narrow vertical layout`() {
     val sync = ReqwsPrimaryButton("Sync Now")
     val openManifest = ActionLink("Open Manifest File", ActionListener {})
@@ -482,9 +565,28 @@ class ReqwsToolWindowPanelTest {
 
   private fun repository(name: String) = ReqwsRepositoryViewModel(
     name = name,
-    statusKey = "repository.active",
+    statusKey = "repository.loaded",
     statusTone = ReqwsStatusTone.SUCCESS,
   )
+
+  private fun assertRepositoryLabelsFit(row: JComponent, name: JBLabel, status: JBLabel) {
+    val insets = row.insets
+    listOf(name, status).forEach { label ->
+      assertTrue(label.width > 0)
+      assertTrue(label.x >= insets.left)
+      assertTrue(label.x + label.width <= row.width - insets.right)
+      assertTrue(label.y >= insets.top)
+      assertTrue(label.y + label.height <= row.height - insets.bottom)
+    }
+    assertFalse(name.bounds.intersects(status.bounds))
+    val image = BufferedImage(row.width, row.height, BufferedImage.TYPE_INT_ARGB)
+    val graphics = image.createGraphics()
+    try {
+      row.paint(graphics)
+    } finally {
+      graphics.dispose()
+    }
+  }
 
   private fun Component.descendants(): Sequence<Component> = sequence {
     yield(this@descendants)

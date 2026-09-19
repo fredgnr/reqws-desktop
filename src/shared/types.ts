@@ -218,6 +218,11 @@ export interface CodeWorkspaceFile {
 }
 
 export interface ReqwsAPI {
+  goLandWorkspaces: {
+    read(workspaceId: string): Promise<import('./goland-workspace').GoLandWorkspaceState>;
+    prepare(input: import('./goland-workspace').PrepareGoLandWorkspaceInput): Promise<import('./goland-workspace').GoLandWorkspaceState>;
+    save(input: import('./goland-workspace').SaveGoLandSelectionInput): Promise<import('./goland-workspace').GoLandWorkspaceState>;
+  };
   repositories: {
     list(): Promise<RepositoryListItem[]>;
     create(input: CreateRepositoryInput): Promise<Repository>;

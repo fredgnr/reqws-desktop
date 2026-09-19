@@ -14,24 +14,28 @@ internal class VcsRootInspector {
     mappings: List<ObservedVcsMapping>,
   ): VcsRootInspection {
     val projectRoot = snapshot.canonicalProjectRoot
+    val ideRoot = snapshot.loading?.binding?.shell ?: projectRoot
     val rootIdentity = VcsPathIdentity.lexical(projectRoot)
     val mappingObservations = mappings.map { mapping ->
       MappingObservation(
         mapping = mapping,
-        identities = VcsPathIdentity.mappingIdentities(projectRoot, mapping.directory),
+        identities = VcsPathIdentity.mappingIdentities(ideRoot, mapping.directory),
       )
     }
-    val activeIdentities = linkedSetOf<String>()
+    val memberIdentities = snapshot.repositories.mapTo(linkedSetOf()) { VcsPathIdentity.lexical(it.path) }
     val repositoryStatuses = snapshot.repositories.mapIndexed { index, resolved ->
+      if (snapshot.loading != null && resolved.repository.catalogRepositoryId !in snapshot.loading.loadedIds) {
+        return@mapIndexed VcsRepositoryInspection(index, VcsRepositoryStatus.NOT_LOADED)
+      }
       val candidate = projectRoot.resolve(resolved.repository.relativePath).normalize()
       val lexicalIdentity = VcsPathIdentity.lexical(candidate)
-      activeIdentities.add(lexicalIdentity)
+      memberIdentities.add(lexicalIdentity)
       val liveObservation = if (resolved.availability == RepositoryAvailability.MISSING) {
         null
       } else {
         observeLiveRepository(projectRoot, candidate)
       }
-      liveObservation?.identities?.let(activeIdentities::addAll)
+      liveObservation?.identities?.let(memberIdentities::addAll)
       val status = when {
         resolved.availability == RepositoryAvailability.MISSING ->
           VcsRepositoryStatus.MISSING_DIRECTORY
@@ -55,11 +59,9 @@ internal class VcsRootInspector {
       if (isWorkspaceRoot) {
         workspaceDiagnostics.add(VcsWorkspaceDiagnosticCode.WORKSPACE_WIDE_GIT_ROOT)
       } else if (
-        observation.identities.any { VcsPathIdentity.isWithin(projectRoot, it) } &&
-        observation.identities.none { it in activeIdentities } &&
-        isRetainedGitRepository(projectRoot, observation.mapping.directory)
+        observation.identities.none { it in memberIdentities }
       ) {
-        workspaceDiagnostics.add(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT)
+        workspaceDiagnostics.add(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT)
       }
     }
 
@@ -84,24 +86,6 @@ internal class VcsRootInspector {
       identities = VcsPathIdentity.repositoryIdentities(candidate, liveCanonicalPath),
       isGitRepository = isGitRepository,
     )
-  }
-
-  private fun isRetainedGitRepository(projectRoot: Path, mappingDirectory: String): Boolean {
-    val mappedPath = try {
-      Path.of(mappingDirectory).let { path ->
-        if (path.isAbsolute) path else projectRoot.resolve(path)
-      }
-    } catch (_: Exception) {
-      return false
-    }
-    val canonical = try {
-      mappedPath.toRealPath()
-    } catch (_: Exception) {
-      return false
-    }
-    return canonical.parent == projectRoot &&
-      Files.isDirectory(canonical, LinkOption.NOFOLLOW_LINKS) &&
-      Files.isDirectory(canonical.resolve(".git"), LinkOption.NOFOLLOW_LINKS)
   }
 
   private fun classifyConfiguredRepository(

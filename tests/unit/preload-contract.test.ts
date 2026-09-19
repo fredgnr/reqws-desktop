@@ -29,6 +29,7 @@ describe('preload ReqwsAPI contract', () => {
     expect(electronMock.exposeInMainWorld).toHaveBeenCalledOnce();
     expect(electronMock.exposeInMainWorld).toHaveBeenCalledWith('reqws', api);
     expect(Object.keys(api)).toEqual([
+      'goLandWorkspaces',
       'repositories',
       'workspaces',
       'settings',

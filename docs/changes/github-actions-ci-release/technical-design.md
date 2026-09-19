@@ -13,13 +13,13 @@ updated: 2026-09-19
 
 CI 保留 `checks`（Checks and macOS package smoke）与 `goland-plugin`（GoLand plugin checks）两个独立 macOS job。branch push、PR 和 dispatch 触发器、原有 concurrency 与取消策略保持不变，不通过路径过滤或忽略失败提速。
 
-Desktop 保留 Node 24、`npm ci`、完整 `npm run check` 和 arm64 package smoke，另执行 Python 标准库发布脚本回归测试。GoLand 保留 JDK 21、Gradle wrapper validation 和以下任务：
+Desktop 保留 Node 24、`npm ci`、完整 `npm run check` 和 arm64 package smoke，另执行 Python 标准库发布脚本回归测试。GoLand 保留 JDK 25、Gradle wrapper validation 和以下任务：
 
 ```bash
 ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
 ```
 
-`buildPlugin` 仍依赖 `verifyForbiddenProductionSymbols`；GoLand 2026.1.3 与 2026.2 均参与 Verifier。CI 从 `package.json` 读取候选版本，构建后运行与 Release 相同的 ZIP 校验脚本，但不上传或发布资产。根 `npm run check`、Electron package 和 Gradle 仍相互隔离。
+`buildPlugin` 仍依赖 `verifyForbiddenProductionSymbols`；Verifier 仅验证 GoLand GO-262.9437.286。CI 从 `package.json` 读取候选版本，构建后运行与 Release 相同的 ZIP 校验脚本，但不上传或发布资产。根 `npm run check`、Electron package 和 Gradle 仍相互隔离。
 
 `.github/actions/setup-goland/action.yml` 在 CI/Release 中共享 Temurin 21、wrapper validation、Gradle setup 和 IDE 缓存配置，避免两个入口漂移。所有第三方 Actions 继续固定到完整 commit SHA。
 

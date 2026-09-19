@@ -107,9 +107,12 @@ class ReqwsProjectLoadEngineTest {
     repositories: List<String>,
     createRepositories: Boolean = true,
   ): Path {
-    val root = temporaryFolder.newFolder(name).toPath()
+    val workspaceRoot = temporaryFolder.newFolder(name).toPath().toRealPath()
+    val root = workspaceRoot.resolve(".reqws/ide/goland")
+    Files.createDirectories(root)
+    Files.writeString(root.resolve("reqws-project.json"), """{"schemaVersion":1,"adapterProtocol":1,"workspaceId":"workspace_id","bindingId":"95dc7c6a-0eaa-4c96-824a-e117316a1db3","revision":1,"selection":{"mode":"all"},"updatedAt":"2026-09-19T00:00:00Z"}""")
     if (createRepositories) {
-      repositories.forEach { Files.createDirectory(root.resolve(it)) }
+      repositories.forEach { Files.createDirectories(workspaceRoot.resolve(it).resolve(".git")) }
     }
     val manifest = ReqwsProjectDetector.manifestPath(root)
     Files.createDirectories(manifest.parent)
@@ -132,7 +135,7 @@ class ReqwsProjectLoadEngineTest {
           "id": "workspace_id",
           "name": "Feature Login",
           "featureBranch": "feature/login",
-          "rootPath": "${escapeJson(root.toRealPath().toString())}",
+          "rootPath": "${escapeJson(workspaceRoot.toRealPath().toString())}",
           "workspaceFilePath": "${escapeJson(root.resolve("workspace.code-workspace").toString())}",
           "repositories": [$repositoryJson],
           "createdAt": "2026-08-14T00:00:00.000Z",

@@ -1,3 +1,5 @@
+import { GoLandWorkspaceService } from '../../src/main/services/goland-workspace-service';
+import { WorkspaceMutationCoordinator } from '../../src/main/services/workspace-service';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
@@ -456,6 +458,7 @@ describe('EditorLauncher GoLand support', () => {
       homeDirectory,
       systemApplicationsDirectory: path.join(directory, 'Applications'),
       spawnProcess,
+      prepareGoLandWorkspace: () => prepareEntry(rootPath),
     });
 
     await expect(launcher.openGoLand('ws_1')).rejects.toMatchObject({
@@ -538,7 +541,7 @@ describe('EditorLauncher GoLand support', () => {
     });
   });
 
-  it('opens the validated workspace root with fixed arguments and shell disabled', async () => {
+  it('opens only the prepared shell with fixed arguments and shell disabled', async () => {
     const directory = await sandbox();
     const homeDirectory = path.join(directory, 'home');
     const applicationPath = path.join(
@@ -558,13 +561,10 @@ describe('EditorLauncher GoLand support', () => {
     const regularResolver = vi.fn(async () => {
       throw new Error('The regular editor resolver must not be used.');
     });
-    const goLandResolver = vi.fn(async () => ({
-      rootPath,
-      workspaceFilePath: path.join(directory, 'workspace.code-workspace'),
-    }));
+    const goLandResolver = vi.fn(() => prepareEntry(rootPath));
     const launcher = new EditorLauncher(regularResolver, {
       homeDirectory,
-      resolveGoLandWorkspacePaths: goLandResolver,
+      prepareGoLandWorkspace: goLandResolver,
       spawnProcess: successfulSpawner(calls),
       systemApplicationsDirectory: path.join(directory, 'Applications'),
     });
@@ -576,7 +576,7 @@ describe('EditorLauncher GoLand support', () => {
     expect(calls).toEqual([
       {
         command: '/usr/bin/open',
-        args: ['-a', applicationPath, rootPath],
+        args: ['-a', applicationPath, path.join(rootPath, '.reqws/ide/goland')],
         options: { shell: false, stdio: 'ignore', windowsHide: true },
       },
     ]);
@@ -606,6 +606,7 @@ describe('EditorLauncher GoLand support', () => {
     }), {
       homeDirectory,
       spawnProcess: successfulSpawner(calls),
+      prepareGoLandWorkspace: () => prepareEntry(aliasRoot),
       systemApplicationsDirectory: path.join(directory, 'Applications'),
     });
 
@@ -614,13 +615,13 @@ describe('EditorLauncher GoLand support', () => {
     expect(calls).toEqual([
       {
         command: '/usr/bin/open',
-        args: ['-a', applicationPath, aliasRoot],
+        args: ['-a', applicationPath, path.join(aliasRoot, '.reqws/ide/goland')],
         options: { shell: false, stdio: 'ignore', windowsHide: true },
       },
     ]);
   });
 
-  it('rejects a missing manifest before resolving or starting GoLand', async () => {
+  it('refuses to fall back to the workspace root without entry preparation', async () => {
     const directory = await sandbox();
     const rootPath = path.join(directory, 'workspace');
     await mkdir(rootPath, { recursive: true });
@@ -635,9 +636,17 @@ describe('EditorLauncher GoLand support', () => {
     });
 
     await expect(launcher.openGoLand('ws_1')).rejects.toMatchObject({
-      code: 'WORKSPACE_PATH_MISSING',
-      stage: 'launching',
+      code: 'GOLAND_BINDING_INVALID',
     });
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 });
+
+async function prepareEntry(rootPath: string) {
+  const workspace = workspaceManifestSchema.parse({
+    schemaVersion: 1, id: 'ws_1', name: 'Fixture', featureBranch: 'feature/test', rootPath,
+    workspaceFilePath: path.join(rootPath, 'fixture.code-workspace'), repositories: [],
+    createdAt: '2026-09-19T00:00:00.000Z', updatedAt: '2026-09-19T00:00:00.000Z',
+  });
+  return new GoLandWorkspaceService({ get: async () => ({ ...workspace, status: 'ready' }) }, new WorkspaceMutationCoordinator()).prepare({ workspaceId: 'ws_1' });
+}

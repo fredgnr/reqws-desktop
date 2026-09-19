@@ -19,7 +19,7 @@ ReqWS 是 macOS-only 的 Electron、TypeScript 和 React 项目。开发环境�
 - Node.js 24.x；版本范围由 `.nvmrc` 和 `package.json#engines` 共同约束。
 - npm 和 Git。
 - OpenSSL 3；原生 P12 导入回归使用 Homebrew 的 `openssl@3` 或 PATH 中的 OpenSSL 3，也可用 `REQWS_OPENSSL` 指定已有可执行文件。测试生成一次性身份和临时钥匙串，不读取发布 Secrets、不修改证书信任，结束后恢复搜索列表并清理。
-- 构建 GoLand 插件时需要 JDK 21；本机真实 GUI smoke 需要 GoLand 2026.1.3 或验证矩阵指定的 exact build。
+- 构建 GoLand 插件时需要 JDK 25；本机真实 GUI 验收仅使用 GoLand 2026.2.1.1 / GO-262.9437.286。
 - 首次安装依赖和 Electron runtime 时可访问 npm registry 与 GitHub。
 - GUI smoke 按改动范围安装 VS Code、Cursor 或 GoLand。
 
@@ -45,7 +45,7 @@ code --install-extension vitest.explorer
 
 仓库的 `.vscode/` 配置会使用 `node_modules/typescript/lib` 中的项目 TypeScript、启用显式的 ESLint 保存修复、隐藏生成目录，并提供 `ReqWS: start`、`ReqWS: check`、`ReqWS: test (watch)` 和 `ReqWS: check GoLand plugin` 任务。项目未配置统一 formatter，因此工作区不启用 format-on-save；以 ESLint 和现有代码风格为准。
 
-若 VS Code 已安装但终端找不到 `code`，在命令面板运行 `Shell Command: Install 'code' command in PATH`，然后重开终端。修改 GoLand 插件生产代码和运行 IntelliJ Platform 调试仍以 GoLand 2026.1.3 + JDK 21 为准；VS Code 只承担通用文本编辑和根项目任务入口。
+若 VS Code 已安装但终端找不到 `code`，在命令面板运行 `Shell Command: Install 'code' command in PATH`，然后重开终端。修改 GoLand 插件生产代码和运行 IntelliJ Platform 调试仍以 GoLand 2026.2.1.1 + JDK 25 为准；VS Code 只承担通用文本编辑和根项目任务入口。
 
 ## 2. 启动与日常命令
 
@@ -128,7 +128,7 @@ React event
 
 全局 state 位于 Electron `userData/reqws/state.v1.json`。每个工作区还有 `.reqws/workspace.json`，以及可能位于另一目录的 managed `.code-workspace`。状态、manifest 和 managed 文件均通过同目录临时文件和原子发布或替换写入；修改持久化代码时必须保留损坏备份、no-overwrite 与公开工件不自动删除的语义。
 
-`.reqws/workspace.json` 同时是 GoLand 插件的只读契约。Desktop 仍是唯一 writer；TypeScript Zod 与 Kotlin parser 必须共享 manifest golden fixtures，并共同读取 `integrations/goland/src/test/resources/contracts/repository-url-safety.json`，保持 schema v1、路径、重复 identity、UTF-8/size 和安全 Git URL 的接受/拒绝结果一致。插件不得访问或记录 manifest 中的 repository URL。
+`.reqws/workspace.json` 同时是 GoLand 插件的只读契约。Desktop 仍是唯一 writer；TypeScript Zod 与 Kotlin parser 必须共享 manifest golden fixtures，并共同读取 `integrations/goland/src/test/resources/contracts/repository-url-safety.json`，保持 schema v1、路径、重复 identity、UTF-8/size 和安全 Git URL 的接受/拒绝结果一致。插件不得访问或记录 manifest 中的 repository URL。GoLand 唯一入口为 `.reqws/ide/goland`；独立绑定/加载选择契约、目录身份及 TS/Kotlin 共用 fixture 见[技术方案](../changes/goland-workspace-loading/technical-design.md)。
 
 Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*` 重定向变量，并维持非交互凭据策略。路径写入前必须重新做 realpath、父路径 containment 和 symlink 检查。
 
@@ -187,7 +187,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | Integration | 真实临时 Git、分支语义、workspace 生命周期、回滚和安装脚本 | 修改 Git、文件系统、状态或安装行为时运行。 |
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
-| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选运行原 GoLand 2026.1.3/2026.2 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
+| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选运行单一 GoLand GO-262.9437.286 目标；中间子任务按影响验证装配，不重复完整矩阵。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -199,7 +199,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 Gradle 按 Wrapper 的明确版本和官方 HTTPS `distributionUrl` 管理，当前仍为 9.3.0；不设置 `distributionSha256Sum`，不增加替代 checksum 文件或预期值。保留 URL 校验、超时、缓存及既有 Wrapper JAR 验证；这不等于验证下载 ZIP 的预期字节。升级只维护明确版本，不改为动态版本或个人二进制。
 
-当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.1.3 target 与 Java/JVM 21；plugin ID 是 `com.reqws.workspace`，`since-build` 为 261，不设置 `until-build`。直接命令：
+当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.2.1.1 target 与 Java/JVM 25；plugin ID 是 `com.reqws.workspace`，`since-build` 与 `until-build` 均为 `262.9437.286`。直接命令：
 
 ```bash
 cd integrations/goland
@@ -208,7 +208,7 @@ cd integrations/goland
 ./gradlew runIde
 ```
 
-`verifyPlugin` 对 GoLand 2026.1.3 和 2026.2 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
+`verifyPlugin` 对 GoLand GO-262.9437.286 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
 ### 插件开发与验收边界
 
@@ -226,7 +226,7 @@ VCS 始终只读：生产代码不得调用 mapping writer、主动调用可改�
 
 使用普通文本 Git fixture，覆盖 manifest、仓库增删重加、自动/手动刷新、项目范围、错误恢复和配置保护。[任务入口](../changes/ide-plugin-language-decoupling/tasks/README.md)采用 S1 核心语义 → S2 调度/依赖收尾 → V 最终回归，默认同分支串行。直接打开 [S1](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md)或 [S2](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md)即可查看该步实施、实际受影响方法/类的最小回归和交接要求；最后按[独立 V 文档](../changes/ide-plugin-language-decoupling/testing/final-acceptance.md)在最终组合代码上执行完整插件与兼容检查，不再从总方案拼接步骤。代码引用扫描由现有构建门禁按有效输入集中执行，不在每个 GUI 动作后人工重复。
 
-真实 GUI 仅补自动化无法证明的必要集成，按[最终验收文档](../changes/ide-plugin-language-decoupling/testing/final-acceptance.md)执行最小链。GoLand 原生 Git 全流程、代码补全/引用、Go Modules、GOROOT、用户项目 `go test`、运行或调试不再是常规门禁。移除仓库不是禁止运行磁盘上的代码；重新加入不保证语言运行配置即时恢复。发现可归因于 ReqWS 的真实范围错误仍需修复。
+真实 GUI 仅补自动化无法证明的必要集成，按[工作加载集合验收](../changes/goland-workspace-loading/test-plan.md)执行最小链。GoLand 原生 Git 全流程、代码补全/引用、Go Modules、GOROOT、用户项目 `go test`、运行或调试不再是常规门禁。移除仓库不是禁止运行磁盘上的代码；重新加入不保证语言运行配置即时恢复。发现可归因于 ReqWS 的真实范围错误仍需修复。
 
 首次打开/恢复、安全与并发回归仍按受影响层验证；版本特有 GUI、50+20 规模、sleep/wake、视觉/无障碍或长时间 idle 按改动风险选择，不机械重复旧全矩阵。测试、工件和实际 GUI 证据绑定候选；未运行项明确记录，不从历史 GO 或 ZIP 构建推出新候选通过。
 
@@ -272,7 +272,7 @@ npm run package:macos -- --skip-ci --skip-check
 
 GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。历史 ad-hoc 资产保持不变；后续工作流采用[个人自签名方案](../changes/macos-self-update/technical-design.md)，带 Hardened Runtime，但没有 Developer ID 或 Apple 公证。首个可更新版本需要手动 bootstrap。
 
-CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
+CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 25 上执行全部既有插件检查及单目标 GO-262.9437.286 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
 
 Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后清理信任、钥匙串及 P12。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
 

@@ -1,7 +1,7 @@
 ---
 title: GoLand 工作加载集合任务拆分与 Agent 协作
 type: technical-design
-status: draft
+status: active
 updated: 2026-09-19
 ---
 

@@ -34,6 +34,7 @@ data class ReqwsProjectState(
   val validatedProjectionDigest: String? = null,
   val lastError: ReqwsProjectError? = null,
   val vcsInspection: VcsRootInspection? = null,
+  val userRootCoverage: Set<String> = emptySet(),
 ) {
   companion object {
     val INACTIVE = ReqwsProjectState(ReqwsLifecycleState.INACTIVE)

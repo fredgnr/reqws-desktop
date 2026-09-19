@@ -4,6 +4,7 @@ internal const val GIT_VCS_NAME = "Git"
 
 enum class VcsRepositoryStatus {
   CONFIGURED,
+  NOT_LOADED,
   MISSING_DIRECTORY,
   NOT_GIT,
   NOT_CONFIGURED,
@@ -13,7 +14,7 @@ enum class VcsRepositoryStatus {
 
 enum class VcsWorkspaceDiagnosticCode {
   WORKSPACE_WIDE_GIT_ROOT,
-  INACTIVE_GIT_ROOT,
+  EXTRA_GIT_ROOT,
   GIT_PLUGIN_UNAVAILABLE,
   INSPECTION_FAILED,
 }
@@ -28,8 +29,8 @@ data class VcsRootInspection(
   val workspaceDiagnostics: List<VcsWorkspaceDiagnosticCode>,
 ) {
   val degraded: Boolean
-    get() = repositoryStatuses.any { it.status != VcsRepositoryStatus.CONFIGURED } ||
-      workspaceDiagnostics.isNotEmpty()
+    get() = repositoryStatuses.any { it.status !in setOf(VcsRepositoryStatus.CONFIGURED, VcsRepositoryStatus.NOT_LOADED) } ||
+      workspaceDiagnostics.any { it != VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT }
 
   val requiresManualConfiguration: Boolean
     get() = repositoryStatuses.any {
@@ -38,7 +39,6 @@ data class VcsRootInspection(
         it.status == VcsRepositoryStatus.DUPLICATE
     } || workspaceDiagnostics.any {
       it == VcsWorkspaceDiagnosticCode.WORKSPACE_WIDE_GIT_ROOT ||
-        it == VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT ||
         it == VcsWorkspaceDiagnosticCode.GIT_PLUGIN_UNAVAILABLE
     }
 

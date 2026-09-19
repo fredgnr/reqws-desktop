@@ -1,8 +1,8 @@
 ---
 title: GoLand 独立入口与工作加载集合技术方案
 type: technical-design
-status: draft
-updated: 2026-09-19
+status: active
+updated: 2026-09-20
 ---
 
 # GoLand 独立入口与工作加载集合技术方案
@@ -11,7 +11,7 @@ updated: 2026-09-19
 
 ## 1. 基线、结论与适用范围
 
-源码基线为 `cb25cbba2b58fc767d48cbbc001004082e7de390`，已包含 macOS 自更新变更；不得从较旧的 `701b8bab` 全量覆盖服务或活动门禁。当前实现仍是 workspace-root + owned excludes；这里描述直接替换当前实现的唯一独立入口模式，不宣称已经交付。
+设计源码基线为 `cb25cbba2b58fc767d48cbbc001004082e7de390`，已包含 macOS 自更新变更；不得从较旧的 `701b8bab` 全量覆盖服务或活动门禁。基线实现为 workspace-root + owned excludes；此处定义唯一独立入口契约，实际实施及按次验收见[实施记录](implementation-2026-09-19.md)。
 
 用户报告在 `GO-262.9437.286` 上验证了多 roots、精确 shell 排除、树过滤、空集合重开和具体用户 root 保护。其结论只支持进入实现。报告来源、源码路径及未验证范围统一见[验证依据](verification-basis.md)，不在本方案复制工件摘要。
 
@@ -23,7 +23,7 @@ updated: 2026-09-19
 
 本轮唯一 GoLand 目标为验证报告中的 `2026.2.1.1 / GO-262.9437.286`。S0 将编译 SDK、descriptor 和验证目标统一到该版本；不保留 261 或其他历史版本矩阵，不按 IDE 版本分支。不测试未来版本，不以某个跨度的版本号代替实际验证。
 
-可以调整当前数据契约并删除历史容错/别名逻辑；TS/Kotlin/IPC 和调用点必须一起更新，但无需继续接受旧格式。复用通用校验/存储原语是减少重复实现，不是保留历史运行路径。此次仍是文档修改，实际代码和构建清理在 S0–S4 执行。
+可以调整当前数据契约并删除历史容错/别名逻辑；TS/Kotlin/IPC 和调用点必须一起更新，但无需继续接受旧格式。复用通用校验/存储原语是减少重复实现，不是保留历史运行路径。实际代码和构建清理按 S0–S4 执行，当前进度见[实施记录](implementation-2026-09-19.md)。
 
 删除范围是受本需求替代的仓库源码、旧协议实现、专用测试和过时文档，不是用户磁盘上的仓库、`.idea` 或业务文件。新模式的 ownership、取消恢复、原子写入与 trust 检查是当前正确性要求，继续保留。
 
@@ -111,6 +111,8 @@ IDE project basePath 为 `.reqws/ide/goland`，workspaceRoot 从这三个固定�
 
 工作区详情直接提供“默认全部”“指定仓库”、勾选、保存、保存并打开，没有启用新模式开关或旧入口按钮；仅保存选择不重写 manifest 或 `.code-workspace`。在选择尚未保存、请求进行中、冲突或失败时显示明确状态；新区域需键盘可达和中英文文案，按既有 i18n skill 走翻译检查。
 
+详情采用用户选定的方案一布局：勾选框与仓库名称/相对路径同行，规则及完整路径按需展开，保存、保存并打开和重载固定在底部。Cursor 的工作区文件与代码目录入口收进同一菜单，成员管理独立折叠；加载选择不承担成员增删。折叠内容不进入对话框焦点循环，保存状态旁始终保留 IDE 同步确认提示。视觉与交互证据见[设计验证](../../../design-qa.md)。
+
 所有 ReqWS GoLand 启动动作都走“校验本版 workspace → 准备/复用合法 shell → 打开 shell”这一条路径。直接删除原目录启动命令分支、旧模式 UI、fallback 和能力协商代码。手工在 GoLand 打开普通目录不触发 ReqWS 的旧适配器。
 
 本版不迁移历史 workspace、原 `<R>/.idea`、旧 ownership ledger 或旧配置字段。不符合当前格式的输入明确报错，由用户另建符合本版格式的配置；不能先破坏旧配置再创建新配置。原目录中的磁盘数据不主动清理，不测试旧窗口/旧插件能否继续工作，也不提供版本降级、旧入口回退或设置合并。
@@ -129,13 +131,15 @@ IDE project basePath 为 `.reqws/ide/goland`，workspaceRoot 从这三个固定�
 
 冷启动不得从持久化 Synced/digest 初始化成功证明；重新读取绑定、ledger、实时模型与 PFI。`.idea` 尚未就绪沿用有限 startup readiness 等待，不能无限创建重试作业，也不由 Desktop/插件清空或强制重写 `.idea`。首次未信任/读取阶段允许暂态入口展示，正常同步完成后才满足隐藏契约。
 
+首次 startup 在受信任、project 已 initialized、绑定/最新 generation 仍有效、从未观察到 metadata 且无已有投影记录时，可以通过公开 `Project.scheduleSave()` 请求 IDE 正常保存一次；只在 `.idea` 仍确认为缺失时排队，不手写目录。该请求位于模型事务/目录锁外，仍沿原有界 readiness loop 等待真实落盘；未 initialized 的 tick 不消耗一次性标记。既存或曾被观察后移走的 metadata、所有权冲突、Safe Mode 不触发保存，排队也不是成功证明。
+
 绑定缺失/非法/被替换：冻结受管增删，不将其转为空集合；既有模型保留并报告错误。撤销绑定能力缓存并以 S0 验证的路径使入口排除/树过滤失效；不得把属于新 identity 的目录继续隐藏。只有 selection 内容错误而同一绑定身份仍可信时，可以保留上次有效模型和 shell 适配，但状态必须说明 stale，不报新配置已生效。恢复后自动全链重核，不依赖用户反复 Sync Now。
 
 ## 6. Module 与 root 级所有权
 
 ### 6.1 唯一受管承载 module
 
-在项目 metadata 就绪后创建一个专用 module，使用唯一稳定 ID 和 shell/.idea/reqws 下的精确 module 文件路径；SDK/类型采用 S0 确认的通用平台支持，不按语言构建文件挑选。创建前记录意图，重名或同路径不明条目 fail closed，不仅按 `reqws-*` 名字认领。
+在项目 metadata 就绪后创建一个专用 module，使用唯一稳定 ID 和 shell/.idea/reqws 下的精确 module 文件路径；类型通过公开 `ModuleTypeManager.getInstance().getDefaultModuleType().getId()` 采用目标平台已注册的默认类型，不硬编码 `EMPTY_MODULE`，不引用 Go/Web 实现类、不调用语言 module builder、不按语言构建文件挑选。创建前记录意图，重名或同路径不明条目 fail closed，不仅按 `reqws-*` 名字认领。
 
 原生 module、shell Content Root、ProjectRootEntity 不认领、不删除。承载 module 即使受管集合为空也保留；模块目录/名称不因仓库数量而改变。用户可以在该 module 中添加自己的 root，插件不能清空整个 contentRoots 数组或对整个 module 做 replaceBySource。
 
@@ -183,6 +187,8 @@ intent 与 `.iml` 保存不是跨文件原子事务。不能因 API 返回就清
 
 ### 7.3 单一目标 SDK 的 API 决策
 
+S0 已在实际 GO-262.9437.286 SDK 验证 `ProjectRootManagerEx.makeRootsChange(Runnable, RootsChangeRescanningInfo)` 包裹真实排除缓存变化能够使 PFI 重读策略，且无需修改 Workspace Model 实体。仅在 capability 发生变化时调用，使用 `TOTAL_RESCAN` 覆盖策略撤销后的内容恢复；不调用 Experimental 的 `AdditionalLibraryRootsListener`。当前公开 API 判定及最小平台回归见[实施记录](implementation-2026-09-19.md)。
+
 用户已撤销本需求的旧平台兼容要求，因此现行规范中的 261 编译基线和旧矩阵不是新实现的约束，S0 应同步相关说明和配置。API 使用政策与跨版本兼容是两个问题：spike 报告中的 `AdditionalLibraryRootsListener` 为 Experimental，`updateProjectModel` 为 Obsolete；现行 Internal/Experimental 禁令没有因此被默认为全部取消。
 
 S0 仅对目标 `GO-262.9437.286` SDK 确定具体签名、声明注解、可持久化实体、锁要求、模型 update 入口与排除缓存失效路径；不为其他版本设计 adapter 或 fallback。优先复用真实模型更新产生的正常事件；必须证明冷启动“无模型差异”、空集合、绑定撤销和 trust 转换也能正确重读策略，不能为了事件伪造 roots 变更或无限广播。
@@ -200,11 +206,13 @@ S0 仅对目标 `GO-262.9437.286` SDK 确定具体签名、声明注解、可持
 | LOADED | 当前有效投影中的存在仓库；不代表语言就绪。 |
 | NOT_LOADED | 仍属于 M，但未请求加载；正常状态。 |
 | MISSING | 已请求加载但目录缺失，不假装已卸载成功。 |
-| USER_ROOT_COVERAGE | 已退出受管加载，但仍被用户或其他父 root 包含。 |
+| USER_ROOT_COVERAGE | 未被 ReqWS 选中加载，但仍被用户或其他父 root 包含。 |
 | OWNERSHIP_CONFLICT | 删除权或配置保存不确定，不做破坏性修复。 |
 | SAFE_MODE / BINDING_ERROR / MODEL_ERROR | 沿现有生命周期映射，不吞成空集合。 |
 
 具体 i18n key 和本版状态枚举由 S0 冻结，删除废弃状态/映射，不设旧枚举兼容层；不另建互相矛盾的全套状态机。Synced 仅表示本 generation 的 ReqWS 契约收敛，无未处理失败；保存选择成功、历史摘要、旧 GUI GO 都不能初始化它。
+
+仓库列表保持紧凑单行，仓库名与状态使用有界列宽；长状态不能挤掉仓库名或越出行边界。USER_ROOT_COVERAGE 使用简短状态，完整说明放在安全转义的悬停提示和可访问性描述中。未曾选中过的仓库同样可能被用户 root 包含，文案不暗示它一定发生过退出加载操作。
 
 VCS observer 的模型期望集改为 L 中存在的仓库；M − L 的 mappings 是用户保留配置，不按缺失映射报失败，也不一概归类为“已从需求删除的 retained repo”。M 之外的已有 mapping 只作为额外用户 VCS 配置报告，不为旧排除策略继续扫描磁盘推导 retained 成员。宽范围/显式映射是否存在只诊断，不写 `.idea/vcs.xml` 或调用 detector/setters。因用户 U 导致范围不同必须如实显示，不承诺 Git Log/Commit 自动缩小。
 
@@ -214,7 +222,7 @@ VCS observer 的模型期望集改为 L 中存在的仓库；M − L 的 mapping
 |---|---|
 | shared | 独立 GoLand 绑定/选择 schema、输入输出 DTO、错误码；定义本版成员/加载语义，TS/Kotlin 同步更新，不保留旧 schema reader。 |
 | Main | 新 GoLandWorkspaceService、原子写入与路径验证；接入已有 coordinator/activity gate；editor-launcher 仅启动 shell，删除旧模式分支。 |
-| IPC/preload/renderer | typed read/save/enable 调用、工作区详情加载区、错误和冲突反馈、i18n。 |
+| IPC/preload/renderer | typed read/prepare/save 调用、工作区详情加载区、错误和冲突反馈、i18n。 |
 | Plugin loading/contract | 固定绑定识别、两个文件的快照与集合求交。 |
 | Plugin loading/model | module、root claims/markers、journal、差量更新和 PFI verifier。 |
 | Plugin loading/shell | 精确 exclusion、不可变缓存、Project View provider、公开失效通知适配。 |

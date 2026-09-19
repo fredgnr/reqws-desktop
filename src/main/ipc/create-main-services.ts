@@ -17,6 +17,7 @@ import {
   EditorLauncher,
   type WorkspacePaths,
 } from '../services/editor-launcher';
+import { GoLandWorkspaceService } from '../services/goland-workspace-service';
 import { GitRunner } from '../services/git-runner';
 import { OperationReporter } from '../services/operation-reporter';
 import { RepositoryService } from '../services/repository-service';
@@ -66,27 +67,6 @@ function normalizeGitUnavailable(error: unknown): ReqwsError {
 export interface MainServiceFactoryOptions {
   resolveGit?: () => Promise<GitRunner>;
   getPreferredSystemLanguages?: () => readonly string[];
-}
-
-export async function resolveReadyWorkspacePaths(
-  workspaceService: Pick<WorkspaceService, 'get'>,
-  workspaceId: string,
-): Promise<WorkspacePaths> {
-  // WorkspaceService.get re-reads and validates the bound manifest instead of
-  // trusting the renderer or the persisted summary paths.
-  const workspace = await workspaceService.get(workspaceId);
-  if (workspace.status !== 'ready') {
-    throw new ReqwsError({
-      code: 'WORKSPACE_PATH_MISSING',
-      message: 'Workspace must be Ready before it can be opened in GoLand.',
-      detail: workspace.statusDetail,
-      stage: 'launching',
-    });
-  }
-  return {
-    workspaceFilePath: workspace.workspaceFilePath,
-    rootPath: workspace.rootPath,
-  };
 }
 
 export async function createMainServices(
@@ -143,14 +123,14 @@ export async function createMainServices(
       rootPath: workspace.rootPath,
     };
   };
+  const goLandWorkspaces = new GoLandWorkspaceService(editorWorkspaceService, workspaceMutations);
   const editorLauncher = new EditorLauncher(
     resolveEditorWorkspacePaths,
     {
       resolveGitPath: git
         ? async () => git.gitPath
         : async () => Promise.reject(gitUnavailableError),
-      resolveGoLandWorkspacePaths: (workspaceId) =>
-        resolveReadyWorkspacePaths(editorWorkspaceService, workspaceId),
+      prepareGoLandWorkspace: (workspaceId) => goLandWorkspaces.prepare({ workspaceId }),
     },
   );
 
@@ -177,6 +157,7 @@ export async function createMainServices(
     createWorkspaceService: (event: IpcMainInvokeEvent) =>
       buildWorkspaceService(new OperationReporter(event.sender)),
     editorLauncher,
+    goLandWorkspaces,
     dialog,
     windowFromWebContents: (webContents) =>
       BrowserWindow.fromWebContents(webContents),

@@ -1,11 +1,14 @@
 ---
 title: GoLand 插件支持技术方案
 type: technical-design
-status: active
+status: superseded
+superseded-by: ../goland-workspace-loading/README.md
 updated: 2026-09-19
 ---
 
 # GoLand 插件支持技术方案
+
+入口、模型、加载状态和平台基线已由[GoLand 工作加载集合](../goland-workspace-loading/README.md)替代；本文保留原实现的契约背景，不能据此要求新旧兼容。
 
 本文定义 ReqWS GoLand 支持的当前实现方式、最终架构决策与安全边界。方案只覆盖跨 IDE manifest 契约、Desktop GoLand 入口和 GoLand 插件 v0.1，不建立范围外能力的协议或代码骨架。
 

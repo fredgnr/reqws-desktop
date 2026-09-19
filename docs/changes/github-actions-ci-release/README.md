@@ -15,3 +15,5 @@
 | [Release 交付说明](delivery.md) | delivery | active | 说明 arm64 app、GoLand 插件 ZIP 的获取、校验、安装和分发限制。 |
 
 本需求不改写 [MVP 交付快照](../mvp/README.md)。v0.1.1 的正式发布与资产复验已记录于测试索引；新的资产契约只适用于后续 tag，不删除历史 Intel 资产。可用版本和验证范围以对应报告及 GitHub Release 为准。
+
+当前 GoLand 构建使用 JDK 25 与唯一 GO-262.9437.286 目标，依据[独立入口方案](../goland-workspace-loading/README.md)；本包的历史 Release 结论不作为新候选验收。

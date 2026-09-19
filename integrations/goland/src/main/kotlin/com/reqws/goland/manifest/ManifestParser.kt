@@ -198,7 +198,7 @@ object ManifestParser {
 }
 
 /** Matches ECMAScript TrimString, which backs Zod's `z.string().trim()`. */
-private fun String.trimEcmaWhitespace(): String {
+internal fun String.trimEcmaWhitespace(): String {
   var start = 0
   var end = length
   while (start < end && this[start].isEcmaTrimCharacter()) start += 1
@@ -226,24 +226,24 @@ private fun Char.isEcmaTrimCharacter(): Boolean = when (this) {
   else -> false
 }
 
-private sealed interface JsonValue
+internal sealed interface JsonValue
 
-private data class JsonObject(val values: Map<String, JsonValue>) : JsonValue
+internal data class JsonObject(val values: Map<String, JsonValue>) : JsonValue
 
-private data class JsonArray(val values: List<JsonValue>) : JsonValue
+internal data class JsonArray(val values: List<JsonValue>) : JsonValue
 
-private data class JsonString(val value: String) : JsonValue
+internal data class JsonString(val value: String) : JsonValue
 
-private data class JsonNumber(val value: BigDecimal) : JsonValue
+internal data class JsonNumber(val value: BigDecimal) : JsonValue
 
-private data class JsonBoolean(val value: Boolean) : JsonValue
+internal data class JsonBoolean(val value: Boolean) : JsonValue
 
-private data object JsonNull : JsonValue
+internal data object JsonNull : JsonValue
 
-private class JsonSyntaxException : Exception()
+internal class JsonSyntaxException : Exception()
 
 /** A deliberately small, dependency-free RFC 8259 parser for the manifest contract. */
-private class JsonParser(private val input: String) {
+internal class JsonParser(private val input: String) {
   private var offset = 0
 
   fun parseObjectDocument(): Map<String, JsonValue> {

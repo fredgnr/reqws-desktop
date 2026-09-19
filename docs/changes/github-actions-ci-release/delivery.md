@@ -47,7 +47,7 @@ shasum -a 256 -c SHA256SUMS
 - 后续 `.app` 使用固定个人自签名与 Hardened Runtime，没有 Apple Developer ID 或 Apple 公证，不是 Gatekeeper-ready 公共发行包。
 - `codesign` 结构校验不代表其他 Mac 会信任应用；不应通过关闭 Gatekeeper 或移除安全属性绕过保护。
 - 不提供 DMG、后台自动更新、自动插件安装或跨架构 universal binary。
-- 当前插件的 IDE 编译基线与 261/262 验证矩阵没有扩大；真实 GUI 验收缺口仍独立记录。
+- 当前插件编译/Verifier 目标已由[独立入口需求](../goland-workspace-loading/README.md)限定为 GO-262.9437.286，使用 JDK 25；历史发布证据不变，当前候选 GUI 验收独立记录。
 
 正式公开证书、Environment 配置和实际 GitHub 两版本/干净用户验收尚待完成，见[自更新实施记录](../macos-self-update/implementation-2026-09-19.md)。历史 ad-hoc Release 保持原状。
 

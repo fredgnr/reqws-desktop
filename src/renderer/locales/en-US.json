@@ -160,6 +160,10 @@
   },
   "workspaceDetail": {
     "openCursorRoot": "Open code folder in Cursor",
+    "openCursorWorkspace": "Open workspace file",
+    "filesTitle": "Workspace files",
+    "filesSummary": "ReqWS automatically maintains workspace files.",
+    "manageTitle": "Manage workspace",
     "revealInFinder": "Show in Finder",
     "editorDisabledPathIncomplete": "The workspace paths are incomplete, so it cannot be opened in an editor.",
     "editorsUnavailable": "These editors are unavailable: {{editors}}",
@@ -351,7 +355,11 @@
       "UPDATE_UNSUPPORTED_LOCATION": "Before updating, install ReqWS in a writable Applications folder, either the system folder or your personal folder.",
       "UPDATE_CONFIG_INVALID": "The update configuration is invalid. Use an app release from a trusted source.",
       "UPDATE_RESTART_REQUIRED": "Restart ReqWS before trying to update again.",
-      "UPDATE_TIMEOUT": "The update request timed out. Check for updates again."
+      "UPDATE_TIMEOUT": "The update request timed out. Check for updates again.",
+      "GOLAND_ENTRY_CONFLICT": "The GoLand entry directory already exists but has no valid binding to this workspace. Keep the directory and resolve the conflict manually.",
+      "GOLAND_BINDING_INVALID": "The GoLand binding is invalid or the directory has changed. Check the configuration and reload.",
+      "GOLAND_SELECTION_CONFLICT": "The loading configuration has changed. Your selection has not been saved. Reload before editing again.",
+      "GOLAND_WRITE_FAILED": "The GoLand loading configuration could not be saved. Check directory permissions and available disk space."
     }
   },
   "updates": {
@@ -385,5 +393,28 @@
       "invalid-config": "The update configuration is invalid. Other features remain available.",
       "restart-required": "Restart ReqWS before retrying the update. Other features remain available."
     }
+  },
+  "golandLoading": {
+    "title": "GoLand repository loading",
+    "description": "Choose which repositories to load.",
+    "mode": "Loading mode",
+    "all": "All by default",
+    "selected": "Selected repositories",
+    "count": "{{count}} repositories selected ({{total}} total)",
+    "count_one": "{{count}} repository selected ({{total}} total)",
+    "count_other": "{{count}} repositories selected ({{total}} total)",
+    "saving": "Saving…",
+    "loading": "Reading loading configuration…",
+    "unsaved": "Unsaved changes",
+    "saved": "Selection saved",
+    "confirmSync": "Check the IDE sync status in the ReqWS plugin in GoLand.",
+    "membershipSummary": "Unloaded repositories remain in this workspace.",
+    "rulesTitle": "Loading rules",
+    "rulesSummary": "Learn how loading selections and newly added repositories are handled.",
+    "allSummary": "Automatically load current and newly added repositories.",
+    "save": "Save selection",
+    "saveAndOpen": "Save and open GoLand",
+    "reload": "Reload saved configuration",
+    "membershipNotice": "Leaving a repository unloaded does not delete it or change workspace membership. Newly added repositories are not selected automatically in Selected repositories mode. Saving removes selections for repositories that are no longer members."
   }
 }

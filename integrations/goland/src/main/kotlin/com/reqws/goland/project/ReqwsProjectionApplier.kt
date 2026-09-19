@@ -7,7 +7,7 @@ import com.intellij.openapi.project.Project
 import com.reqws.goland.manifest.ManifestSnapshot
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
-import com.reqws.goland.projectmodel.ReqwsProjectModelAdapter
+import com.reqws.goland.loading.model.LoadedProjectionService
 import kotlinx.coroutines.CancellationException
 
 internal object ReqwsStableErrorCode {
@@ -88,8 +88,6 @@ internal class ReqwsProjectionApplier(
       ProjectModelErrorCode.UNTRUSTED_PROJECT -> ReqwsStableErrorCode.SAFE_MODE_BLOCKED
       ProjectModelErrorCode.PROJECT_METADATA_NOT_READY ->
         ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED
-      ProjectModelErrorCode.INVALID_OWNERSHIP_STATE,
-      ProjectModelErrorCode.NESTED_CONTENT_ROOT_CONFLICT,
       ProjectModelErrorCode.OWNERSHIP_CONFLICT -> ReqwsStableErrorCode.OWNERSHIP_CONFLICT
       ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED ->
         ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED
@@ -122,15 +120,16 @@ internal class ReqwsProjectionApplier(
     fun forProject(
       project: Project,
       isServiceDisposed: () -> Boolean = { false },
+      isCurrent: () -> Boolean = { true },
     ): ReqwsProjectionApplier {
       val isDisposed = { project.isDisposed || isServiceDisposed() }
       return ReqwsProjectionApplier(
         isTrusted = { TrustedProjects.isProjectTrusted(project) },
         isProjectDisposed = isDisposed,
         projectModel = ProjectModelProjection { snapshot ->
-          project.service<ReqwsProjectModelAdapter>().apply(
-            snapshot = snapshot,
-            isServiceDisposed = isDisposed,
+          project.service<LoadedProjectionService>().apply(
+            snapshot = requireNotNull(snapshot.loading) { "Only a verified shell binding can project roots." },
+            current = { !isDisposed() && isCurrent() },
           )
         },
       )

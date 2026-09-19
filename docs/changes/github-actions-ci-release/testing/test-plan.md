@@ -11,7 +11,7 @@ updated: 2026-09-19
 
 ## 环境与边界
 
-Desktop 与插件构建仍使用 `macos-15`，分别要求 Node 24 和 JDK 21；轻量 tag 校验与 publish 使用 Ubuntu。Python 3 标准库用于插件附件校验和回归测试，不新增 pip 依赖。Verifier 保留 GoLand 2026.1.3 与 2026.2。
+Desktop 与插件构建仍使用 `macos-15`，分别要求 Node 24 和 JDK 25；轻量 tag 校验与 publish 使用 Ubuntu。Python 3 标准库用于插件附件校验和回归测试，不新增 pip 依赖。Verifier 仅验证 GoLand GO-262.9437.286。
 
 不验证未实现的 Developer ID、公证、DMG、后台自动更新或 Marketplace 发布。个人签名、Gatekeeper 和手动应用内更新按[自更新 U1–U9](../../macos-self-update/technical-design.md#9-最小验证计划与发布门禁)验收；本地回归不读取正式 Secrets，不在未经明确授权时创建、移动或删除远端 tag，也不安装/重启真实 GoLand。
 
@@ -22,7 +22,7 @@ Desktop 与插件构建仍使用 `macos-15`，分别要求 Node 24 和 JDK 21；
 | 完整项目基线 | `npm run check` 仍运行类型、lint、i18n、docs 和全部 Vitest；文档单独可用 `npm run docs:check`。 |
 | Workflow 静态检查 | YAML、shell 语法、完整 SHA 引用、触发器、job 名称和最小权限正确；`publish.needs` 包含 validate/checks/package/goland-plugin。 |
 | 应用 smoke | 保留 `npm ci` 和 arm64 package smoke，不安装、不发布；Release 归档后再次检查解压 bundle 的 ID、版本、arm64 架构和 codesign。 |
-| 完整插件检查 | 保留 tests、project/structure、261/262 verifier、buildPlugin 及 forbidden-symbol 依赖；CI 与 Release 使用相同 releaseVersion 覆盖和附件校验路径。 |
+| 完整插件检查 | 保留 tests、project/structure、GO-262.9437.286 verifier、buildPlugin 及 forbidden-symbol 依赖；CI 与 Release 使用相同 releaseVersion 覆盖和附件校验路径。 |
 | 插件附件回归 | `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；生成临时 ZIP/JAR，覆盖正确字节和 SHA-256、缺失/多余/损坏 ZIP、错误版本/ID、缺失/重复 descriptor、不安全路径、symlink、非法版本和覆盖保护。 |
 | 版本和来源 | 覆盖合法版本、前导零、缺段、预发布后缀、三处版本不一致、默认分支不可达 commit；只允许完整一致且默认分支可达的 tag。 |
 | 资产集合 | 中间文件恰好为 app/plugin ZIP、latest-mac.yml 及三份 checksum 片段；公开附件恰好四项。缺失、额外、篡改、摘要/size 不匹配、metadata 引用插件等均失败；draft 重新下载验证后才公开。 |

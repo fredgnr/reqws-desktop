@@ -48,9 +48,10 @@ data class ManifestSnapshot(
   val repositories: List<ResolvedRepository>,
   val digestSha256: String,
   val diagnostics: List<ManifestDiagnostic>,
+  val loading: com.reqws.goland.loading.contract.LoadingSnapshot? = null,
 ) {
   val missingRepositoryCount: Int
-    get() = repositories.count { it.availability == RepositoryAvailability.MISSING }
+    get() = repositories.count { it.availability == RepositoryAvailability.MISSING && (loading == null || it.repository.catalogRepositoryId in loading.loadedIds) }
 
   override fun toString(): String =
     "ManifestSnapshot(digestSha256=$digestSha256, " +

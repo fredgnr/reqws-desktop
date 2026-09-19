@@ -15,6 +15,7 @@ import org.gradle.work.DisableCachingByDefault
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.ComposedJarTask
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.zip.ZipFile
@@ -109,21 +110,30 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
 group = "com.reqws.goland"
 // CI and tag builds verify the same explicit version; local builds retain their default.
-version = providers.gradleProperty("releaseVersion").orElse("0.1.0").get()
+version = providers.gradleProperty("releaseVersion").orElse("0.1.4").get()
 
 dependencies {
   testImplementation("junit:junit:4.13.2")
 
   intellijPlatform {
-    goland("2026.1.3")
+    val localSdk = providers.gradleProperty("reqwsGoLandSdkPath").orNull
+    if (localSdk == null) {
+      goland("2026.2.1.1")
+    } else {
+      val info = file("$localSdk/Contents/Resources/product-info.json")
+      require(info.isFile && info.readText().contains("\"buildNumber\": \"262.9437.286\"")) {
+        "reqwsGoLandSdkPath must identify GO-262.9437.286"
+      }
+      local(localSdk)
+    }
     testFramework(TestFrameworkType.Platform)
   }
 }
 
 kotlin {
-  jvmToolchain(21)
+  jvmToolchain(25)
   compilerOptions {
-    jvmTarget = JvmTarget.JVM_21
+    jvmTarget = JvmTarget.JVM_25
     // Avoid compatibility stubs for IntelliJ interfaces. Those synthetic overrides can make
     // Plugin Verifier report deprecated/experimental default methods that plugin code never uses.
     jvmDefault = JvmDefaultMode.NO_COMPATIBILITY
@@ -132,7 +142,7 @@ kotlin {
 
 tasks {
   withType<JavaCompile>().configureEach {
-    options.release = 21
+    options.release = 25
   }
 }
 
@@ -147,18 +157,28 @@ intellijPlatform {
     name = "ReqWS"
     version = project.version.toString()
     ideaVersion {
-      sinceBuild = "261"
+      sinceBuild = "262.9437.286"
+      untilBuild = "262.9437.286"
     }
   }
   pluginVerification {
     ides {
-      create(IntelliJPlatformType.GoLand, "2026.1.3")
-      create(IntelliJPlatformType.GoLand, "2026.2")
+      val localSdk = providers.gradleProperty("reqwsGoLandSdkPath").orNull
+      if (localSdk == null) create(IntelliJPlatformType.GoLand, "2026.2.1.1") else local(localSdk)
     }
   }
 }
 
 val forbiddenProductionSymbols = listOf(
+  "ExcludeUrlOrderEntity",
+  "SourceRootOrderEntity",
+  "getModuleFilePath",
+  "AdditionalLibraryRootsListener",
+  "WorkspaceFileIndexEx",
+  "ProjectRootEntity",
+  "WorkspaceExcludeModelAdapter",
+  "ReqwsExcludePlanner",
+  "reqws-managed-project-model.json",
   "com.goide",
   "com/goide",
   "VgoModulesRegistry",
@@ -215,4 +235,9 @@ tasks.named("check") {
 
 tasks.named("buildPlugin") {
   dependsOn(verifyForbiddenProductionSymbols)
+}
+
+// Offline verification still checks the exact local SDK and all bundled dependencies.
+tasks.named<VerifyPluginTask>("verifyPlugin") {
+  offline = providers.gradleProperty("reqwsVerifierOffline").map(String::toBoolean).orElse(false)
 }

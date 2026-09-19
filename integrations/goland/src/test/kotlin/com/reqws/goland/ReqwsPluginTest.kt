@@ -7,6 +7,6 @@ class ReqwsPluginTest {
   @Test
   fun `declares stable plugin identity`() {
     assertEquals("com.reqws.workspace", ReqwsPlugin.ID)
-    assertEquals("0.1.0", ReqwsPlugin.VERSION)
+    assertEquals("0.1.4", ReqwsPlugin.VERSION)
   }
 }

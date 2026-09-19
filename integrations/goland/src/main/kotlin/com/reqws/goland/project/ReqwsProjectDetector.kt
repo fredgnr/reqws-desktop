@@ -13,7 +13,7 @@ internal object ReqwsProjectDetector {
     ?.normalize()
 
   fun manifestPath(projectRoot: Path): Path =
-    projectRoot.toAbsolutePath().normalize().resolve(ManifestReader.MANIFEST_RELATIVE_PATH)
+    projectRoot.toAbsolutePath().normalize().parent.parent.parent.resolve(ManifestReader.MANIFEST_RELATIVE_PATH)
 
   fun canonicalProjectRoot(projectRoot: Path): Path? = try {
     projectRoot.toRealPath().takeIf(Files::isDirectory)
@@ -28,7 +28,9 @@ internal object ReqwsProjectDetector {
    * ReqWS so [ManifestReader] can reject it with a stable diagnostic instead of hiding it.
    */
   fun detect(projectRoot: Path): Path? {
-    val candidate = manifestPath(projectRoot)
+    if (projectRoot.fileName?.toString() != "goland" || projectRoot.parent?.fileName?.toString() != "ide" ||
+      projectRoot.parent?.parent?.fileName?.toString() != ".reqws") return null
+    val candidate = projectRoot.resolve("reqws-project.json")
     return candidate.takeIf { Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
   }
 

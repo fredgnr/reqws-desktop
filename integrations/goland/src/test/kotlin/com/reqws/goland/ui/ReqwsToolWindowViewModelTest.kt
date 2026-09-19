@@ -24,6 +24,25 @@ import java.nio.file.Path
 
 class ReqwsToolWindowViewModelTest {
   @Test
+  fun `user root coverage exposes a compact status and separate explanation only for covered repositories`() {
+    val snapshot = snapshot()
+    val model = ReqwsToolWindowViewModel.from(
+      ReqwsProjectState(
+        lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
+        snapshot = snapshot,
+        lastAppliedDigest = snapshot.digestSha256,
+        validatedProjectionDigest = snapshot.digestSha256,
+        userRootCoverage = setOf("repo_api"),
+      ),
+    )
+
+    assertEquals("repository.userRootCoverage", model.repositories.first().statusKey)
+    assertEquals("repository.userRootCoverageDetail", model.repositories.first().statusDetailKey)
+    assertEquals(ReqwsStatusTone.WARNING, model.repositories.first().statusTone)
+    assertEquals(null, model.repositories.last().statusDetailKey)
+  }
+
+  @Test
   fun `maps synchronized snapshots to localized resource keys`() {
     val model = ReqwsToolWindowViewModel.from(
       ReqwsProjectState(
@@ -40,7 +59,7 @@ class ReqwsToolWindowViewModelTest {
     assertEquals("state.synchronized", model.statusKey)
     assertEquals(null, model.statusDetailKey)
     assertEquals(ReqwsStatusTone.SUCCESS, model.statusTone)
-    assertEquals(listOf("repository.active", "repository.missing"), model.repositories.map { it.statusKey })
+    assertEquals(listOf("repository.loaded", "repository.missing"), model.repositories.map { it.statusKey })
     assertEquals(
       listOf(ReqwsStatusTone.SUCCESS, ReqwsStatusTone.WARNING),
       model.repositories.map { it.statusTone },
@@ -66,7 +85,7 @@ class ReqwsToolWindowViewModelTest {
     assertEquals("MANIFEST_INVALID_JSON", model.errorCode)
     assertTrue(model.preservedSnapshot)
     assertEquals(
-      listOf("repository.active", "repository.missing"),
+      listOf("repository.loaded", "repository.missing"),
       model.repositories.map { it.statusKey },
     )
     assertTrue(model.copyDiagnosticsEnabled)
@@ -251,7 +270,7 @@ class ReqwsToolWindowViewModelTest {
           repositoryStatuses = listOf(
             VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
           ),
-          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT),
         ),
       ),
     )
@@ -294,7 +313,7 @@ class ReqwsToolWindowViewModelTest {
     val details = formatDetailsText(model).orEmpty()
     assertTrue(details.contains(ReqwsStableErrorCode.PROJECT_CONTENT_NOT_CONVERGED))
     assertTrue(details.contains(ReqwsBundle.message("message.projectFileIndexNotConverged")))
-    assertFalse(details.contains("repository.active"))
+    assertFalse(details.contains("repository.loaded"))
   }
 
   @Test

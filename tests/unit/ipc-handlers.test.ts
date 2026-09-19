@@ -284,6 +284,7 @@ describe('main IPC handlers', () => {
       removeHandler: vi.fn(),
     };
     const services = {
+      goLandWorkspaces: { read: vi.fn(), prepare: vi.fn(), save: vi.fn() },
       activityGate: new ApplicationActivityGate(),
       updateService: {
         getState: vi.fn(), check: vi.fn(), download: vi.fn(), install: vi.fn(),
@@ -314,8 +315,8 @@ describe('main IPC handlers', () => {
     const cleanupFirst = registerIpcHandlers(ipcMain, services);
     const channels = ipcMain.handle.mock.calls.map(([channel]) => channel);
     expect(new Set(channels).size).toBe(channels.length);
-    expect(channels).toHaveLength(25);
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(25);
+    expect(channels).toHaveLength(28);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(28);
 
     let complete!: (value: unknown[]) => void;
     services.repositoryService.list.mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
@@ -331,8 +332,8 @@ describe('main IPC handlers', () => {
 
     const cleanupSecond = registerIpcHandlers(ipcMain, services);
     cleanupFirst();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(50);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(56);
     cleanupSecond();
-    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(75);
+    expect(ipcMain.removeHandler).toHaveBeenCalledTimes(84);
   });
 });

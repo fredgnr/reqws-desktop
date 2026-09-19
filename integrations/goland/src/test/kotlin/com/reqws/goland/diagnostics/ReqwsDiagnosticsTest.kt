@@ -55,7 +55,7 @@ class ReqwsDiagnosticsTest {
     )
 
     val output = ReqwsDiagnostics.format(
-      pluginVersion = "0.1.0",
+      pluginVersion = "0.1.4",
       ideBuild = "GO-261.1",
       projectRoot = root,
       state = ReqwsProjectState(
@@ -65,7 +65,7 @@ class ReqwsDiagnosticsTest {
           repositoryStatuses = listOf(
             VcsRepositoryInspection(0, VcsRepositoryStatus.NOT_CONFIGURED),
           ),
-          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+          workspaceDiagnostics = listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT),
         ),
       ),
       userHome = home,
@@ -78,7 +78,7 @@ class ReqwsDiagnosticsTest {
     assertTrue(output.contains("manualGitRootCount=1"))
     assertTrue(output.contains("vcsDiagnosticCode=VCS_CONFIGURATION_MISMATCH"))
     assertTrue(output.contains("vcsRepositoryStatuses=0:NOT_CONFIGURED"))
-    assertTrue(output.contains("vcsWorkspaceDiagnostics=INACTIVE_GIT_ROOT"))
+    assertTrue(output.contains("vcsWorkspaceDiagnostics=EXTRA_GIT_ROOT"))
     assertFalse(output.contains("alice:token"))
     assertFalse(output.contains("example.test"))
     assertFalse(output.contains("secret-workspace-id"))

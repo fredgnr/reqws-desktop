@@ -1,7 +1,6 @@
 package com.reqws.goland.ui
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import com.reqws.goland.project.ReqwsProjectDetector
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
@@ -13,10 +12,10 @@ class ReqwsToolWindowFactoryTest : BasePlatformTestCase() {
     assertTrue(ReqwsToolWindowFactory().isApplicableAsync(project))
   }
 
-  fun testIsInitiallyUnavailableUntilTheFixedManifestEntryExists() {
+  fun testOrdinaryWorkspaceManifestDoesNotActivateTheDedicatedEntryPlugin() {
     val factory = ReqwsToolWindowFactory()
     val projectRoot = Path.of(requireNotNull(project.basePath))
-    val manifestPath = ReqwsProjectDetector.manifestPath(projectRoot)
+    val manifestPath = projectRoot.resolve(".reqws/workspace.json")
 
     // Platform tests reuse the project base path across methods in this suite. Establish the
     // absent-manifest precondition explicitly so service tests that create a valid manifest do not
@@ -28,7 +27,7 @@ class ReqwsToolWindowFactoryTest : BasePlatformTestCase() {
       Files.createDirectories(manifestPath.parent)
       Files.writeString(manifestPath, "{}")
 
-      assertTrue(factory.shouldBeAvailable(project))
+      assertFalse(factory.shouldBeAvailable(project))
     } finally {
       Files.deleteIfExists(manifestPath)
     }

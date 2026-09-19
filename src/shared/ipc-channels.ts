@@ -1,4 +1,9 @@
 export const IPC_CHANNELS = {
+  goLandWorkspaces: {
+    read: 'goland-workspaces:read',
+    prepare: 'goland-workspaces:prepare',
+    save: 'goland-workspaces:save',
+  },
   updates: {
     getState: 'updates:get-state',
     check: 'updates:check',

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { fireEvent, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceDetailDrawer } from '../../src/renderer/components/WorkspaceDetailDrawer';
@@ -44,7 +44,6 @@ function renderDrawer(
       onForget={vi.fn()}
       onOpenCursor={vi.fn()}
       onOpenCursorRoot={vi.fn()}
-      onOpenGoLand={vi.fn()}
       onOpenVSCode={vi.fn()}
       onRemoveRepository={vi.fn()}
       onRevealFinder={vi.fn()}
@@ -57,6 +56,11 @@ function renderDrawer(
 
 beforeAll(() => initializeI18n('zh-CN'));
 beforeEach(() => i18n.changeLanguage('zh-CN'));
+beforeEach(() => {
+  Object.defineProperty(window, 'reqws', { configurable: true, value: {
+    goLandWorkspaces: { read: vi.fn().mockResolvedValue({ project: null, shellPath: '/unused' }) },
+  } });
+});
 afterEach(cleanup);
 
 describe('Workspace diagnostics', () => {
@@ -99,12 +103,14 @@ describe('Workspace diagnostics', () => {
       updatedAt: '2026-08-12T00:00:00Z',
     }]);
 
-    for (const editor of ['VS Code', 'Cursor', 'GoLand']) {
+    for (const editor of ['VS Code', i18n.t('golandLoading.saveAndOpen')]) {
       const button = screen.getByRole('button', { name: editor });
       expect(button).toBeDisabled();
       expect(button).not.toHaveAttribute('title');
       expect(button).not.toHaveAttribute('aria-describedby');
     }
+    expect(screen.getByRole('button', { name: 'Cursor' })).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByText(i18n.t('workspaceDetail.manageTitle')));
     const addRepository = screen.getByRole('button', { name: /添加/u });
     expect(addRepository).toBeDisabled();
     expect(addRepository).not.toHaveAttribute('title');

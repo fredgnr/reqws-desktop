@@ -2,7 +2,7 @@
 title: ReqWS 使用说明
 type: guide
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # ReqWS 使用说明
@@ -11,7 +11,7 @@ updated: 2026-09-19
 
 ## 1. ReqWS 会做什么
 
-ReqWS 把同一项需求涉及的多个 Git 仓库分别完整克隆到一个工作区根目录，并让它们使用同一个功能分支。每个仓库都有独立的 `.git`，不会共享 Git worktree 或对象目录。ReqWS 会生成一个由自己管理的 `.code-workspace` 供 VS Code 或 Cursor 使用，也可以把 workspace root 交给安装了 ReqWS 插件的 GoLand。
+ReqWS 把同一项需求涉及的多个 Git 仓库分别完整克隆到一个工作区根目录，并让它们使用同一个功能分支。每个仓库都有独立的 `.git`，不会共享 Git worktree 或对象目录。ReqWS 会生成一个由自己管理的 `.code-workspace` 供 VS Code 或 Cursor 使用，并为安装了本版 ReqWS 插件的 GoLand 准备独立入口。
 
 ReqWS 不会执行 pull、merge、rebase、push 或创建 PR/MR，也不会自动删除本地仓库或工作区目录。
 
@@ -177,9 +177,8 @@ git@example.com:team/repository.git
 工作区列表可按名称、分支、仓库名、代码路径或 workspace 文件路径搜索。操作按钮包括：
 
 - “VS Code”：打开生成的 `.code-workspace`。
-- “Cursor”：在新的 Cursor IDE 窗口中打开 `.code-workspace`，即使 Cursor 当前显示的是 Agents Window，也会加载全部 workspace root。
-- 详情中的“用 Cursor 打开代码目录”：在新的 Cursor IDE 窗口中直接打开工作区根目录。
-- “GoLand”：重新确认工作区为“就绪”、root 与 manifest 有效后，用经过校验的本机 GoLand app 打开 workspace root。
+- 列表中的“Cursor”：在新的 Cursor IDE 窗口中打开 `.code-workspace`；详情中的 Cursor 菜单分别提供“打开工作区文件”和“用 Cursor 打开代码目录”。即使 Cursor 当前显示的是 Agents Window，也会交给 IDE 打开。
+- “GoLand”：重新确认工作区为“就绪”、root 与 manifest 有效后，准备并打开 `<workspace>/.reqws/ide/goland` 独立入口；详情底部的“保存并打开 GoLand”先保存当前加载选择。
 - “在 Finder 中显示”：定位代码根目录。
 
 编辑器未安装或工作区不是“就绪”状态时，相应按钮会禁用。
@@ -194,15 +193,15 @@ ReqWS 使用 Cursor 应用 bundle 内置的 editor CLI，不要求另外安装 P
 npm run package:goland
 ```
 
-产物位于 `integrations/goland/build/distributions/`。安装后可从 ReqWS 工作区列表或详情选择“GoLand”，也可以直接在 GoLand 打开含有 `.reqws/workspace.json` 的 workspace root。插件未安装时 Desktop 仍可打开 root，但 GoLand 只按自身默认项目模型处理该目录，ReqWS 不承诺活动/保留 repository 隔离。
+产物位于 `integrations/goland/build/distributions/`，唯一目标为 GO-262.9437.286。安装后从 ReqWS 工作区列表或详情打开独立入口；普通 workspace root 不触发本版受管模型。Desktop 保存成功不代表插件已安装或 IDE 已同步，请在 GoLand 的 ReqWS 面板确认状态。
 
-插件会自动同步 ReqWS-owned 项目内容，但不会自动增删 Git Roots。Tool Window 显示缺失、VCS 类型冲突或已保留仓库的 mapping 时，请打开 **GoLand Settings → Version Control → Directory Mappings**，为每个活动仓库添加精确目录并选择 `Git`，只按自己的意图移除 retained mapping，然后点击 Apply/OK。配置事件会自动刷新插件状态；必要时使用 `Sync Now` 重新检查。该动作不会修改 Directory Mappings。
+插件会自动同步已选择的仓库内容，但不会自动增删 Git Roots。需要调整 Git 配置时，可在 **GoLand Settings → Version Control → Directory Mappings** 手动处理；未加载仓库与额外 mappings 仍属于用户配置。配置事件会自动刷新插件状态，必要时使用 `Sync Now` 重新检查，该动作不会修改 Directory Mappings。
 
 完整的磁盘安装、首次信任、界面分区、状态、`Sync Now`、`Open Manifest File`、`Copy Diagnostics`、逻辑移除/重加和故障恢复步骤见[GoLand 插件使用指南](goland-plugin-guide.md)。
 
-当前功能仍处于实现与验证阶段。当前源码候选已通过 GoLand 2026.1.3/2026.2 Plugin Verifier，但真实 GUI 的完整 exact-head 证据尚未形成；本节描述本地操作入口，不代表已有签名插件或公开发布资产。验证状态见 [GoLand 插件支持需求包](../changes/goland-plugin-support/README.md)。
+按次验证及候选范围见[工作加载集合需求包](../changes/goland-workspace-loading/README.md)。本节描述源码中的操作入口，不代表已有签名插件或公开发布资产。
 
-在详情面板中可以：
+详情中的**加载规则**和**工作区文件**可展开查看说明与完整路径；**管理工作区**提供成员增删及遗忘记录。详情保留以下维护能力：
 
 - 添加仓库：clone 新仓库并切换到工作区功能分支，然后更新 manifest 和 `.code-workspace`。
 - 移除仓库：只更新 manifest 和 `.code-workspace`，保留磁盘上的仓库目录。

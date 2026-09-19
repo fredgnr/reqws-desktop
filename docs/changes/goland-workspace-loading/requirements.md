@@ -1,7 +1,7 @@
 ---
 title: GoLand 工作加载集合需求与边界
 type: requirements
-status: draft
+status: active
 updated: 2026-09-19
 ---
 

@@ -113,6 +113,8 @@ internal class SyncReadRequestTracker {
     )
   }
 
+  fun isCurrent(generation: Long): Boolean = synchronized(lock) { generation == latestGeneration }
+
   fun runIfLatest(
     request: SyncReadRequest,
     action: (SyncTrigger) -> Unit,

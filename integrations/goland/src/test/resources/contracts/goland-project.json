@@ -1,0 +1,491 @@
+{
+  "members": [
+    "repo_1",
+    "repo_2",
+    "repo_3"
+  ],
+  "cases": [
+    {
+      "name": "all",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "selected-manifest-order",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            "repo_2",
+            "repo_1",
+            "stale"
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "explicit-empty",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": []
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown-id-is-only-intent",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            "stale"
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "ids-trim-like-manifest",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "  ws_example  ",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            " repo_1 "
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "maximum-revision",
+      "valid": true,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 9007199254740991,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "duplicate-id",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            "repo_1",
+            "repo_1"
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "duplicate-after-trim",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            "repo_1",
+            " repo_1 "
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "all-forbids-ids",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all",
+          "repositoryIds": []
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "selected-requires-ids",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "bad-mode",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "none"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown-selection-field",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all",
+          "path": "/tmp"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unknown-binding-field",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z",
+        "manifestPath": "/tmp/workspace.json"
+      }
+    },
+    {
+      "name": "unsupported-schema",
+      "valid": false,
+      "input": {
+        "schemaVersion": 2,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unsupported-protocol",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 2,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "zero-revision",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 0,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "fractional-revision",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1.5,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "unsafe-revision",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 9007199254740992,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "string-revision",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": "1",
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "invalid-binding-id",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "other",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "blank-workspace-id",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": " ",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "long-id",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "selected",
+          "repositoryIds": [
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          ]
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "invalid-date",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-02-30T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "non-utc-date",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00+08:00"
+      }
+    },
+    {
+      "name": "missing-schemaVersion",
+      "valid": false,
+      "input": {
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-adapterProtocol",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-workspaceId",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-bindingId",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-revision",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "selection": {
+          "mode": "all"
+        },
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-selection",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "updatedAt": "2026-09-19T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "missing-updatedAt",
+      "valid": false,
+      "input": {
+        "schemaVersion": 1,
+        "adapterProtocol": 1,
+        "workspaceId": "ws_example",
+        "bindingId": "95dc7c6a-0eaa-4c96-824a-e117316a1db3",
+        "revision": 1,
+        "selection": {
+          "mode": "all"
+        }
+      }
+    }
+  ]
+}

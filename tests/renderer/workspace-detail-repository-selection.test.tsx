@@ -60,7 +60,6 @@ function drawerProps() {
     onForget: vi.fn(),
     onOpenCursor: vi.fn(),
     onOpenCursorRoot: vi.fn(),
-    onOpenGoLand: vi.fn(),
     onOpenVSCode: vi.fn(),
     onRemoveRepository: vi.fn(),
     onRevealFinder: vi.fn(),
@@ -72,13 +71,54 @@ function drawerProps() {
 
 beforeAll(() => initializeI18n('en-US'));
 beforeEach(() => i18n.changeLanguage('en-US'));
+beforeEach(() => {
+  Object.defineProperty(window, 'reqws', { configurable: true, value: {
+    goLandWorkspaces: { read: vi.fn().mockResolvedValue({ project: null, shellPath: '/unused' }) },
+  } });
+});
 afterEach(cleanup);
 
 describe('Workspace repository selection', () => {
+  it('keeps Cursor workspace and folder actions distinct and closes its menu with Escape', async () => {
+    const user = userEvent.setup();
+    const props = drawerProps();
+    render(<WorkspaceDetailDrawer {...props} />);
+    const cursor = screen.getByRole('button', { name: 'Cursor' });
+    await user.click(cursor);
+    await user.click(screen.getByRole('button', { name: 'Open workspace file' }));
+    expect(props.onOpenCursor).toHaveBeenCalledOnce();
+    expect(props.onOpenCursorRoot).not.toHaveBeenCalled();
+    await user.click(cursor);
+    await user.click(screen.getByRole('button', { name: 'Open code folder in Cursor' }));
+    expect(props.onOpenCursorRoot).toHaveBeenCalledOnce();
+    await user.click(cursor);
+    await user.keyboard('{Escape}');
+    expect(cursor.closest('details')).not.toHaveAttribute('open');
+    expect(cursor).toHaveFocus();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps workspace paths and membership actions behind separate disclosures', async () => {
+    const user = userEvent.setup();
+    const props = drawerProps();
+    render(<WorkspaceDetailDrawer {...props} />);
+    expect(screen.getByRole('combobox')).not.toBeVisible();
+    await user.click(screen.getByText('Workspace files'));
+    expect(screen.getByText(props.workspace.workspaceFilePath)).toBeVisible();
+    expect(screen.getByText(i18n.t('workspaceDetail.managedFileNotice'))).toBeVisible();
+    await user.click(screen.getByText('Manage workspace'));
+    expect(screen.getByRole('combobox')).toBeVisible();
+    const removeButton = screen.getAllByRole('button', { name: 'Remove' })[0];
+    if (!removeButton) throw new Error('Expected a visible repository removal action');
+    await user.click(removeButton);
+    expect(props.onRemoveRepository).toHaveBeenCalledExactlyOnceWith(props.workspace.repositories[0]);
+  });
+
   it('disables adding after the last available repository is added and submits the newly removed repository', async () => {
     const user = userEvent.setup();
     const props = drawerProps();
     const view = render(<WorkspaceDetailDrawer {...props} />);
+    await user.click(screen.getByText('Manage workspace'));
     const select = screen.getByRole('combobox');
     const add = screen.getByRole('button', { name: /Add/u });
 
@@ -111,6 +151,7 @@ describe('Workspace repository selection', () => {
     const user = userEvent.setup();
     const props = { ...drawerProps(), workspace: workspaceWith(repoA) };
     const view = render(<WorkspaceDetailDrawer {...props} />);
+    await user.click(screen.getByText('Manage workspace'));
     const select = screen.getByRole('combobox');
 
     expect(select).toHaveValue(repoB.id);
@@ -132,6 +173,7 @@ describe('Workspace repository selection', () => {
     const user = userEvent.setup();
     const props = { ...drawerProps(), workspace: workspaceWith(repoA) };
     const view = render(<WorkspaceDetailDrawer {...props} />);
+    await user.click(screen.getByText('Manage workspace'));
     const select = screen.getByRole('combobox');
     const add = screen.getByRole('button', { name: /Add/u });
     await user.selectOptions(select, repoC.id);

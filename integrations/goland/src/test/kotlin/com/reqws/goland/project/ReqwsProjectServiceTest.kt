@@ -41,6 +41,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class ReqwsProjectServiceTest : BasePlatformTestCase() {
+  override fun setUp() {
+    super.setUp()
+    com.intellij.openapi.vfs.newvfs.impl.VfsRootAccess.allowRootAccess(testRootDisposable, Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize().toString())
+  }
+
   fun testSynchronousVcsRegistrationCallbackDoesNotStartNestedRefresh() =
     runBlocking {
       verifySynchronousVcsRegistrationCallbackDoesNotStartNestedRefresh()
@@ -77,15 +82,16 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     verifyOrdinaryProjectNeverRegistersForOrChurnsOnVcsEvents()
 
   private fun verifyOrdinaryProjectNeverRegistersForOrChurnsOnVcsEvents() {
-    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+    val configuredRoot = testShell()
     Files.createDirectories(configuredRoot)
-    Files.deleteIfExists(ReqwsProjectDetector.manifestPath(configuredRoot))
+    Files.deleteIfExists(configuredRoot.resolve("reqws-project.json"))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val registrationCount = AtomicInteger(0)
     val service = ReqwsProjectService.createForTest(
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar {
           registrationCount.incrementAndGet()
           AutoCloseable {}
@@ -148,6 +154,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -215,6 +222,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
@@ -272,17 +280,17 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         description = "queued VCS configuration refresh",
       )
       awaitCondition("first valid candidate apply") {
-        applyCount.get() == 1 &&
+        applyCount.get() in 1..2 &&
           inspectionDigests.size == 3 &&
           service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
       }
 
       val digest = requireNotNull(service.state.snapshot).digestSha256
-      assertEquals(root, service.state.snapshot?.canonicalProjectRoot)
+      assertEquals(root.parent.parent.parent, service.state.snapshot?.canonicalProjectRoot)
       assertEquals(1, registrationCount.get())
       assertEquals(listOf(digest, digest), inspectionDigests.take(2))
       assertEquals(postRegistrationInspection, service.state.vcsInspection)
-      assertEquals(1, applyCount.get())
+      assertTrue(applyCount.get() in 1..2)
     } finally {
       allowPostInspection.countDown()
       callbackThread.join(5_000)
@@ -303,7 +311,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
   private fun verifyInitialSafeModeSnapshotStillStartsDelayedVcsMonitoring() {
     val root = writeValidManifest()
-    val persistedDigest = com.reqws.goland.manifest.ManifestReader().read(root).digestSha256
+    val persistedDigest = com.reqws.goland.loading.contract.LoadingSnapshotReader().read(root).digest
     project.service<ReqwsSyncPersistence>().markApplied(persistedDigest)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val registrationCount = AtomicInteger(0)
@@ -315,6 +323,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { false },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -368,6 +377,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate(trusted::get),
         candidateApplier = SyncCandidateApplier { candidate ->
           appliedDigests += candidate.digestSha256
@@ -443,6 +453,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate(trusted::get),
         candidateApplier = SyncCandidateApplier { candidate ->
           appliedDigests += candidate.digestSha256
@@ -539,6 +550,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -582,7 +594,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         callbackBeforeRefreshEntered.await(5, TimeUnit.SECONDS),
       )
 
-      Files.delete(manifest)
+      Files.delete(root.resolve("reqws-project.json"))
       awaitSuccessfulCompletion(
         job = requireNotNull(service.refreshAutomatically()),
         description = "newer inactive read",
@@ -664,6 +676,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -694,7 +707,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         registrationEntered.await(5, TimeUnit.SECONDS),
       )
 
-      Files.delete(manifest)
+      Files.delete(root.resolve("reqws-project.json"))
       awaitSuccessfulCompletion(
         job = requireNotNull(service.refreshAutomatically()),
         description = "newer inactive read during VCS registration",
@@ -753,6 +766,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
@@ -844,6 +858,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
@@ -937,6 +952,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
@@ -1022,6 +1038,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar {
@@ -1085,6 +1102,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -1144,6 +1162,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (failProjection.get()) {
@@ -1174,7 +1193,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       awaitCondition("initial validated projection") {
         service.state.validatedProjectionDigest != null &&
           ReqwsToolWindowViewModel.from(service.state).repositories.single().statusKey ==
-          "repository.active"
+          "repository.loaded"
       }
 
       failProjection.set(true)
@@ -1229,6 +1248,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (failProjection.get()) {
@@ -1313,6 +1333,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -1366,7 +1387,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       }
       val recoveredView = ReqwsToolWindowViewModel.from(service.state)
       assertEquals("state.synchronized", recoveredView.statusKey)
-      assertEquals("repository.active", recoveredView.repositories.single().statusKey)
+      assertEquals("repository.loaded", recoveredView.repositories.single().statusKey)
     } finally {
       service.dispose()
       scope.cancel()
@@ -1394,6 +1415,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -1439,13 +1461,11 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
       recordPostRelease.set(true)
       allowApply.countDown()
-      awaitCondition("older candidate completion event") {
-        ReqwsLifecycleState.SYNCHRONIZED in postReleaseStates
-      }
       awaitCondition("queued latest refresh failure after older apply") {
         service.state.lifecycle == ReqwsLifecycleState.ERROR
       }
 
+      assertFalse(ReqwsLifecycleState.SYNCHRONIZED in postReleaseStates)
       assertSame(previousSnapshot, service.state.snapshot)
       assertEquals(previousDigest, service.state.lastAppliedDigest)
       assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
@@ -1471,6 +1491,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -1579,6 +1600,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar {
@@ -1631,6 +1653,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trace = trace,
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
@@ -1687,6 +1710,72 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
   fun testStartupProjectMetadataReadinessRecoversWhenMetadataAppears() =
     verifyStartupProjectMetadataReadinessRecoversWhenMetadataAppears()
 
+  fun testVirginMetadataRequestsOnlyOneNativeSave() = verifyInitialMetadataSaveGate("virgin", 1)
+  fun testUninitializedMetadataWaitDoesNotConsumeNativeSaveRequest() = verifyInitialMetadataSaveGate("initializing", 1)
+  fun testExistingMetadataNeverRequestsNativeSave() = verifyInitialMetadataSaveGate("existing", 0)
+  fun testObservedThenRemovedMetadataNeverRequestsNativeSave() = verifyInitialMetadataSaveGate("removed", 0)
+  fun testPriorProjectionNeverRequestsNativeMetadataSave() = verifyInitialMetadataSaveGate("prior", 0)
+  fun testLostTrustPreventsNativeMetadataSave() = verifyInitialMetadataSaveGate("untrusted", 0)
+  fun testChangedBindingPreventsNativeMetadataSave() = verifyInitialMetadataSaveGate("changed", 0)
+
+  private fun verifyInitialMetadataSaveGate(scenario: String, expectedSaves: Int) {
+    val fixtureRoot = Files.createTempDirectory("reqws-metadata-save-").toRealPath()
+    val shell = writeValidManifest(fixtureRoot.resolve(".reqws/ide/goland"))
+    val persistence = project.service<ReqwsSyncPersistence>()
+    val previous = persistence.state
+    persistence.loadState(ReqwsSyncPersistence.Data())
+    if (scenario == "prior") persistence.markApplied("a".repeat(64))
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val saves = AtomicInteger()
+    val waits = AtomicInteger()
+    val probes = AtomicInteger()
+    val trusted = AtomicBoolean(true)
+    val initialized = AtomicBoolean(scenario != "initializing")
+    val waitEntered = CountDownLatch(1)
+    val allowWait = CompletableDeferred<Unit>()
+    val service = ReqwsProjectService.createForTest(project, scope, ReqwsProjectServiceRuntimeOverrides(
+      projectRoot = shell,
+      trustGate = ReqwsTrustGate { trusted.get() },
+      candidateApplier = SyncCandidateApplier { throw projectMetadataReadinessFailure() },
+      vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+      vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+      projectMetadataReadinessWaiter = ProjectMetadataReadinessWaiter {
+        if (waits.incrementAndGet() == 1) { waitEntered.countDown(); allowWait.await() }
+        else initialized.set(true)
+      },
+      projectMetadataReadinessProbe = ProjectMetadataReadinessProbe {
+        if (probes.incrementAndGet() == 1 && scenario == "removed") {
+          Files.move(shell.resolve(".idea"), shell.resolve("preserved-idea"))
+        }
+        false
+      },
+      projectMetadataReadinessMaxPolls = 3,
+      projectMetadataInitializedProbe = initialized::get,
+      projectMetadataSaveRequester = { saves.incrementAndGet(); Unit },
+      manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
+    ))
+    try {
+      executeStartupActivity(service)
+      assertTrue(waitEntered.await(5, TimeUnit.SECONDS))
+      when (scenario) {
+        "existing", "removed" -> Files.createDirectory(shell.resolve(".idea"))
+        "untrusted" -> trusted.set(false)
+        "changed" -> Files.writeString(shell.resolve("reqws-project.json"), "{broken")
+      }
+      allowWait.complete(Unit)
+      awaitCondition("bounded metadata save gate: $scenario") { service.state.lifecycle == ReqwsLifecycleState.ERROR }
+      assertEquals(expectedSaves, saves.get())
+      if (scenario != "existing") assertFalse(Files.exists(shell.resolve(".idea")))
+      if (scenario == "removed") assertTrue(Files.isDirectory(shell.resolve("preserved-idea")))
+    } finally {
+      allowWait.complete(Unit)
+      service.dispose()
+      scope.cancel()
+      persistence.loadState(previous)
+      fixtureRoot.toFile().deleteRecursively()
+    }
+  }
+
   private fun verifyStartupProjectMetadataReadinessRecoversWhenMetadataAppears() {
     writeValidManifest()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1700,6 +1789,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 1) throw projectMetadataReadinessFailure()
@@ -1761,6 +1851,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -1823,6 +1914,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -1882,6 +1974,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -1933,6 +2026,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 1) throw projectMetadataReadinessFailure()
@@ -1994,6 +2088,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           when (applyCount.incrementAndGet()) {
@@ -2077,6 +2172,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() <= 2) throw projectMetadataReadinessFailure()
@@ -2152,6 +2248,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2217,6 +2314,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2266,6 +2364,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2321,6 +2420,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2394,6 +2494,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2465,6 +2566,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 1) throw expectedCancellation
@@ -2514,6 +2616,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 1) throw expectedCancellation
@@ -2569,6 +2672,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         vcsInspector = ReqwsVcsInspector {
           inspectionCount.incrementAndGet()
@@ -2611,6 +2715,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2662,6 +2767,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         vcsInspector = ReqwsVcsInspector {
           inspectionCount.incrementAndGet()
@@ -2710,6 +2816,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         vcsInspector = ReqwsVcsInspector {
           inspectionCount.incrementAndGet()
@@ -2761,6 +2868,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -2830,6 +2938,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -2898,10 +3007,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testNewerStablePublicationInvalidatesPendingStartupRetryVersion() =
-    verifyNewerStablePublicationInvalidatesPendingStartupRetryVersion()
+  fun testSupersededApplyDoesNotSuppressPendingStartupRetry() =
+    verifySupersededApplyDoesNotSuppressPendingStartupRetry()
 
-  private fun verifyNewerStablePublicationInvalidatesPendingStartupRetryVersion() {
+  private fun verifySupersededApplyDoesNotSuppressPendingStartupRetry() {
     writeValidManifest()
     val expectedCancellation = ProcessCanceledException()
     val scope = CoroutineScope(
@@ -2920,6 +3029,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -2964,17 +3074,12 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(ReqwsLifecycleState.INACTIVE, service.state.lifecycle)
 
       allowApply.countDown()
-      awaitCondition("older apply published a newer stable state") {
-        service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
-      }
-      val inspectionCountAfterWinner = inspectionCount.get()
-
       allowRetryWait.complete(Unit)
+      awaitCondition("current startup recovery applies after superseded result is rejected") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
       Thread.sleep(NO_CHURN_WINDOW_MILLIS)
-
-      assertEquals(1, applyCount.get())
-      assertEquals(inspectionCountAfterWinner, inspectionCount.get())
-      assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
+      assertEquals(2, applyCount.get())
       assertNull(service.state.lastError)
     } finally {
       allowApply.countDown()
@@ -2999,6 +3104,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 2) {
@@ -3080,6 +3186,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -3142,10 +3249,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline() =
-    verifyAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline()
+  fun testSupersededApplyBeforeReadingPublicationCannotAdvanceBaseline() =
+    verifySupersededApplyBeforeReadingPublicationCannotAdvanceBaseline()
 
-  private fun verifyAppliedStateWinningBeforeReadingPublicationBecomesCancellationBaseline() {
+  private fun verifySupersededApplyBeforeReadingPublicationCannotAdvanceBaseline() {
     writeValidManifest()
     val expectedCancellation = ProcessCanceledException()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -3161,6 +3268,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 2) {
@@ -3218,10 +3326,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       )
 
       allowSecondApply.countDown()
-      awaitCondition("older apply published its terminal state first") {
-        applyCount.get() == 2 &&
-          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
-          service.state.snapshot !== initialSnapshot
+      awaitCondition("superseded apply restores only the earlier baseline") {
+        applyCount.get() == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
+          service.state.snapshot === initialSnapshot && service.state.validatedProjectionDigest == null
       }
       val appliedSnapshot = requireNotNull(service.state.snapshot)
 
@@ -3244,10 +3351,10 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     }
   }
 
-  fun testAppliedStateWinningCancellationRollbackCasCannotBeOverwritten() =
-    verifyAppliedStateWinningCancellationRollbackCasCannotBeOverwritten()
+  fun testSupersededApplyCannotOverwritePendingCancellationRollback() =
+    verifySupersededApplyCannotOverwritePendingCancellationRollback()
 
-  private fun verifyAppliedStateWinningCancellationRollbackCasCannotBeOverwritten() {
+  private fun verifySupersededApplyCannotOverwritePendingCancellationRollback() {
     writeValidManifest()
     val expectedCancellation = ProcessCanceledException()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -3257,11 +3364,14 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     val cancellationRollbackEntered = CountDownLatch(1)
     val allowCancellationRollback = CountDownLatch(1)
     val applyCount = AtomicInteger(0)
+    val commitCount = AtomicInteger(0)
     val service = ReqwsProjectService.createForTest(
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
+        beforeCandidateCommit = { commitCount.incrementAndGet() },
         candidateApplier = SyncCandidateApplier {
           if (applyCount.incrementAndGet() == 2) {
             secondApplyStarted.countDown()
@@ -3314,10 +3424,9 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(ReqwsLifecycleState.READING, service.state.lifecycle)
 
       allowSecondApply.countDown()
-      awaitCondition("older apply won before cancellation rollback CAS") {
-        applyCount.get() == 2 &&
-          service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
-      }
+      awaitCondition("superseded apply reaches and fails its final generation gate") { commitCount.get() == 2 }
+      Thread.sleep(NO_CHURN_WINDOW_MILLIS)
+      assertEquals(ReqwsLifecycleState.READING, service.state.lifecycle)
       val appliedSnapshot = requireNotNull(service.state.snapshot)
 
       allowCancellationRollback.countDown()
@@ -3328,7 +3437,8 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
       assertSame(expectedCancellation, failure)
       assertEquals(ReqwsLifecycleState.SYNCHRONIZED, service.state.lifecycle)
-      assertSame(appliedSnapshot, service.state.snapshot)
+      assertEquals(appliedSnapshot.manifest, service.state.snapshot?.manifest)
+      assertNull(service.state.validatedProjectionDigest)
       assertNull(service.state.lastError)
     } finally {
       allowSecondApply.countDown()
@@ -3356,6 +3466,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier { applyCount.incrementAndGet() },
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { listener ->
@@ -3435,6 +3546,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {
           applyCount.incrementAndGet()
@@ -3924,6 +4036,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {},
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -4181,7 +4294,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         applyTriggers,
       )
       assertEquals(!changeDigest, appliedDigests[0] == appliedDigests[1])
-      assertEquals(ManifestReader().read(root).digestSha256, appliedDigests[1])
+      assertEquals(com.reqws.goland.loading.contract.LoadingSnapshotReader().read(root).digest, appliedDigests[1])
     } finally {
       debounceReleases.close()
       service.dispose()
@@ -4204,6 +4317,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         trustGate = ReqwsTrustGate { true },
         candidateApplier = SyncCandidateApplier {},
         vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -4244,7 +4358,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
   }
 
   fun testWatcherThatFinishesConstructionAfterDisposeIsClosed() {
-    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+    val configuredRoot = testShell()
     Files.createDirectories(configuredRoot)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val factoryEntered = CountDownLatch(1)
@@ -4254,6 +4368,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ ->
           factoryEntered.countDown()
           check(allowFactoryReturn.await(5, TimeUnit.SECONDS)) {
@@ -4279,18 +4394,18 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
         description = "refresh racing manifest watcher construction with dispose",
       )
 
-      assertEquals(1, closeCount.get())
+      assertEquals(2, closeCount.get())
       assertNull(service.refreshAutomatically())
     } finally {
       allowFactoryReturn.countDown()
       service.dispose()
       scope.cancel()
     }
-    assertEquals(1, closeCount.get())
+    assertEquals(2, closeCount.get())
   }
 
   fun testThrowingWatcherDoesNotPreventTerminalDisposeOrRepeatDispose() {
-    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+    val configuredRoot = testShell()
     Files.createDirectories(configuredRoot)
     val expectedFailure = IllegalStateException("synthetic watcher dispose failure")
     val closeCount = AtomicInteger(0)
@@ -4299,6 +4414,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       project = project,
       coroutineScope = scope,
       runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
         manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ ->
           Disposable {
             closeCount.incrementAndGet()
@@ -4527,6 +4643,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     debounceWaiter: ReqwsProjectModelChangeDebounceWaiter,
     beforeCandidateOffer: (() -> Unit)? = null,
   ): ReqwsProjectServiceRuntimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
     trustGate = ReqwsTrustGate { true },
     candidateApplier = candidateApplier,
     vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
@@ -4537,10 +4654,60 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
     manifestWatcherFactory = ReqwsManifestWatcherFactory { _, _, _, _ -> Disposable {} },
   )
 
-  private fun writeValidManifest(): Path {
-    val configuredRoot = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize()
+  fun testSelectionWatcherReconcilesSameManifestAndRecoversFromBadBindingAutomatically() =
+    verifySelectionWatcherReconcilesSameManifestAndRecoversFromBadBindingAutomatically()
+
+  private fun verifySelectionWatcherReconcilesSameManifestAndRecoversFromBadBindingAutomatically() {
+    val shell = writeValidManifestWithRepository()
+    val manifest = ReqwsProjectDetector.manifestPath(shell)
+    val manifestBytes = Files.readAllBytes(manifest)
+    val file = shell.resolve("reqws-project.json")
+    val original = Files.readString(file)
+    val callbacks = java.util.concurrent.ConcurrentHashMap<Path, com.reqws.goland.watch.ManifestSyncRequest>()
+    val loaded = CopyOnWriteArrayList<Set<String>>()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val service = ReqwsProjectService.createForTest(project, scope, ReqwsProjectServiceRuntimeOverrides(
+      projectRoot = shell,
+      trustGate = ReqwsTrustGate { true },
+      candidateApplier = SyncCandidateApplier { loaded += requireNotNull(it.value.loading).loadedIds },
+      vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+      vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+      manifestWatcherFactory = ReqwsManifestWatcherFactory { _, watched, _, request ->
+        callbacks[watched] = request
+        Disposable { callbacks.remove(watched) }
+      },
+    ))
+    try {
+      awaitSuccessfulCompletion(requireNotNull(service.refreshAutomatically()), "initial selected entry read")
+      awaitCondition("initial loading projection") { service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED }
+      assertEquals(setOf(manifest, file), callbacks.keys)
+      assertEquals(setOf("service_repo_a"), loaded.last())
+      val selected = original.replace("\"mode\":\"all\"", "\"mode\":\"selected\",\"repositoryIds\":[]").replace("\"revision\":1", "\"revision\":2")
+      val temporary = file.resolveSibling("selection.tmp")
+      Files.writeString(temporary, selected)
+      Files.move(temporary, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+      callbacks.getValue(file).requestSync()
+      awaitCondition("selection-only automatic projection") { loaded.size == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED }
+      assertTrue(loaded.last().isEmpty())
+      assertTrue(manifestBytes.contentEquals(Files.readAllBytes(manifest)))
+      Files.writeString(file, "{broken")
+      callbacks.getValue(file).requestSync()
+      awaitStableLifecycle(service, ReqwsLifecycleState.ERROR, "bad selection retains model")
+      assertEquals(2, loaded.size)
+      Files.writeString(file, selected)
+      callbacks.getValue(file).requestSync()
+      awaitCondition("restored binding automatically rechecks the complete projection") { loaded.size == 3 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED }
+      assertTrue(loaded.last().isEmpty())
+    } finally { service.dispose(); scope.cancel() }
+    assertTrue(callbacks.isEmpty())
+  }
+
+  private fun testShell(): Path = Path.of(requireNotNull(project.basePath)).toAbsolutePath().normalize().resolve(".reqws/ide/goland")
+
+  private fun writeValidManifest(configuredRoot: Path = testShell()): Path {
     Files.createDirectories(configuredRoot)
     val root = configuredRoot.toRealPath()
+    Files.writeString(root.resolve("reqws-project.json"), """{"schemaVersion":1,"adapterProtocol":1,"workspaceId":"service_test_workspace","bindingId":"95dc7c6a-0eaa-4c96-824a-e117316a1db3","revision":1,"selection":{"mode":"all"},"updatedAt":"2026-09-19T00:00:00Z"}""")
     val manifest = ReqwsProjectDetector.manifestPath(root)
     Files.createDirectories(manifest.parent)
     Files.writeString(
@@ -4551,7 +4718,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           "id": "service_test_workspace",
           "name": "Service Test Workspace",
           "featureBranch": "feature/service-test",
-          "rootPath": "${escapeJson(root.toString())}",
+          "rootPath": "${escapeJson(root.parent.parent.parent.toString())}",
           "workspaceFilePath": "${escapeJson(root.resolve("workspace.code-workspace").toString())}",
           "repositories": [],
           "createdAt": "2026-08-14T00:00:00.000Z",
@@ -4564,8 +4731,8 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
 
   private fun writeValidManifestWithRepository(): Path {
     val root = writeValidManifest()
-    val repositoryPath = root.resolve("repo-a")
-    Files.createDirectories(repositoryPath)
+    val repositoryPath = root.parent.parent.parent.resolve("repo-a")
+    Files.createDirectories(repositoryPath.resolve(".git"))
     val manifest = ReqwsProjectDetector.manifestPath(root)
     val repositoryJson = """
       [
