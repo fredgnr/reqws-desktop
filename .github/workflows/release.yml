@@ -38,6 +38,9 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      - name: Log release job context
+        run: python3 scripts/log-release-context.py
+
       - name: Validate tag and package versions
         id: version
         env:
@@ -75,6 +78,7 @@ jobs:
           fi
 
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf '[release][validate] status=success version=%s commit=%s\n' "$version" "$tag_commit"
 
   # Checks and both packages have independent workspaces. Only publish joins their gates.
   checks:
@@ -106,6 +110,9 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Log release job context
+        run: python3 scripts/log-release-context.py
 
       - name: Run release packaging regression tests
         run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
@@ -155,6 +162,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Log release job context
+        run: python3 scripts/log-release-context.py
+
       - name: Sign, package, and verify update archive
         id: signing
         env:
@@ -194,6 +204,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Log release job context
+        run: python3 scripts/log-release-context.py
 
       - name: Set up GoLand build
         uses: ./.github/actions/setup-goland
@@ -239,6 +252,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Log release job context
+        run: python3 scripts/log-release-context.py
+
       - name: Download release files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -257,24 +273,46 @@ jobs:
             'dist/release/latest-mac.yml'
             'dist/release/SHA256SUMS'
           )
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::A GitHub Release already exists for $TAG; refusing to replace it."
-            exit 1
-          fi
-
           release_creation_attempted=false
           release_owner_marker="<!-- reqws-release-workflow:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT} -->"
+          release_stage=''
+          stage_started=$SECONDS
+          finish_release_stage() {
+            if [[ -n "$release_stage" ]]; then
+              printf '[release][publish] stage=%s status=%s duration_s=%s\n' \
+                "$release_stage" "$1" "$((SECONDS - stage_started))"
+              release_stage=''
+            fi
+          }
+          start_release_stage() {
+            finish_release_stage success
+            release_stage="$1"
+            stage_started=$SECONDS
+            printf '[release][publish] stage=%s status=started\n' "$release_stage"
+          }
           cleanup_draft() {
             exit_code=$?
             trap - EXIT
+            if [[ "$exit_code" -eq 0 ]]; then
+              finish_release_stage success
+            else
+              finish_release_stage failed
+              printf '[release][publish] status=failed exit_code=%s\n' "$exit_code"
+            fi
             if [[ "$exit_code" -ne 0 && "$release_creation_attempted" == 'true' ]]; then
               release_is_draft="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
               release_body="$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || true)"
               if [[ "$release_is_draft" == 'true' && "$release_body" == *"$release_owner_marker"* ]]; then
+                printf '[release][publish] stage=cleanup-draft status=started\n'
                 echo "Removing incomplete draft release for $TAG."
-                gh release delete "$TAG" --yes \
-                  || echo "::warning::Could not remove incomplete draft release for $TAG."
+                if gh release delete "$TAG" --yes; then
+                  printf '[release][publish] stage=cleanup-draft status=success\n'
+                else
+                  printf '[release][publish] stage=cleanup-draft status=failed\n'
+                  echo "::warning::Could not remove incomplete draft release for $TAG."
+                fi
               else
+                printf '[release][publish] stage=cleanup-draft status=skipped\n'
                 echo "::warning::Release cleanup skipped because $TAG could not be confirmed as this run's draft."
               fi
             fi
@@ -282,12 +320,19 @@ jobs:
           }
           trap cleanup_draft EXIT
 
+          start_release_stage check-existing-release
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A GitHub Release already exists for $TAG; refusing to replace it."
+            exit 1
+          fi
+
           notes="$release_owner_marker
           > [!WARNING]
           > The macOS app ZIP uses a persistent personal self-signed identity. It is not Developer ID signed or notarized. The first update-enabled version requires manual installation; Gatekeeper may require individual approval.
 
           The Desktop app is Apple silicon (arm64) only. The separate GoLand plugin ZIP is unsigned; install it with Install Plugin from Disk. It is not bundled into the app or published to JetBrains Marketplace."
 
+          start_release_stage create-draft
           release_creation_attempted=true
           gh release create "$TAG" \
             --verify-tag \
@@ -297,8 +342,10 @@ jobs:
             --generate-notes \
             --notes "$notes"
 
+          start_release_stage upload-assets
           gh release upload "$TAG" "${files[@]}"
 
+          start_release_stage verify-draft-assets
           if [[ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" != 'true' ]]; then
             echo '::error::Release must remain a draft until its assets are verified.'
             exit 1
@@ -324,10 +371,13 @@ jobs:
             exit 1
           fi
 
+          start_release_stage download-draft-assets
           downloaded="$(mktemp -d "${RUNNER_TEMP}/reqws-draft-verify.XXXXXX")"
           gh release download "$TAG" --dir "$downloaded"
+          start_release_stage verify-downloaded-bytes
           cmp 'dist/release/SHA256SUMS' "$downloaded/SHA256SUMS"
           python3 scripts/verify-release-assets.py --directory "$downloaded" --version "$VERSION"
 
+          start_release_stage publish-release
           gh release edit "$TAG" --draft=false
           release_creation_attempted=false

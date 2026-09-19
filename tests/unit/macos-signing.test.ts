@@ -126,12 +126,17 @@ describe('personal release trust boundary', () => {
     const error = await execute(process.execPath, [path.resolve('scripts/with-macos-signing.mjs'), '--', process.execPath, '--version'], {
       env: { PATH: process.env.PATH, REQWS_BUILD_PROFILE: 'local' },
     }).catch((failure: unknown) => failure);
-    expect(error).toMatchObject({ code: 1, stdout: '', stderr: 'macOS signing failed at context. Check the protected job setup and cleanup step.\n' });
+    expect(error).toMatchObject({
+      code: 1,
+      stdout: expect.stringMatching(/^\[release\]\[signing\] stage=context status=started\n\[release\]\[signing\] stage=context status=failed duration_ms=\d+\n$/u),
+      stderr: 'macOS signing failed at context. Check the protected job setup and cleanup step.\n',
+    });
   });
 });
 
 describe('temporary signing lifecycle (mock system commands, no keychain mutations)', () => {
   it.each(['success', 'child failure', 'import failure', 'wrong certificate'])('cleans the temporary material and restores search/trust after %s', async (scenario) => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const root = await mkdtemp(path.join(directory, 'runner-'));
     const calls: string[][] = [];
     const run: SigningRunner = async (command, args) => {
@@ -159,6 +164,17 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     expect(await readdir(root)).toEqual([]);
     expect(calls.some((call) => call[1] === 'delete-keychain')).toBe(true);
     expect(calls.some((call) => call.includes('-A'))).toBe(false);
+    const output = log.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(output).toContain('stage=cleanup status=success duration_ms=');
+    for (const secret of ['sensitive-password', 'private-path', root, environment(root).MAC_SIGNING_P12_BASE64!, environment(root).MAC_SIGNING_P12_PASSWORD!]) {
+      expect(output).not.toContain(secret);
+    }
+    if (scenario !== 'success') {
+      const failed = scenario === 'child failure' ? 'packaging' : 'import-p12';
+      expect(output).toContain(`stage=${failed} status=failed duration_ms=`);
+      expect(output).not.toContain(`stage=${failed} status=success`);
+      expect(output.indexOf(`stage=${failed} status=failed`)).toBeLessThan(output.indexOf('stage=cleanup status=started'));
+    }
     if (scenario === 'success' || scenario === 'child failure') {
       expect(child).toHaveBeenCalledOnce();
       expect(calls).toContainEqual(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', '/original/login.keychain-db']);
@@ -166,6 +182,7 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     } else expect(child).not.toHaveBeenCalled();
   });
   it('keeps a public cleanup journal on cleanup failure and retries only the remaining operations', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const root = await mkdtemp(path.join(directory, 'runner-'));
     let failCleanup = true;
     const run: SigningRunner = async (_command, args) => {
@@ -182,5 +199,10 @@ describe('temporary signing lifecycle (mock system commands, no keychain mutatio
     failCleanup = false;
     await cleanupMacosSigning(environment(root), run);
     expect(await readdir(root)).toEqual([]);
+    const output = log.mock.calls.map(([line]) => String(line)).join('\n');
+    expect(output).toContain('stage=remove-trust status=failed');
+    expect(output).toContain('stage=cleanup status=failed');
+    expect(output).toContain('stage=cleanup status=success');
+    expect(output).not.toContain('test trust cleanup failure');
   });
 });

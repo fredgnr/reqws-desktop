@@ -5,12 +5,11 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { buildProfile, releaseCertificatePath, validateReleaseCertificate } from './macos-build-profile.mts';
+import { runReleaseStage, startReleaseStage, type ReleaseStage } from './release-log.mts';
 
 export type SigningRunner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<string>;
 
-type SigningStage = 'context' | 'credentials' | 'public-certificate' | 'temporary-files'
-  | 'keychain-search-list' | 'create-keychain' | 'unlock-keychain' | 'import-p12'
-  | 'key-access' | 'code-signing-trust' | 'trusted-identity' | 'packaging' | 'cleanup';
+type SigningStage = ReleaseStage<'signing'>;
 
 class SigningFailure extends Error {
   readonly stage: SigningStage;
@@ -33,13 +32,22 @@ export function signingFailureMessage(error: unknown): string {
 // can contain passwords. Only the trusted packaging child inherits stdio.
 export const runSigningCommand: SigningRunner = async (command, args, env) => await new Promise((resolve, reject) => {
   const child = spawn(command, args, { shell: false, env, stdio: ['ignore', 'pipe', 'ignore'] });
+  let startFailed = false;
   let output = '';
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => { output = (output + chunk).slice(-128 * 1024); });
-  child.once('error', () => reject(new Error('Signing system command could not start.')));
+  child.once('error', () => {
+    startFailed = true;
+    console.error('[release][signing-command] status=start-failed');
+    reject(new Error('Signing system command could not start.'));
+  });
   child.once('close', (code) => {
+    if (startFailed) return;
     if (code === 0) resolve(output);
-    else reject(new Error(`Signing system command failed (exit ${code ?? 'signal'}).`));
+    else {
+      console.error(`[release][signing-command] status=failed exit_code=${code ?? 'signal'}`);
+      reject(new Error(`Signing system command failed (exit ${code ?? 'signal'}).`));
+    }
   });
 });
 
@@ -110,29 +118,29 @@ async function cleanupSigningState(state: CleanupState, run: SigningRunner) {
   const errors: unknown[] = [];
   // Attempt every cleanup even when an earlier command fails. Keep the public
   // certificate and journal for --cleanup if trust/keychain cleanup needs retry.
-  const attempt = async (operation: () => Promise<unknown>) => {
-    try { await operation(); } catch (error) { errors.push(error); }
+  const attempt = async (stage: SigningStage, operation: () => Promise<unknown>) => {
+    try { await runReleaseStage('signing', stage, operation); } catch (error) { errors.push(error); }
   };
-  if (state.searchListChanged) await attempt(async () => {
+  if (state.searchListChanged) await attempt('restore-search-list', async () => {
     await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...state.originalSearchList]);
     state.searchListChanged = false;
   });
-  if (state.trustAdded) await attempt(async () => {
+  if (state.trustAdded) await attempt('remove-trust', async () => {
     await run('/usr/bin/sudo', ['-n', '/usr/bin/security', 'remove-trusted-cert', '-d', path.join(state.directory, 'public.cer')]);
     state.trustAdded = false;
   });
-  if (state.keychainCreated) await attempt(async () => {
+  if (state.keychainCreated) await attempt('delete-keychain', async () => {
     await run('/usr/bin/security', ['delete-keychain', path.join(state.directory, 'signing.keychain-db')]);
     state.keychainCreated = false;
   });
-  await attempt(async () => await rm(path.join(state.directory, 'identity.p12'), { force: true }));
+  await attempt('delete-p12', async () => await rm(path.join(state.directory, 'identity.p12'), { force: true }));
   if (errors.length > 0) throw new Error('Signing cleanup failed; run the job always() cleanup before leaving the runner.');
-  await rm(state.directory, { recursive: true });
+  await runReleaseStage('signing', 'delete-temporary-directory', async () => await rm(state.directory, { recursive: true }));
 }
 
 export async function cleanupMacosSigning(environment = process.env, run = runSigningCommand) {
   try {
-    await performMacosSigningCleanup(environment, run);
+    await runReleaseStage('signing', 'cleanup', async () => await performMacosSigningCleanup(environment, run));
   } catch {
     throw new SigningFailure('cleanup');
   }
@@ -171,9 +179,15 @@ export async function withMacosSigning(
   publicCertificate = releaseCertificatePath,
 ) {
   let stage: SigningStage = 'context';
+  let finish = startReleaseStage('signing', stage);
   try {
-    await performMacosSigning(command, environment, run, execute, publicCertificate, (next) => { stage = next; });
+    await performMacosSigning(command, environment, run, execute, publicCertificate, (next) => {
+      finish('success');
+      stage = next;
+      finish = startReleaseStage('signing', next);
+    }, (status) => finish(status));
   } catch (error) {
+    finish('failed');
     throw error instanceof SigningFailure ? error : new SigningFailure(stage);
   }
 }
@@ -185,6 +199,7 @@ async function performMacosSigning(
   execute: ((command: string[], env: NodeJS.ProcessEnv) => Promise<void>) | undefined,
   publicCertificate: string,
   setStage: (stage: SigningStage) => void,
+  finishStage: (status: 'success' | 'failed') => void,
 ) {
   assertSigningContext(environment);
   if (!command[0]) throw new Error('A packaging command is required after --.');
@@ -275,12 +290,16 @@ async function performMacosSigning(
       child.once('error', () => reject(new Error('Packaging command could not start.')));
       child.once('close', (code) => code === 0 && !interrupted ? resolve() : reject(new Error('Signed packaging failed or was interrupted.')));
     });
+    finishStage('success');
   } catch (error) {
+    finishStage('failed');
     operationError = error;
   } finally {
     try {
-      await cleanupSigningState(state, run);
-      await rm(journal);
+      await runReleaseStage('signing', 'cleanup', async () => {
+        await cleanupSigningState(state, run);
+        await rm(journal);
+      });
     } catch {
       // Even a journal write failure must remain a cleanup failure, rather than
       // being attributed to an earlier packaging/import stage.

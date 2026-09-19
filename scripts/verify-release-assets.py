@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
 
 
 def digest(filename, algorithm):
@@ -75,7 +76,12 @@ def main():
     parser.add_argument('--version', required=True)
     parser.add_argument('--stage', action='store_true', help='Validate sidecars and exclusively create SHA256SUMS.')
     args = parser.parse_args()
+    started = time.monotonic()
+    print(f'[release][assets] status=started mode={"stage" if args.stage else "verify"}', flush=True)
     verify_release_assets(args.directory, args.version, args.stage)
+    for name in [f'ReqWS-{args.version}-macos-arm64.zip', f'ReqWS-{args.version}-goland-plugin.zip', 'latest-mac.yml', 'SHA256SUMS']:
+        print(f'[release][assets] verified={name} bytes={(args.directory / name).stat().st_size}', flush=True)
+    print(f'[release][assets] status=success duration_ms={round((time.monotonic() - started) * 1000)}', flush=True)
     print('Exact release asset set, metadata and byte checksums verified.')
 
 
@@ -83,4 +89,5 @@ if __name__ == '__main__':
     try:
         main()
     except (ValueError, OSError, TypeError, KeyError, IndexError) as error:
+        print('[release][assets] status=failed', flush=True)
         raise SystemExit(f'Release verification failed: {error}') from None
