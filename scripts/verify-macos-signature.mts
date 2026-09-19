@@ -55,6 +55,13 @@ export async function assertNoUpdateFeed(appBundle: string) {
   throw new Error('Refusing to use a local build with an update-enabled app. Use a separate installation directory.');
 }
 
+export async function extractSigningCertificate(target: string, prefix: string): Promise<Buffer> {
+  // This option's prefix is optional; a separate argument is interpreted as
+  // another input file by codesign instead of the certificate output prefix.
+  await execute('/usr/bin/codesign', ['--display', `--extract-certificates=${prefix}`, target]);
+  return await readFile(`${prefix}0`);
+}
+
 export async function verifyReleaseSignature(
   appBundle: string,
   expectedPin: string | undefined,
@@ -78,8 +85,8 @@ export async function verifyReleaseSignature(
         throw new Error('Release code must use a certificate and Hardened Runtime.');
       }
       const prefix = path.join(temporary, `certificate-${index}-`);
-      await execute('/usr/bin/codesign', ['--display', '--extract-certificates', prefix, target]);
-      const pin = createHash('sha256').update(await readFile(`${prefix}0`)).digest('hex').toUpperCase();
+      const certificate = await extractSigningCertificate(target, prefix);
+      const pin = createHash('sha256').update(certificate).digest('hex').toUpperCase();
       if (pin !== expectedPin) throw new Error('A nested code signature does not match the pinned certificate.');
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }

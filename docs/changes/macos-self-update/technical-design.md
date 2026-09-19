@@ -2,7 +2,7 @@
 title: ReqWS macOS 自更新技术方案
 type: technical-design
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # ReqWS macOS 自更新技术方案
@@ -448,6 +448,8 @@ old_requirement="$(/usr/bin/codesign -d -r- "$OLD_APP" 2>&1 | \
 ```
 
 此外对应用和所有嵌套 Mach-O 的签名身份抽取 CER，核对固定证书 pin；`codesign --verify` 单独成功只能说明自身签名有效，不能排除“错身份但签名有效”。上述 CLI 检查只是静态预检，不能代替 Squirrel 原生错误负向和实际重启。
+
+抽取命令必须将可选前缀与选项组成单个参数：`codesign --display --extract-certificates="$PREFIX" "$TARGET"`。`--extract-certificates` 后用独立参数传前缀会被 macOS 解释成另一输入文件，并报该路径不存在。读取 `${PREFIX}0` 的叶证书后继续核对 pin，成功和失败都清理抽取目录；不得通过跳过证书检查解决此错误。原生参数回归使用系统已签名二进制的临时副本，完整校验逻辑另覆盖嵌套证书不匹配、ad-hoc、缺少 Hardened Runtime、缺少抽取文件和系统验签失败；这些测试不替代生产签名发布验收。
 
 实施改动后的基础命令：`npm run check`、`python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`，加新增精确 selector。真实签名、Gatekeeper、安装/重启不可由 Linux mock 或打包成功替代。不因本任务给 GoLand 加新测试范围，保留既有 release pipeline 的插件检查即可。
 

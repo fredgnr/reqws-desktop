@@ -2,7 +2,7 @@
 title: macOS 自更新实施与验证记录
 type: test-report
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # macOS 自更新实施与验证记录
@@ -99,7 +99,7 @@ PR #11 合并后，维护者授权将 `v0.1.3` 指向合并提交 `cb25cbb` 并�
 
 修复候选本地 `npm run check` 通过 39 个文件、400 项测试；工作流 Python 回归 26 项通过。原生导入回归共 2 项，临时移除格式参数时正确密码用例失败、错误密码用例通过；恢复参数后两项均通过。真实 Node CLI 启动与上下文拒绝、固定阶段诊断和清理失败重试也有回归覆盖。官方 macOS 15 runner 默认 OpenSSL 为 1.1，因此 CI 与 Release 项目检查显式准备已有或安装缺失的 `openssl@3`，不依赖默认 PATH 的版本；本地不自动安装工具。
 
-本节的原生导入回归不等于完整生产包、GitHub runner 管理员信任或真实自更新验收。已存在的 `v0.1.3` 仍指向原提交；重跑该标签不会使用修复。正式复验需将修复合入默认分支，按发布契约选择未使用的新版本与标签。
+本节的原生导入回归不等于完整生产包、GitHub runner 管理员信任或真实自更新验收。截至该修复候选提交时，`v0.1.3` 仍指向原提交；重跑原标签不会使用修复。后续维护者明确授权的 squash 合并与标签重建及新报错见 §7，不将该例外当成常规重用已发布版本的流程。
 
 ## 6. Release 分阶段日志
 
@@ -109,7 +109,19 @@ PR #11 合并后，维护者授权将 `v0.1.3` 指向合并提交 `cb25cbb` 并�
 
 本轮 `npm run check` 通过 40 个文件、402 项测试；工作流 Python 回归 28 项通过，文档和 diff 检查通过。上述发布路径使用本地替代 `gh` 和一次性资产，属于日志及控制流回归，不替代正式 Release 验收。
 
-## 7. 剩余验收与交接
+## 7. 签后证书抽取修复（2026-09-20）
+
+维护者随后授权将 PR #12 squash 合入 `main`（`589b26a`），删除并重建 `v0.1.3` 指向该提交，触发 [Release run 35436742088](https://github.com/fredgnr/reqws-desktop/actions/runs/35436742088)。[macOS package job](https://github.com/fredgnr/reqws-desktop/actions/runs/35436742088/job/105935891198) 的签后校验报告 `codesign --display --extract-certificates <prefix> <app>` 把临时证书输出前缀当作输入文件，报 `No such file or directory`。诊断时 job 仍运行且独立清理步骤未完成，不能由本地修复推断该 runner 已清理。
+
+改为 `--extract-certificates=<prefix>` 单一参数，继续读取叶证书 `${prefix}0` 并逐项核对应用、嵌套 App 和 Mach-O 的 pin。保留原生严格验签、Hardened Runtime、ad-hoc 拒绝和 finally 目录清理。
+
+新增原生回归从系统 `/usr/bin/codesign` 复制已有签名到带空格的临时嵌套路径，使用生产抽取函数和实际 Node/`codesign` 提取 DER；直接断言文件存在、为 X.509 DER 且副本与原件叶证书一致。临时恢复旧参数时，该测试复现同一输入路径错误。完整 `verifyReleaseSignature` 的六项模拟系统命令回归覆盖四个签名目标的遍历、错误嵌套身份、ad-hoc、缺少 Runtime、无叶证书输出、原生验签失败，以及成功/失败后的目录清理。
+
+修复候选本地 `npm run check` 通过 42 个文件、409 项测试；工作流 Python 回归 28 项通过，文档和 diff 检查通过。新增的 1 项原生测试和 6 项完整校验回归均实际执行，没有跳过。
+
+原生抽取测试不需要新身份、签名或信任；受限沙箱的 `codesign` 即使返回 0 也可能不写证书，因此必须以实际输出为准。前置可行性探针使用的一次性身份未能完成签名，临时钥匙串和材料已清理、搜索列表已恢复，没有将该探针计入通过证据。本轮不读取真实私钥/Secrets、不更改发布标签；生产 runner 完整签名、清理和发布仍需修复合入后的正式候选验证。
+
+## 8. 剩余验收与交接
 
 - 本次源码提交与推送只交付实施候选，不包含正式发布；私有凭据备份、源码提交和真实发布验收是不同交付结果。
 - 真实 runner 执行签名 wrapper、Hardened Runtime 生产包和解压后证书/DR 校验，确认临时管理员信任清理；缺项或错身份必须失败，不能以 mock 代替。

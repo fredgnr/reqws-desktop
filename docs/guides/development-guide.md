@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # ReqWS 开发指南
@@ -279,6 +279,8 @@ Desktop package job 使用受保护的 `macos-release` Environment，私钥只�
 P12 导入必须使用 `security import -f pkcs12`；macOS 的自动格式识别可能把有效 OpenSSL 3 P12 误报为密码错误。wrapper 使用固定阶段日志，不回显秘密或原生异常。`tests/integration/macos-signing-import.test.ts` 使用真实系统命令覆盖正确密码导入、身份匹配和错误密码拒绝；不会运行发布 wrapper 或伪造 GitHub 上下文。CI 与 Release 的项目检查在一次性 runner 缺少 `openssl@3` 时通过 Homebrew 安装，并显式选择其路径；本地检查只使用已有工具，缺失时报告错误。
 
 排查 Release 时搜索 `[release]`：`context` 提供当前 run/commit/runner；`signing` 和 `macos-package` 记录阶段的 started/success/failed 与耗时；`signing-command` 只记录启动失败或退出码；`assets` 给出已验证资产名称和大小；`publish` 区分上传、下载复验、正式公开及失败草稿清理。Forge 普通输出实时可见。先找失败阶段，再核对清理结果；不要开启 shell tracing、转储环境或打印签名系统命令的原始 stderr 来排错。
+
+签后证书抽取使用单个 `--extract-certificates=<prefix>` 参数。`tests/integration/macos-certificate-extraction.test.ts` 在临时目录复制系统自带的已签名程序，通过实际 Node/`codesign` 检查带空格路径的 DER 输出，不执行该副本、不创建身份或修改信任；测试需要正常访问 macOS 安全服务，受限沙箱下命令返回 0 但没有证书输出不能算通过。`tests/unit/macos-signature-verification.test.ts` 使用模拟系统命令覆盖完整遍历、身份/Runtime 拒绝及抽取目录清理。
 
 证书有效期核对、P12/PEM 包装密码更新、Secrets 修复和身份迁移使用项目级 [reqws-signing-maintenance](../../.agents/skills/reqws-signing-maintenance/SKILL.md)。既有身份从指定私有备份的明确 commit 临时恢复；不重新建立固定 home/桌面备份。只更新包装密码不改公开 CER 或 pin；续签/换密钥按身份迁移处理，不能预设旧客户端继续接受。完成备份读回恢复后清理本地秘密材料，保留源码公开 CER；技能不自动授权发布或真实安装。
 
