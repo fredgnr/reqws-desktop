@@ -17,3 +17,11 @@ coverage/
 /.idea/
 __pycache__/
 *.py[cod]
+*.p12
+*.pfx
+*.key
+*.keychain
+*.keychain-db
+*.encrypted.pem
+**/.key-password
+**/.p12-password

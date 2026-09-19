@@ -265,11 +265,17 @@ npm run package:macos -- --skip-ci --skip-check
 
 产物位于 `out/ReqWS-darwin-<arch>/ReqWS.app`。脚手架校验 bundle ID、版本、Mach-O 架构和 codesign 结构。不要提交 `out/` 或 `.vite/`。
 
+默认 `REQWS_BUILD_PROFILE=local` 保持 ad-hoc 签名，不复制更新 feed，并拒绝覆盖带更新配置的目标 App。`personal-release` 需要持久公开 DER 证书、匹配 pin、签名身份与钥匙串，缺项立即失败；正式包仅支持 arm64。生产更新服务、Settings 手动更新、安装活动互斥和 Release 工作流已接入；长期身份和 GitHub Environment 已配置，公开 CER 已放入实施工作树，真实 CI 签名及 Release 两版本验收仍待完成，见[实施记录](../changes/macos-self-update/implementation-2026-09-19.md)。
+
 安装脚本会在目标目录进行 staging、旧版备份、整体替换和尽力回滚；不要用 `sudo` 包裹整个 npm 命令，也不要弱化遗留 lock/staging/backup 的 fail-closed 检查。
 
-GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。当前 Release 的 macOS 应用 ZIP 仍为 ad-hoc 签名且未公证；面向外部分发前需要独立实现 Developer ID、Hardened Runtime 和 notarization。
+GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。历史 ad-hoc 资产保持不变；后续工作流采用[个人自签名方案](../changes/macos-self-update/technical-design.md)，带 Hardened Runtime，但没有 Developer ID 或 Apple 公证。首个可更新版本需要手动 bootstrap。
 
-CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip` 与 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
+CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 21 上执行全部既有插件检查及 261/262 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
+
+Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后清理信任、钥匙串及 P12。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
+
+证书有效期核对、P12/PEM 包装密码更新、Secrets 修复和身份迁移使用项目级 [reqws-signing-maintenance](../../.agents/skills/reqws-signing-maintenance/SKILL.md)。既有身份从指定私有备份的明确 commit 临时恢复；不重新建立固定 home/桌面备份。只更新包装密码不改公开 CER 或 pin；续签/换密钥按身份迁移处理，不能预设旧客户端继续接受。完成备份读回恢复后清理本地秘密材料，保留源码公开 CER；技能不自动授权发布或真实安装。
 
 CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。发布脚本回归使用 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
 

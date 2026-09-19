@@ -118,10 +118,12 @@ jobs:
     needs: validate
     runs-on: macos-15
     timeout-minutes: 45
+    environment: macos-release
     env:
       ARCH: arm64
       CI: 'true'
       VERSION: ${{ needs.validate.outputs.version }}
+      REQWS_BUILD_PROFILE: personal-release
 
     steps:
       - name: Check out tag
@@ -145,49 +147,27 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Package and verify app
-        run: npm run package:macos -- --skip-ci --skip-check --arch "$ARCH"
+      - name: Sign, package, and verify update archive
+        id: signing
+        env:
+          MAC_SIGNING_P12_BASE64: ${{ secrets.MAC_SIGNING_P12_BASE64 }}
+          MAC_SIGNING_P12_PASSWORD: ${{ secrets.MAC_SIGNING_P12_PASSWORD }}
+          MAC_SIGNING_CERT_SHA256: ${{ vars.MAC_SIGNING_CERT_SHA256 }}
+        run: node scripts/with-macos-signing.mjs -- node scripts/build-macos-release.mts "$VERSION"
 
-      - name: Create and verify release archive
-        run: |
-          app="out/ReqWS-darwin-${ARCH}/ReqWS.app"
-          output='dist/release'
-          archive="ReqWS-${VERSION}-macos-${ARCH}.zip"
-          verify_dir="${RUNNER_TEMP}/reqws-release-verify"
-
-          mkdir -p "$output" "$verify_dir"
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
-            "$app" "$output/$archive"
-          /usr/bin/ditto -x -k "$output/$archive" "$verify_dir"
-
-          extracted_app="$verify_dir/ReqWS.app"
-          /usr/bin/codesign --verify --deep --strict --verbose=2 "$extracted_app"
-
-          bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$extracted_app/Contents/Info.plist")"
-          app_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$extracted_app/Contents/Info.plist")"
-          if [[ "$bundle_id" != 'com.reqws.desktop' || "$app_version" != "$VERSION" ]]; then
-            echo "::error::Archive identity mismatch: id=$bundle_id version=$app_version"
-            exit 1
-          fi
-
-          executable_arches="$(/usr/bin/lipo -archs "$extracted_app/Contents/MacOS/ReqWS")"
-          if [[ "$executable_arches" != 'arm64' ]]; then
-            echo "::error::Archive must contain only arm64: $executable_arches"
-            exit 1
-          fi
-
-          (
-            cd "$output"
-            /usr/bin/shasum -a 256 "$archive" > "$archive.sha256"
-          )
+      - name: Clean up temporary signing state
+        if: ${{ always() && (steps.signing.outcome == 'success' || steps.signing.outcome == 'failure' || steps.signing.outcome == 'cancelled') }}
+        run: node scripts/with-macos-signing.mjs --cleanup
 
       - name: Upload intermediate release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-arm64
           path: |
-            dist/release/*.zip
-            dist/release/*.sha256
+            dist/release/ReqWS-${{ env.VERSION }}-macos-arm64.zip
+            dist/release/ReqWS-${{ env.VERSION }}-macos-arm64.zip.sha256
+            dist/release/latest-mac.yml
+            dist/release/latest-mac.yml.sha256
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -246,6 +226,11 @@ jobs:
       VERSION: ${{ needs.validate.outputs.version }}
 
     steps:
+      - name: Check out release verification scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download release files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -254,35 +239,14 @@ jobs:
           merge-multiple: true
 
       - name: Verify release files and checksums
-        run: |
-          directory='dist/release'
-          expected_file="${RUNNER_TEMP}/expected-release-files"
-          actual_file="${RUNNER_TEMP}/actual-release-files"
-          printf '%s\n' \
-            "ReqWS-${VERSION}-macos-arm64.zip" \
-            "ReqWS-${VERSION}-macos-arm64.zip.sha256" \
-            "ReqWS-${VERSION}-goland-plugin.zip" \
-            "ReqWS-${VERSION}-goland-plugin.zip.sha256" \
-            | LC_ALL=C sort > "$expected_file"
-          find "$directory" -maxdepth 1 -type f -exec basename {} \; \
-            | LC_ALL=C sort > "$actual_file"
-          if ! diff -u "$expected_file" "$actual_file"; then
-            echo '::error::Downloaded release file set is incomplete or unexpected.'
-            exit 1
-          fi
-
-          cat "$directory"/*.zip.sha256 \
-            | LC_ALL=C sort -k 2 > "$directory/SHA256SUMS"
-          (
-            cd "$directory"
-            sha256sum -c SHA256SUMS
-          )
+        run: python3 scripts/verify-release-assets.py --stage --directory dist/release --version "$VERSION"
 
       - name: Create, verify, and publish release
         run: |
           files=(
             "dist/release/ReqWS-${VERSION}-macos-arm64.zip"
             "dist/release/ReqWS-${VERSION}-goland-plugin.zip"
+            'dist/release/latest-mac.yml'
             'dist/release/SHA256SUMS'
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -312,7 +276,7 @@ jobs:
 
           notes="$release_owner_marker
           > [!WARNING]
-          > The macOS app ZIP uses an ad-hoc signature. It is not Developer ID signed or notarized, and is not a Gatekeeper-ready public-distribution artifact.
+          > The macOS app ZIP uses a persistent personal self-signed identity. It is not Developer ID signed or notarized. The first update-enabled version requires manual installation; Gatekeeper may require individual approval.
 
           The Desktop app is Apple silicon (arm64) only. The separate GoLand plugin ZIP is unsigned; install it with Install Plugin from Disk. It is not bundled into the app or published to JetBrains Marketplace."
 
@@ -337,6 +301,7 @@ jobs:
           printf '%s\n' \
             "ReqWS-${VERSION}-macos-arm64.zip" \
             "ReqWS-${VERSION}-goland-plugin.zip" \
+            'latest-mac.yml' \
             'SHA256SUMS' \
             | LC_ALL=C sort > "$expected_assets_file"
           gh release view "$TAG" --json assets --jq '.assets[].name' \
@@ -350,6 +315,11 @@ jobs:
             echo '::error::Draft release contains an empty asset.'
             exit 1
           fi
+
+          downloaded="$(mktemp -d "${RUNNER_TEMP}/reqws-draft-verify.XXXXXX")"
+          gh release download "$TAG" --dir "$downloaded"
+          cmp 'dist/release/SHA256SUMS' "$downloaded/SHA256SUMS"
+          python3 scripts/verify-release-assets.py --directory "$downloaded" --version "$VERSION"
 
           gh release edit "$TAG" --draft=false
           release_creation_attempted=false

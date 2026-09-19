@@ -4,6 +4,7 @@ import {
   type AppState,
 } from '../../shared/types';
 import { AtomicJsonStore } from './atomic-json-store';
+import { ApplicationActivityGate } from './application-activity-gate';
 
 export function createDefaultAppState(): AppState {
   return {
@@ -23,7 +24,7 @@ export class AppStateStore {
   private readonly jsonStore: AtomicJsonStore<AppState>;
   private pending: Promise<void> = Promise.resolve();
 
-  constructor(filePath: string) {
+  constructor(filePath: string, private readonly activity = new ApplicationActivityGate()) {
     this.jsonStore = new AtomicJsonStore(filePath, {
       defaultValue: createDefaultAppState,
       parse: (value) => appStateSchema.parse(value),
@@ -57,11 +58,16 @@ export class AppStateStore {
   }
 
   private enqueue<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
-    const result = this.pending.then(operation, operation);
+    const release = this.activity.enter();
+    const result = this.pending.then(operation, operation).finally(release);
     this.pending = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
+  }
+
+  flush(): Promise<void> {
+    return this.pending;
   }
 }

@@ -8,7 +8,7 @@ ReqWS 负责仓库目录、功能分支和工作区文件的创建与维护，�
 
 | 文档 | 适合谁 | 内容 |
 |---|---|---|
-| [使用说明](docs/guides/user-guide.md) | ReqWS 用户 | 安装、Git 配置、仓库与工作区操作、设置、恢复和数据保护。 |
+| [使用说明](docs/guides/user-guide.md) | ReqWS 用户 | 安装、个人签名版的证书信任与应用内更新、Git 配置、工作区操作和数据保护。 |
 | [GoLand 插件使用指南](docs/guides/goland-plugin-guide.md) | GoLand 用户 | 图解插件编译安装、Tool Window 区块与按钮、状态、同步与安全排障。 |
 | [开发指南](docs/guides/development-guide.md) | 开发者 | 环境、架构边界、测试、国际化、文档和 macOS 交付流程。 |
 | [项目文档索引](docs/README.md) | 所有人 | 当前需求、技术方案、测试证据、交付记录、规范与历史资料。 |
@@ -40,7 +40,19 @@ nvm use
 npm run install:macos
 ```
 
-不要用 `sudo` 包裹整个 npm 命令。当前构建采用 ad-hoc 签名且未经 Apple 公证，不是面向外部公开分发的 Gatekeeper-ready 安装包；安装参数、更新方式与认证准备见[使用说明](docs/guides/user-guide.md)。
+不要用 `sudo` 包裹整个 npm 命令。默认源码构建采用 ad-hoc 签名且未经 Apple 公证，不启用应用内更新；安装参数与 Git 认证准备见[使用说明](docs/guides/user-guide.md)。
+
+## 个人签名版：首次安装、证书信任与自更新
+
+应用内更新面向 macOS Apple silicon（arm64），需要先手动安装使用固定证书签名、内置更新器的版本。旧 ad-hoc 版本和默认 `npm run install:macos` 构建不能仅靠导入证书获得更新能力。当前正式发布与干净用户环境验收仍待完成，以下用于受控个人试运行，进度见[实施记录](docs/changes/macos-self-update/implementation-2026-09-19.md)。
+
+1. 从[可信 Releases](https://github.com/fredgnr/reqws-desktop/releases)取得明确支持应用内更新的 `ReqWS-<版本>-macos-arm64.zip`，以及对应版本源码中的[公开证书 `reqws-signing.cer`](build/certificates/reqws-signing.cer)。核对发布说明、校验信息和维护者通过可信渠道提供的证书 SHA-256 指纹；不要只凭证书名称判断身份。
+2. 退出已有 ReqWS，备份应用数据后解压 ZIP，将 `ReqWS.app` 放到自己可写的 `~/Applications/ReqWS.app` 或 `/Applications/ReqWS.app`。只替换 App，保留用户数据和 workspace；不要从 ZIP、Downloads 或临时目录运行后直接更新。
+3. **需要为该个人签名版本添加信任时**，打开“钥匙串访问”，选择“登录（login）”，导入已核对的 `.cer`。双击 `ReqWS Personal Code Signing`，展开“信任”，仅将“代码签名”设为“始终信任”，其他用途保持系统默认；关闭窗口并按 macOS 提示授权。不要把顶部的所有用途统一设为“始终信任”。具体步骤见[安装与信任公开证书](docs/guides/user-guide.md#安装与信任公开证书)。
+4. 首次启动若被“未知开发者”提示拦截，在确认来源和签名可信后，按系统设置 → 隐私与安全性中的提示，仅为 ReqWS 选择“仍要打开”。证书信任不等于 Apple 公证，也不代替这一步；不要全局关闭 Gatekeeper。
+5. 打开 ReqWS 的“设置 → 应用更新”，依次选择“检查更新”“下载更新”“安装并重启”。只有维护者发布更高版本后才会发现更新；应用不会后台自动下载或在普通退出时安装。
+
+配置证书信任时只需导入公开 CER，**不要导入 P12、私钥或维护者的密码**。是否需要额外的用户证书信任仍以目标 Mac 的验收结果为准；若已正常更新，不必额外扩大信任。若出现签名无效、证书不匹配或应用损坏，停止安装并联系维护者，不通过信任陌生证书绕过。完整说明与 Apple 操作参考见[使用指南](docs/guides/user-guide.md#个人签名版本的应用内更新)。
 
 ## 常用开发命令
 

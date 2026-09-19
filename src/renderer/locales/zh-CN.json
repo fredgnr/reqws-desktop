@@ -339,7 +339,51 @@
       "MANIFEST_WRITE_FAILED": "无法保存工作区清单。",
       "WORKSPACE_FILE_WRITE_FAILED": "无法写入工作区文件。",
       "OPERATION_IN_PROGRESS": "已有操作正在进行。",
-      "UNKNOWN": "发生未知错误。"
+      "UNKNOWN": "发生未知错误。",
+      "UPDATE_DISABLED": "当前无法使用应用内更新。",
+      "UPDATE_BUSY": "有任务正在进行或正在安装更新，请稍后重试。",
+      "UPDATE_NOT_AVAILABLE": "请先检查更新并选择可用版本。",
+      "UPDATE_NOT_DOWNLOADED": "请先完成更新下载。",
+      "UPDATE_CHECK_FAILED": "检查更新失败，请检查网络后重试。",
+      "UPDATE_DOWNLOAD_FAILED": "下载更新失败，请重新检查并下载。",
+      "UPDATE_SIGNATURE_INVALID": "更新包未通过代码签名验证，旧版应用已保留。",
+      "UPDATE_INSTALL_FAILED": "安装更新失败，旧版应用已保留。",
+      "UPDATE_UNSUPPORTED_LOCATION": "请将 ReqWS 安装在可写的“应用程序”目录或个人“应用程序”目录后再更新。",
+      "UPDATE_CONFIG_INVALID": "更新配置无效，请使用可信发布的应用。",
+      "UPDATE_RESTART_REQUIRED": "请重启 ReqWS 后再尝试更新。",
+      "UPDATE_TIMEOUT": "更新请求超时，请重新检查更新。"
+    }
+  },
+  "updates": {
+    "title": "应用更新",
+    "description": "手动检查、下载并安装新版本。",
+    "loading": "正在读取更新状态…",
+    "currentVersion": "当前版本 {{version}}",
+    "nextVersion": "目标版本 {{version}}",
+    "check": "检查更新",
+    "download": "下载更新",
+    "install": "安装并重启",
+    "progress": "下载进度",
+    "releaseNotes": "版本说明",
+    "confirmTitle": "安装更新并重启？",
+    "confirmDescription": "将安装 {{version}} 并重启 ReqWS。安装前会检查进行中的任务，工作区和应用数据会保留。",
+    "phases": {
+      "disabled": "此版本未启用应用内更新。",
+      "idle": "尚未检查更新。",
+      "checking": "正在检查更新…",
+      "available": "发现新版本。",
+      "not-available": "当前已是最新版本。",
+      "downloading": "正在下载更新…",
+      "downloaded": "已下载，安装时验证代码签名。",
+      "installing": "正在验证并安装更新…",
+      "error": "更新未完成。"
+    },
+    "reasons": {
+      "development": "开发模式下无法检查更新。",
+      "unsupported-platform": "应用内更新仅支持 macOS Apple silicon（arm64）。",
+      "local-build": "此本地构建未配置更新源。",
+      "invalid-config": "更新配置无效，其他功能仍可使用。",
+      "restart-required": "请重启 ReqWS 后重试更新，其他功能仍可使用。"
     }
   }
 }

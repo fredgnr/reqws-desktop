@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReqwsAPI } from '../../src/shared/types';
+import { disabledUpdates } from '../fixtures/disabled-updates';
 import { initializeI18n } from '../../src/renderer/i18n';
 
 const getSettings = vi.fn();
@@ -34,6 +35,7 @@ beforeAll(async () => {
       save: saveSettings,
     },
     dialogs: { selectDirectory },
+    updates: disabledUpdates(),
     editors: {
       getAvailability: vi.fn().mockResolvedValue({
         git: { available: true },

@@ -7,6 +7,10 @@ import {
 } from 'electron';
 
 import { ReqwsError, toReqwsError } from '../../shared/errors';
+import { IPC_CHANNELS } from '../../shared/ipc-channels';
+import { isTrustedReqwsWebContents } from '../security';
+import { ApplicationActivityGate } from '../services/application-activity-gate';
+import { createUpdateService } from '../services/create-update-service';
 import { AppStateStore } from '../services/app-state-store';
 import { BranchService } from '../services/branch-service';
 import {
@@ -89,8 +93,10 @@ export async function createMainServices(
   userDataPath: string,
   options: MainServiceFactoryOptions = {},
 ): Promise<RegisterIpcDependencies> {
+  const activityGate = new ApplicationActivityGate();
   const stateStore = new AppStateStore(
     path.join(userDataPath, STATE_FILE_RELATIVE_PATH),
+    activityGate,
   );
   const repositoryService = new RepositoryService(stateStore);
   const settingsService = new DefaultSettingsService(
@@ -105,7 +111,7 @@ export async function createMainServices(
     message: 'Git is required for this operation but was not found.',
   });
   try {
-    git = await (options.resolveGit ?? (() => GitRunner.create()))();
+    git = await (options.resolveGit ?? (() => GitRunner.create(undefined, { activityGate })))();
   } catch (error) {
     gitUnavailableError = normalizeGitUnavailable(error);
   }
@@ -113,7 +119,7 @@ export async function createMainServices(
   const workspaceGit = git ?? unavailableGit(gitUnavailableError);
   const branchService = new BranchService(workspaceGit);
   const noProgress: OperationProgressPort = { report: () => undefined };
-  const workspaceMutations = new WorkspaceMutationCoordinator();
+  const workspaceMutations = new WorkspaceMutationCoordinator(activityGate);
 
   const buildWorkspaceService = (
     progress: OperationProgressPort,
@@ -149,6 +155,18 @@ export async function createMainServices(
   );
 
   return {
+    activityGate,
+    updateService: await createUpdateService(activityGate, () => stateStore.flush()),
+    isTrustedUpdateSender: (event) => isTrustedReqwsWebContents(event.sender)
+      && event.senderFrame !== null && event.senderFrame === event.sender.mainFrame,
+    broadcastUpdateState: (state) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed() || !isTrustedReqwsWebContents(window.webContents)) continue;
+        try { window.webContents.send(IPC_CHANNELS.updates.stateChanged, state); } catch {
+          // A window can close between the check and send.
+        }
+      }
+    },
     repositoryService,
     settingsService,
     git,

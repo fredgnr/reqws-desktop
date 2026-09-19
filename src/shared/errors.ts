@@ -1,4 +1,7 @@
+import { updateErrorCodes } from './update-types';
+
 export const reqwsErrorCodes = [
+  ...updateErrorCodes,
   'GIT_NOT_FOUND',
   'GIT_PROCESS_FAILED',
   'GIT_PROCESS_TIMEOUT',
