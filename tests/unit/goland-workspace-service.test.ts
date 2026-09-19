@@ -80,6 +80,24 @@ describe('GoLand entry and selection', () => {
     });
     await expect(failing.save({ workspaceId: 'ws_1', expectedBindingId: project!.bindingId, expectedRevision: 1, selection: { mode: 'selected', repositoryIds: [] } })).rejects.toMatchObject({ code: 'GOLAND_WRITE_FAILED' });
     expect((await service.read('ws_1')).project).toEqual(project);
+    const retried = await service.save({ workspaceId: 'ws_1', expectedBindingId: project!.bindingId, expectedRevision: 1, selection: { mode: 'selected', repositoryIds: [] } });
+    expect(retried.project).toMatchObject({ bindingId: project!.bindingId, revision: 2, selection: { mode: 'selected', repositoryIds: [] } });
+  });
+
+  it('preserves an unpublished shell and requires manual recovery without adopting later user files', async () => {
+    const { get, mutations, rootPath, service } = await fixture();
+    const create = vi.fn(async () => { throw new Error('disk full'); });
+    const failing = new GoLandWorkspaceService({ get }, mutations, { create, replace: writeJsonAtomically });
+    await expect(failing.prepare({ workspaceId: 'ws_1' })).rejects.toMatchObject({ code: 'GOLAND_WRITE_FAILED' });
+    const shell = path.join(rootPath, '.reqws/ide/goland');
+    const before = await lstat(shell);
+    await expect(readFile(path.join(shell, 'reqws-project.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(path.join(shell, 'user.txt'), 'preserve after failed publication');
+    await expect(service.prepare({ workspaceId: 'ws_1' })).rejects.toMatchObject({ code: 'GOLAND_ENTRY_CONFLICT' });
+    expect((await lstat(shell)).ino).toBe(before.ino);
+    expect(create).toHaveBeenCalledOnce();
+    expect(await readFile(path.join(shell, 'user.txt'), 'utf8')).toBe('preserve after failed publication');
+    await expect(readFile(path.join(shell, 'reqws-project.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('detects shell replacement before publication and preserves replacement contents', async () => {

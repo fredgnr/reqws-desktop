@@ -22,6 +22,18 @@ S0–S4 开发、自动化集成、独立源码复核和最终候选 G1–G7 隔
 
 此次没有安装 0.1.4 插件或重跑原生 GUI；下文 G1–G7 仍属于原 0.1.0 开发候选。版本更新和代码推送不等于创建 tag 或发布 Release。
 
+## PR #14 审查修复（2026-09-20）
+
+已核对针对 `c02942a` 及其等价前序实现的全部普通评论、两份 review 与三个行内 conversation。
+
+- **P1，PREPARED 新增被取消后的恢复**：原实现把未提交的 pending-add 当作丢失的所有权证据，新增和首次 module 创建都可能持续冲突。现在仅在 updater 未正常返回、目录身份和完整 journal 在原 writer lock 内复核一致时保存 project 内存证据；新 adapter 据此重算最新选择。updater 完成前清除此证据，可能已提交时保留原恢复记录；真实 coroutine 取消仍在不可取消提交区间内检查原候选上下文。未知 module/marker、journal 改写和项目重开丢失证据时继续 fail closed。
+- **P2，保存失败无法重试草稿**：已有有效绑定的 `GOLAND_WRITE_FAILED` 允许保留同一草稿和 binding/revision 重试。初次 prepare/读取失败、binding/revision 冲突、已保存后的打开错误不被放宽；未成功保存不会启动 IDE。
+- **首次发布失败的 shell 清理建议**：按技术方案第 4 节及 owner review 确认，保留无绑定目录是既定保护策略。本次增加发布失败后 shell inode 和后来加入的用户文件均保留、后续 prepare 仍拒绝接管的直接回归，没有引入自动清理或未知目录认领。
+
+新增回归先复现了四项模型恢复失败和一项 renderer 重试失败。修复后 `ManagedRootsAdapterTest` 共 25 项（新增 8 项）通过，覆盖新 adapter 重试、回到旧选择、首次创建、updater 内异常、真实 coroutine 取消、提交后取消、journal 改写和 project 重开。Desktop 直接运行 `tests/renderer/goland-loading.test.tsx` 与 `tests/unit/goland-workspace-service.test.ts`，17 项通过；服务测试同时验证瞬时写入失败后可用原 revision 成功保存。
+
+最终 `npm run check` 通过 TypeScript、ESLint、i18n（337 keys）、文档检查及 42 文件 / **449 项测试**；使用前述精确 SDK/offline 参数的 `npm run check:goland` 通过 37 类 / **364 项测试**，0 failed、0 errors、0 skipped，禁用符号、结构和 GO-262.9437.286 兼容性检查通过（Compatible）。本次未修改 workflow 脚本，未重跑其 28 项历史验证；未安装修复后的 0.1.4 ZIP 或重跑原生 GUI，原 G1–G7 证据范围保持不变。
+
 ## 基线与候选
 
 源码起点为 `589b26a`，需求包来自本地跟踪分支 `origin/docs/goland-workspace-loading` 的 `5f12b33`。候选为验收时工作树相对起点的实际 Git diff，包含本包和新增源文件；该阶段尚未提交。保留已合入的自更新与活动门禁，没有切换分支或修改真实 workspace。后续获用户授权后启动隔离测试 IDE，并由用户手动安装候选，过程见下。生成目录、测试 sandbox 和 ZIP 不纳入源码变更。

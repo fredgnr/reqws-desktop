@@ -29,9 +29,11 @@ import com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProcessCanceledException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
@@ -52,6 +54,7 @@ internal class ManagedRootsAdapter(
 
   suspend fun apply(snapshot: LoadingSnapshot): ManagedRootsResult {
     try {
+      val candidateContext = currentCoroutineContext()
       gate(snapshot)
       val idea = snapshot.binding.shell.resolve(".idea")
       val ideaIdentity = try { boundDirectory(idea) } catch (failure: NoSuchFileException) {
@@ -61,19 +64,26 @@ internal class ManagedRootsAdapter(
       observedMetadata.set(true)
       var moduleDirectoryIdentity: BoundDirectory? = null
       var moduleJournal: LoadedRootsJournal? = null
-      fun verifyTransaction() {
-        gate(snapshot)
+      fun verifyDirectories() {
         if (boundDirectory(idea) != ideaIdentity) conflict("IDE metadata directory changed during reconciliation.")
         moduleDirectoryIdentity?.let { expected ->
           if (boundDirectory(expected.path) != expected) conflict("Managed module directory changed during reconciliation.")
         }
+      }
+      fun verifyTransaction() {
+        candidateContext.ensureActive()
+        gate(snapshot)
+        verifyDirectories()
         moduleJournal?.let(::verifyModuleFile)
       }
       return rootsJournalFile(snapshot.binding.shell).withStableParentSuspending { storage ->
         val lock = storage.tryAcquireExclusiveDirectoryLock() ?: conflict("Another plugin writer owns the shell.")
         lock.use {
           verifyTransaction()
-          val existing = storage.read()?.also { it.verifyBinding(snapshot) }
+          val persisted = storage.read()?.also { it.verifyBinding(snapshot) }
+          val uncommitted = project.service<UncommittedRootsIntentEvidence>()
+          val recovery = persisted?.let(uncommitted::find)
+          val existing = if (recovery != null) recovery.previous else persisted
           val name = "ReqWS-${snapshot.binding.bindingId}"
           val moduleFile = idea.resolve("reqws/$name.iml")
           if (Files.exists(moduleFile.parent, LinkOption.NOFOLLOW_LINKS)) {
@@ -136,53 +146,72 @@ internal class ManagedRootsAdapter(
           val recoveryRemoves = (journal.pendingRemoves + remove).distinct().filter { it.relativePath !in nextPaths }
           val prepared = journal.copy(pendingAdds = recoveryAdds, pendingRemoves = recoveryRemoves, claims = currentClaims)
           verifyTransaction()
-          storage.writeAndVerify(prepared)
-          verifyTransaction()
-          // Persist intent before allocating the stable module file directory.
-          val moduleDirectory = moduleFile.parent
-          if (!Files.exists(moduleDirectory, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(moduleDirectory)
-          val currentModuleDirectory = boundDirectory(moduleDirectory)
-          if (moduleDirectoryIdentity != null && moduleDirectoryIdentity != currentModuleDirectory) {
-            conflict("Managed module directory changed before model update.")
-          }
-          moduleDirectoryIdentity = currentModuleDirectory
-          verifyTransaction()
-          val urls = model.getVirtualFileUrlManager()
-          val source = module?.entitySource ?: LegacyBridgeJpsEntitySourceFactory.getInstance(project)
-            .createEntitySourceForModule(urls.fromPath(moduleDirectory.toString()), null)
-          project.service<ReqwsProjectModelMutationGuard>().withSuspendingMutation {
-            model.update("Apply ReqWS loaded repository roots") { builder ->
-              verifyTransaction()
-              if (builder.resolve(ModuleId(name)) != module) conflict("The managed module changed during planning.")
-              val target = module ?: builder.addEntity(ModuleEntity(name, emptyList(), source) {
-                type = ModuleTypeId(ModuleTypeManager.getInstance().defaultModuleType.id)
-              })
-              remove.forEach { claim ->
-                val root = verifyClaim(builder, snapshot, journal, claim, requireDeletable = true)
-                builder.removeEntity(root)
-              }
-              add.forEach { claim ->
-                verifyFilesystem(snapshot, claim)
-                if (exactRoots(builder, rootUrl(snapshot, claim)).isNotEmpty()) conflict("A user root appeared before commit.")
-                val root = ContentRootEntity(urls.fromPath(snapshot.binding.workspaceRoot.resolve(claim.relativePath).toString()), emptyList(), source) {
-                  excludedUrls = listOf(ExcludeUrlEntity(urls.fromPath(markerPath(snapshot, claim).toString()), source))
-                }
-                builder.modifyModuleEntity(target) { contentRoots += root }
-              }
-              verifyTransaction()
+          var updaterCompleted = false
+          try {
+            storage.writeAndVerify(prepared)
+            verifyTransaction()
+            // Persist intent before allocating the stable module file directory.
+            val moduleDirectory = moduleFile.parent
+            if (!Files.exists(moduleDirectory, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(moduleDirectory)
+            val currentModuleDirectory = boundDirectory(moduleDirectory)
+            if (moduleDirectoryIdentity != null && moduleDirectoryIdentity != currentModuleDirectory) {
+              conflict("Managed module directory changed before model update.")
             }
+            moduleDirectoryIdentity = currentModuleDirectory
+            verifyTransaction()
+            val urls = model.getVirtualFileUrlManager()
+            val source = module?.entitySource ?: LegacyBridgeJpsEntitySourceFactory.getInstance(project)
+              .createEntitySourceForModule(urls.fromPath(moduleDirectory.toString()), null)
+            // Finish recording committed module creation even if cancellation arrives as update()
+            // resumes. The original candidate context is still checked inside the updater.
+            withContext(NonCancellable) {
+              project.service<ReqwsProjectModelMutationGuard>().withSuspendingMutation {
+                model.update("Apply ReqWS loaded repository roots") { builder ->
+                  verifyTransaction()
+                  if (builder.resolve(ModuleId(name)) != module) conflict("The managed module changed during planning.")
+                  val target = module ?: builder.addEntity(ModuleEntity(name, emptyList(), source) {
+                    type = ModuleTypeId(ModuleTypeManager.getInstance().defaultModuleType.id)
+                  })
+                  remove.forEach { claim ->
+                    val root = verifyClaim(builder, snapshot, journal, claim, requireDeletable = true)
+                    builder.removeEntity(root)
+                  }
+                  add.forEach { claim ->
+                    verifyFilesystem(snapshot, claim)
+                    if (exactRoots(builder, rootUrl(snapshot, claim)).isNotEmpty()) conflict("A user root appeared before commit.")
+                    val root = ContentRootEntity(urls.fromPath(snapshot.binding.workspaceRoot.resolve(claim.relativePath).toString()), emptyList(), source) {
+                      excludedUrls = listOf(ExcludeUrlEntity(urls.fromPath(markerPath(snapshot, claim).toString()), source))
+                    }
+                    builder.modifyModuleEntity(target) { contentRoots += root }
+                  }
+                  verifyTransaction()
+                  uncommitted.clear()
+                  updaterCompleted = true
+                }
+              }
+              if (module == null) project.service<ModuleCreationEvidence>().created(journal.moduleFile, source)
+            }
+            moduleJournal = journal
+            currentCoroutineContext().ensureActive()
+            verifyTransaction()
+            val coverage = verifyPfi(snapshot, journal, keep + add, borrowed, ::verifyTransaction)
+            verifyTransaction()
+            // Keep recovery evidence conservatively: neither an API return nor live absence proves
+            // durable .iml persistence. A later owned claim can explicitly supersede a removed path.
+            storage.writeAndVerify(prepared.copy(claims = nextClaims))
+            verifyTransaction()
+            ManagedRootsResult((keep + add).mapTo(linkedSetOf()) { it.repositoryId }, borrowed, coverage)
+          } catch (failure: Exception) {
+            if (!updaterCompleted) {
+              try {
+                // Still under the same directory lock. Do not use a cancelled/stale candidate
+                // to write rollback state; retain only proof of this exact unapplied intent.
+                verifyDirectories()
+                if (storage.read() == prepared) uncommitted.record(prepared, existing)
+              } catch (verificationFailure: Exception) { failure.addSuppressed(verificationFailure) }
+            }
+            throw failure
           }
-          if (module == null) project.service<ModuleCreationEvidence>().created(journal.moduleFile, source)
-          moduleJournal = journal
-          currentCoroutineContext().ensureActive()
-          verifyTransaction()
-          val coverage = verifyPfi(snapshot, journal, keep + add, borrowed, ::verifyTransaction)
-          verifyTransaction()
-          // Keep recovery evidence conservatively: neither an API return nor live absence proves
-          // durable .iml persistence. A later owned claim can explicitly supersede a removed path.
-          storage.writeAndVerify(prepared.copy(claims = nextClaims))
-          verifyTransaction()
-          ManagedRootsResult((keep + add).mapTo(linkedSetOf()) { it.repositoryId }, borrowed, coverage)
         }
       }
     } catch (failure: CancellationException) { throw failure }
@@ -283,6 +312,17 @@ internal class ManagedRootsAdapter(
   private fun rootUrl(snapshot: LoadingSnapshot, claim: RootClaim) = WorkspaceModel.getInstance(project).getVirtualFileUrlManager().fromPath(snapshot.binding.workspaceRoot.resolve(claim.relativePath).toString()).url
   private fun markerPath(snapshot: LoadingSnapshot, claim: RootClaim) = snapshot.binding.workspaceRoot.resolve(claim.relativePath).resolve(ROOT_MARKER_NAMESPACE).resolve(claim.nonce)
   private fun conflict(message: String): Nothing = throw ProjectModelApplyException(ProjectModelErrorCode.OWNERSHIP_CONFLICT, message)
+}
+
+internal data class UncommittedRootsIntent(val prepared: LoadedRootsJournal, val previous: LoadedRootsJournal?)
+
+/** Process-local proof only; a cold start must still fail closed on missing module/marker evidence. */
+@com.intellij.openapi.components.Service(com.intellij.openapi.components.Service.Level.PROJECT)
+internal class UncommittedRootsIntentEvidence {
+  private val intent = java.util.concurrent.atomic.AtomicReference<UncommittedRootsIntent?>()
+  fun find(prepared: LoadedRootsJournal): UncommittedRootsIntent? = intent.get()?.takeIf { it.prepared == prepared }
+  fun record(prepared: LoadedRootsJournal, previous: LoadedRootsJournal?) { intent.set(UncommittedRootsIntent(prepared, previous)) }
+  fun clear() { intent.set(null) }
 }
 
 /** Only the project instance that created an as-yet-unsaved module may rely on its live source. */

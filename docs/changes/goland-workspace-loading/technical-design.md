@@ -113,6 +113,8 @@ IDE project basePath 为 `.reqws/ide/goland`，workspaceRoot 从这三个固定�
 
 详情采用用户选定的方案一布局：勾选框与仓库名称/相对路径同行，规则及完整路径按需展开，保存、保存并打开和重载固定在底部。Cursor 的工作区文件与代码目录入口收进同一菜单，成员管理独立折叠；加载选择不承担成员增删。折叠内容不进入对话框焦点循环，保存状态旁始终保留 IDE 同步确认提示。视觉与交互证据见[设计验证](../../../design-qa.md)。
 
+已有有效绑定的保存遇到 `GOLAND_WRITE_FAILED` 时，保留草稿和原 binding/revision，允许直接重试保存或保存并打开；再次写入仍由 Main 校验当前身份和 revision。初次读取失败、首次 prepare 失败、binding/revision 冲突或其他未知错误继续阻止写入，需显式重载，不能将未验证状态当作可重试的普通保存。
+
 所有 ReqWS GoLand 启动动作都走“校验本版 workspace → 准备/复用合法 shell → 打开 shell”这一条路径。直接删除原目录启动命令分支、旧模式 UI、fallback 和能力协商代码。手工在 GoLand 打开普通目录不触发 ReqWS 的旧适配器。
 
 本版不迁移历史 workspace、原 `<R>/.idea`、旧 ownership ledger 或旧配置字段。不符合当前格式的输入明确报错，由用户另建符合本版格式的配置；不能先破坏旧配置再创建新配置。原目录中的磁盘数据不主动清理，不测试旧窗口/旧插件能否继续工作，也不提供版本降级、旧入口回退或设置合并。
@@ -166,6 +168,8 @@ root 删除会连带其子配置，因此还需检查是否新增了非受管 So
 ```
 
 intent 与 `.iml` 保存不是跨文件原子事务。不能因 API 返回就清空恢复记录；新进程从 ledger + 平台重载模型复核完成状态。intent 存在但模型/marker 全不存在，仅在能证明该新增从未持久化且没有用户冲突时重试创建；部分存在或身份不明时冲突，不通过删除或重新认领修复。
+
+同进程的明确未提交失败可恢复：Workspace Model updater 尚未正常返回时，在仍持有 writer lock 的范围内复核 metadata/module 目录身份与完整 PREPARED journal，记录该 intent 对应的原 journal（首次创建时为空）。该证据仅保存在当前 project 内存；新 adapter 只有在当前 journal 完整匹配且绑定/目录重新验证通过时，才能按原 journal 重新规划最新选择，不能据此接管未知 module 或用户 root。updater 正常返回前撤销旧未提交证据；后续失败按可能已提交处理并保留正常恢复记录。模型提交及新 module 创建证据登记置于短小的不可取消区间，区间内仍检查 generation/trust/目录身份，随后立即恢复取消检查。冷启动没有此内存证据，缺失 module/marker 仍 fail closed。
 
 同一个 shell 只允许一个插件 writer。锁绑定真实 `.idea` 目录身份，不依赖可被替换的 lock 文件路径；复用既有 verified storage 原语并保留错误分类。只实现本版 ledger 的恢复，不导入旧项目 ledger。
 

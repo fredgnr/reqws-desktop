@@ -2,7 +2,7 @@
 title: GoLand 工作加载集合测试与本地验收
 type: test-plan
 status: active
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # GoLand 工作加载集合测试与本地验收
@@ -35,6 +35,8 @@ updated: 2026-09-19
 S0–S4 当步执行各自直接回归；最终候选运行 `npm run check`、按本需求已调整为唯一 GO-262.9437.286 目标的 `npm run check:goland` 和必要打包。删除 261/历史版本矩阵，不跑旧格式迁移、双模式、旧插件混用或降级/回退测试。当前目标 SDK 环境缺失则记录 BLOCKED，不通过旧版本成功替代。
 
 自动化应覆盖具体故障，不建立无收益的巨大组合矩阵：选择损坏不变空、bad binding 无写、borrowed/marker/用户子项保护、prepared intent 恢复、跨 JVM 互斥、generation/cancel/dispose、安全路径与无模型差异的排除重读。已存在的有效安全回归保留；零执行/全跳过不是通过。
+
+PREPARED 新增需覆盖既有 module 扩容、首次 module 创建、updater 内异常和真实 coroutine 取消，确认 live model 未提交且新 adapter 可按最新选择恢复；同时保留用户配置，验证 journal 被改写、进程证据丢失以及用户删除 module/marker 时仍 fail closed。Desktop 需验证已有绑定的瞬时保存失败可用同一草稿/revision 重试，绑定或 revision 冲突继续要求重载；首次发布失败保留无绑定 shell 及之后出现的用户文件，不自动接管或删除。
 
 ## 3. 本地环境与夹具
 

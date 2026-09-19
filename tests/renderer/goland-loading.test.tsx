@@ -36,21 +36,60 @@ it('publishes an explicit empty selection before opening and distinguishes saved
   expect(screen.getByText('Check the IDE sync status in the ReqWS plugin in GoLand.')).toBeVisible();
 });
 
-it('keeps unsaved choices on revision conflict, blocks opening and offers explicit reload', async () => {
+it.each(['GOLAND_SELECTION_CONFLICT', 'GOLAND_BINDING_INVALID'])('keeps unsaved choices on %s, blocks opening and offers explicit reload', async (code) => {
   read.mockResolvedValue({ project: binding, shellPath: '/fixture' });
-  save.mockRejectedValue({ code: 'GOLAND_SELECTION_CONFLICT', message: 'Conflict' });
+  save.mockRejectedValue({ code, message: 'Conflict' });
   const user = userEvent.setup();
   render(<GoLandLoadingSection available busy={false} workspace={workspace} />);
   await waitFor(() => expect(screen.getByRole('radio', { name: 'Selected repositories' })).toBeEnabled());
   await user.click(screen.getByRole('radio', { name: 'Selected repositories' }));
   await user.click(screen.getByRole('checkbox', { name: 'two' }));
   await user.click(screen.getByRole('button', { name: 'Save and open GoLand' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent('GOLAND_SELECTION_CONFLICT');
+  expect(await screen.findByRole('alert')).toHaveTextContent(code);
   expect(screen.getByRole('checkbox', { name: 'one' })).toBeChecked();
   expect(screen.getByRole('checkbox', { name: 'two' })).not.toBeChecked();
   expect(open).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Save selection' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save and open GoLand' })).toBeDisabled();
   await user.click(screen.getByRole('button', { name: 'Reload saved configuration' }));
   expect(screen.getByRole('radio', { name: 'All by default' })).toBeChecked();
+});
+
+it('retries a transient save failure with the same draft and revision before opening', async () => {
+  read.mockResolvedValue({ project: binding, shellPath: '/fixture' });
+  save.mockRejectedValueOnce({ code: 'GOLAND_WRITE_FAILED', message: 'Disk full' });
+  save.mockImplementationOnce(async (input) => ({ project: { ...binding, revision: 2, selection: input.selection }, shellPath: '/fixture' }));
+  const user = userEvent.setup();
+  render(<GoLandLoadingSection available busy={false} workspace={workspace} />);
+  await waitFor(() => expect(screen.getByRole('radio', { name: 'Selected repositories' })).toBeEnabled());
+  await user.click(screen.getByRole('radio', { name: 'Selected repositories' }));
+  await user.click(screen.getByRole('checkbox', { name: 'two' }));
+  await user.click(screen.getByRole('button', { name: 'Save selection' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('GOLAND_WRITE_FAILED');
+  expect(screen.getByRole('checkbox', { name: 'one' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'two' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: 'Save selection' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Save and open GoLand' })).toBeEnabled();
+  expect(open).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Save and open GoLand' }));
+  const expectedInput = { workspaceId: 'ws_1', expectedBindingId: binding.bindingId, expectedRevision: 1, selection: { mode: 'selected', repositoryIds: ['one'] } };
+  expect(save).toHaveBeenNthCalledWith(1, expectedInput);
+  expect(save).toHaveBeenNthCalledWith(2, expectedInput);
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(open).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Selection saved');
+});
+
+it('requires a reload after an initial prepare fails even with a write error', async () => {
+  prepare.mockRejectedValueOnce({ code: 'GOLAND_WRITE_FAILED', message: 'Disk full' });
+  const user = userEvent.setup();
+  render(<GoLandLoadingSection available busy={false} workspace={workspace} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save selection' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Save selection' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('GOLAND_WRITE_FAILED');
+  expect(screen.getByRole('button', { name: 'Save selection' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save and open GoLand' })).toBeDisabled();
 });
 
 it('cancels a draft without writing and disables unavailable workspace operations', async () => {

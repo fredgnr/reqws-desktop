@@ -337,6 +337,127 @@ class ManagedRootsAdapterTest : HeavyPlatformTestCase() {
     assertTrue(contentNames().isEmpty())
   }
 
+  fun testCancelledPreparedAdditionRetriesWithFreshAdapterAndPreservesUserConfiguration() {
+    select("one")
+    apply(ManagedRootsAdapter(project, { true }))
+    addRoot("extra")
+    update { storage ->
+      val extra = storage.resolve(ModuleId(moduleName))!!.contentRoots.single { it.url.url.endsWith("/extra") }
+      storage.modifyContentRootEntity(extra) { excludedPatterns += "user-output-*" }
+    }
+    select("one", "two")
+    cancelPreparedAddition()
+    assertEquals(setOf("one", "extra"), contentNames())
+    assertEquals(setOf("one", "two"), apply(ManagedRootsAdapter(project, { true })).owned)
+    assertEquals(setOf("one", "two", "extra"), contentNames())
+    val extra = WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName))!!.contentRoots.single { it.url.url.endsWith("/extra") }
+    assertEquals(listOf("user-output-*"), extra.excludedPatterns)
+    assertTrue(extra.excludedUrls.isEmpty())
+    assertEquals("extra", Files.readString(root.resolve("extra/probe.txt")))
+  }
+
+  fun testCancelledPreparedAdditionCanReturnToPreviousSelection() {
+    select("one")
+    apply(ManagedRootsAdapter(project, { true }))
+    select("one", "two")
+    cancelPreparedAddition()
+    select("one")
+    assertEquals(setOf("one"), apply(ManagedRootsAdapter(project, { true })).owned)
+    assertEquals(setOf("one"), contentNames())
+    assertFalse(rootsJournalFile(shell).read()!!.pendingAdds.any { it.relativePath == "two" })
+  }
+
+  fun testCancelledPreparedModuleCreationRetriesLatestSelection() {
+    cancelPreparedAddition()
+    assertNull(WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName)))
+    assertFalse(Files.exists(Path.of(rootsJournalFile(shell).read()!!.moduleFile)))
+    select("one")
+    assertEquals(setOf("one"), apply(ManagedRootsAdapter(project, { true })).owned)
+    assertEquals(setOf("one"), contentNames())
+  }
+
+  fun testCancelledAdditionInsideModelUpdaterDoesNotCommitOrBlockRetry() {
+    select("one")
+    apply(ManagedRootsAdapter(project, { true }))
+    select("one", "two")
+    cancelPreparedAddition(insideUpdater = true)
+    assertEquals(setOf("one"), contentNames())
+    assertEquals(setOf("one", "two"), apply(ManagedRootsAdapter(project, { true })).owned)
+  }
+
+  fun testCancelledCoroutineDuringUpdaterDoesNotCommitAndCanRetry() {
+    select("one")
+    apply(ManagedRootsAdapter(project, { true }))
+    select("one", "two")
+    val failure = awaitUpdate {
+      try {
+        kotlinx.coroutines.coroutineScope {
+          val candidate = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!
+          val cancelling = ManagedRootsAdapter(project, { true }, verifySnapshot = { snapshot ->
+            reader.verifyCurrent(snapshot)
+            if (project.getService(com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard::class.java).isActive) {
+              candidate.cancel()
+            }
+          })
+          cancelling.apply(reader.read(shell))
+        }
+        null
+      } catch (failure: kotlinx.coroutines.CancellationException) { failure }
+    }
+    assertNotNull(failure)
+    assertEquals(setOf("one"), contentNames())
+    assertEquals(setOf("one", "two"), apply(ManagedRootsAdapter(project, { true })).owned)
+  }
+
+  fun testCancelledCommittedCreationKeepsEvidenceForFreshAdapter() {
+    val cancelling = ManagedRootsAdapter(project, { true }, verifySnapshot = { snapshot ->
+      reader.verifyCurrent(snapshot)
+      if (WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName)) != null) {
+        throw kotlinx.coroutines.CancellationException("Cancel after model commit")
+      }
+    })
+    val failure = awaitUpdate { try { cancelling.apply(reader.read(shell)); null } catch (failure: kotlinx.coroutines.CancellationException) { failure } }
+    assertNotNull(failure)
+    assertEquals(setOf("one", "two"), contentNames())
+    assertEquals(setOf("one", "two"), apply(ManagedRootsAdapter(project, { true })).owned)
+  }
+
+  fun testCancelledCreationEvidenceCannotAuthorizeChangedJournal() {
+    cancelPreparedAddition()
+    val storage = rootsJournalFile(shell)
+    val journal = storage.read()!!
+    storage.writeAndVerify(journal.copy(pendingAdds = journal.pendingAdds.map { it.copy(nonce = "a".repeat(32)) }.take(1)))
+    expectConflict(ManagedRootsAdapter(project, { true }))
+    assertNull(WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName)))
+  }
+
+  fun testCancelledCreationCannotRecoverAfterProjectReopenWithoutProcessEvidence() {
+    cancelPreparedAddition()
+    PlatformTestUtil.saveProject(project, true)
+    val projectLocation = Path.of(project.presentableUrl!!)
+    PlatformTestUtil.forceCloseProjectWithoutSaving(project)
+    myProject = PlatformTestUtil.loadAndOpenProject(projectLocation, testRootDisposable)
+    myModule = com.intellij.openapi.module.ModuleManager.getInstance(project).modules.first()
+    expectConflict(ManagedRootsAdapter(project, { true }))
+    assertNull(WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName)))
+  }
+
+  private fun cancelPreparedAddition(insideUpdater: Boolean = false) {
+    var updaterChecks = 0
+    val cancelling = ManagedRootsAdapter(project, { true }, verifySnapshot = { snapshot ->
+      reader.verifyCurrent(snapshot)
+      if (rootsJournalFile(shell).read()?.pendingAdds?.any { it.relativePath == "two" } == true) {
+        val inMutation = project.getService(com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard::class.java).isActive
+        if (!insideUpdater || inMutation && ++updaterChecks == 2) {
+          throw kotlinx.coroutines.CancellationException("Cancel before model commit")
+        }
+      }
+    })
+    val failure = awaitUpdate { try { cancelling.apply(reader.read(shell)); null } catch (failure: kotlinx.coroutines.CancellationException) { failure } }
+    assertNotNull(failure)
+    assertTrue(rootsJournalFile(shell).read()!!.pendingAdds.any { it.relativePath == "two" })
+  }
+
   fun testMetadataReplacementAfterIntentCannotMutateModelOrReplacementDirectory() {
     apply(ManagedRootsAdapter(project, { true }))
     select()

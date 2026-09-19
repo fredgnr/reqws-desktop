@@ -18,6 +18,7 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ReqwsErrorPayload | null>(null);
+  const [canRetrySave, setCanRetrySave] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
   const ready = workspace.status === 'ready';
   const members = new Set(workspace.repositories.map((repository) => repository.catalogRepositoryId));
@@ -26,6 +27,7 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
   };
   const dirty = JSON.stringify(selection) !== JSON.stringify(saved?.selection ?? { mode: 'all' });
   const disabled = !ready || busy || loading || pending;
+  const errorBlocksSave = !!error && !canRetrySave;
 
   useEffect(() => {
     let live = true;
@@ -44,6 +46,7 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
   async function reload(): Promise<void> {
     setPending(true);
     setError(null);
+    setCanRetrySave(false);
     try {
       const state = await window.reqws.goLandWorkspaces.read(workspace.id);
       setSaved(state.project);
@@ -57,7 +60,9 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
   async function save(open: boolean): Promise<void> {
     setPending(true);
     setError(null);
+    setCanRetrySave(false);
     setSavedNotice(false);
+    let selectionSaved = false;
     try {
       const state = saved
         ? await window.reqws.goLandWorkspaces.save({ workspaceId: workspace.id, selection: normalized, expectedBindingId: saved.bindingId, expectedRevision: saved.revision })
@@ -65,8 +70,13 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
       setSaved(state.project);
       setSelection(state.project!.selection);
       setSavedNotice(true);
+      selectionSaved = true;
       if (open) await window.reqws.editors.openGoLand(workspace.id);
-    } catch (failure) { setError(toReqwsError(failure).toPayload()); }
+    } catch (failure) {
+      const payload = toReqwsError(failure).toPayload();
+      setError(payload);
+      setCanRetrySave(saved !== null && !selectionSaved && payload.code === 'GOLAND_WRITE_FAILED');
+    }
     finally { setPending(false); }
   }
 
@@ -139,8 +149,8 @@ export function GoLandLoadingSection({ workspace, busy, available, children }: {
             <span>{statusText}</span>
           </p>
           <div className="goland-loading-actions">
-            <button className="button" disabled={disabled || !!error} onClick={() => { void save(false); }} type="button">{t('golandLoading.save')}</button>
-            <button className="button primary" disabled={disabled || !!error || !available} onClick={() => { void save(true); }} type="button">{t('golandLoading.saveAndOpen')}</button>
+            <button className="button" disabled={disabled || errorBlocksSave} onClick={() => { void save(false); }} type="button">{t('golandLoading.save')}</button>
+            <button className="button primary" disabled={disabled || errorBlocksSave || !available} onClick={() => { void save(true); }} type="button">{t('golandLoading.saveAndOpen')}</button>
           </div>
         </div>
         <div className="goland-loading-footer-secondary">

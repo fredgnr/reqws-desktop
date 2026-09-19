@@ -15,7 +15,7 @@
 | [技术方案](technical-design.md) | technical-design | active | 定义本版数据契约、同步、所有权、平台适配、当前状态恢复与旧逻辑删除。 |
 | [任务拆分与 Agent 协作](implementation-plan.md) | technical-design | active | 定义 S0–S4/V 依赖、文件所有权、subagent 使用和统一清理。 |
 | [测试与本地验收](test-plan.md) | test-plan | active | 分层验证自有逻辑；GUI 只在普通 Project 面板展开目录查看文件。 |
-| [实施与验收记录](implementation-2026-09-19.md) | test-report | active | 保留原候选独立复核与 G1–G7 GUI 验收；另记录 0.1.4 的 445 项 Desktop / 356 项插件测试及单目标兼容性。 |
+| [实施与验收记录](implementation-2026-09-19.md) | test-report | active | 保留原候选独立复核与 G1–G7 GUI 验收；另记录 0.1.4 提交及 PR 修复后的 449 项 Desktop / 364 项插件测试和单目标兼容性。 |
 | [工作区详情设计验证](../../../design-qa.md) | test-report | active | 记录后续方案一界面改版、同图视觉对照、独立文案审校与模拟 bridge 的浏览器交互验证。 |
 | [验证依据与源码索引](verification-basis.md) | test-report | archived | 摘录用户提供的两轮报告结论，区分源码、报告和未验证事项。 |
 
