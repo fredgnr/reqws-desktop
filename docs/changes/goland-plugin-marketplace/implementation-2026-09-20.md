@@ -54,3 +54,8 @@ updated: 2026-09-20
 ## 远端工作流注册复核
 
 首次推送 `95701b1` 的 Marketplace 工作流注册失败：job-level env 不能引用 runner context。修复为在步骤中从 RUNNER_TEMP 写入 GITHUB_ENV；官方 actionlint 1.7.12 对三个受影响工作流检查通过，新增对应回归。复核同时发现 macOS 系统 LibreSSL 3.3.6 不支持 `pkey -check`，因此正式插件签名 job 显式选择 OpenSSL 3；新增顺序断言。7 项配置/工作流专项测试通过。修复后重新触发 CI，旧提交的绿灯不作为修复后候选的最终结论。
+
+
+## 提交结果持久化失败回归
+
+上传脚本补充结果文件写入失败的保守分类：POST 可能已发生时仍报告 submission-unknown，不能误报为已确认拒绝。未发送 POST 的已记录失败仍为 submission-failed。新增实际 CLI 错误路径回归，15 项上传测试及完整 59 项工作流回归通过；三个工作流再次通过 actionlint。该修复不修改插件二进制输入，但以修复后的远端 CI 作为最终集成门禁。

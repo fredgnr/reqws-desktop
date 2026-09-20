@@ -1,7 +1,7 @@
 """Marketplace protocol, release identity, and durable retry safety regression tests."""
 
-import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -234,6 +234,16 @@ class SubmissionIntegrationTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'submission-unknown')
         self.assertTrue(result['postAttempted'])
         self.assertTrue(all(call.args[0].startswith(('actions/artifacts/', 'releases/tags/')) for call in self.github.repo.call_args_list))
+
+    def test_receipt_write_failure_after_post_reports_unknown(self):
+        arguments = ['publisher', 'submit', '--directory', str(self.directory), '--signer', 'signer.jar', '--intent-artifact-id', '50']
+        for post_attempted, expected in [(True, 'submission-unknown'), (False, 'submission-failed')]:
+            market.save(self.directory / 'result/receipt.json', {**self.candidate, 'postAttempted': post_attempted})
+            with patch.object(sys, 'argv', arguments), patch.dict(os.environ, {'REQWS_MARKETPLACE_MODE': 'automatic'}), \
+                    patch.object(market, 'submit', side_effect=OSError('receipt persistence failed')), \
+                    patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+                self.assertEqual(market.main(), 1)
+                self.assertIn(expected, stderr.getvalue())
 
     def test_intent_readback_and_asset_changes_block_post(self):
         self.github.artifact.return_value = {**self.intent, 'sha256': 'c' * 64}

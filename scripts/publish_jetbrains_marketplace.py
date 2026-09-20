@@ -428,6 +428,14 @@ def main():
         return 0 if outcome not in {'submission-failed', 'submission-unknown'} else 1
     except Exception as error:
         outcome = 'submission-unknown' if isinstance(error, UnknownSubmission) else 'submission-failed'
+        if args.command == 'submit':
+            # A receipt write/summary error after POST must never be reported as a proven rejection.
+            try:
+                receipt = strict_json((args.directory / 'result/receipt.json').read_bytes())
+                if receipt.get('postAttempted') is not False:
+                    outcome = 'submission-unknown'
+            except Exception:
+                outcome = 'submission-unknown'
         print('Marketplace outcome: ' + outcome + '. Review the original run before retrying.', file=sys.stderr)
         # Keep an existing post-attempt receipt intact. Without enough context, do not manufacture evidence.
         return 1
