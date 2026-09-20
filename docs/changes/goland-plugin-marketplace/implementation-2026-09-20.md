@@ -49,3 +49,8 @@ updated: 2026-09-20
 - 首版公开后切换 automatic，发布 v0.1.6，记录真实提交结果并完成 G03 市场更新。
 
 工程、GitHub 发布、市场提交和市场公开必须分别给结论。后续执行更新实际 run/Release/update 链接及 GUI 证据；不把当前 mock、局部截图或旧版本报告扩展为完整 Marketplace GO。
+
+
+## 远端工作流注册复核
+
+首次推送 `95701b1` 的 Marketplace 工作流注册失败：job-level env 不能引用 runner context。修复为在步骤中从 RUNNER_TEMP 写入 GITHUB_ENV；官方 actionlint 1.7.12 对三个受影响工作流检查通过，新增对应回归。复核同时发现 macOS 系统 LibreSSL 3.3.6 不支持 `pkey -check`，因此正式插件签名 job 显式选择 OpenSSL 3；新增顺序断言。7 项配置/工作流专项测试通过。修复后重新触发 CI，旧提交的绿灯不作为修复后候选的最终结论。

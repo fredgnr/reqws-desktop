@@ -230,6 +230,16 @@ jobs:
         working-directory: integrations/goland
         run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
 
+      - name: Set up OpenSSL for plugin signing
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          if ! brew list --versions openssl@3 >/dev/null 2>&1; then
+            brew install openssl@3
+          fi
+          printf 'REQWS_OPENSSL=%s/bin/openssl\n' "$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
       - name: Sign and verify the exact plugin archive
         id: plugin-signing
         env:

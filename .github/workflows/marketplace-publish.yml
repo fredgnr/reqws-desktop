@@ -46,9 +46,11 @@ jobs:
     env:
       REQWS_MARKETPLACE_MODE: ${{ vars.REQWS_MARKETPLACE_MODE }}
       GH_TOKEN: ${{ github.token }}
-      CANDIDATE_DIR: ${{ runner.temp }}/marketplace-candidate
-      SIGNER_JAR: ${{ runner.temp }}/marketplace-zip-signer-0.1.43.jar
     steps:
+      - name: Set isolated download paths
+        run: |
+          printf 'CANDIDATE_DIR=%s/marketplace-candidate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'SIGNER_JAR=%s/marketplace-zip-signer-0.1.43.jar\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

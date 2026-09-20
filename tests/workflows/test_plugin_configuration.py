@@ -99,6 +99,8 @@ class MarketplaceWorkflowTests(unittest.TestCase):
         self.assertEqual(job['environment'], 'jetbrains-marketplace')
         self.assertIn("'automatic'", job['if'])
         self.assertNotIn('secrets.', json.dumps(job['env']))
+        self.assertNotIn('runner.', json.dumps(job['env']))
+        self.assertIn('RUNNER_TEMP', job['steps'][0]['run'])
         steps = job['steps']
         intent = next(i for i, step in enumerate(steps) if step.get('id') == 'intent')
         post = next(i for i, step in enumerate(steps) if 'JETBRAINS_MARKETPLACE_TOKEN' in step.get('env', {}))
@@ -112,6 +114,9 @@ class MarketplaceWorkflowTests(unittest.TestCase):
         self.assertEqual(set(release['jobs']['publish-marketplace']['needs']), {'validate', 'publish'})
         plugin = release['jobs']['goland-plugin']
         self.assertEqual(plugin['environment'], 'jetbrains-plugin-signing')
+        setup = next(i for i, step in enumerate(plugin['steps']) if 'REQWS_OPENSSL=' in step.get('run', ''))
+        signing = next(i for i, step in enumerate(plugin['steps']) if 'plugin_signing.py sign' in step.get('run', ''))
+        self.assertLess(setup, signing)
         self.assertEqual(sum('secrets.' in json.dumps(step) for step in plugin['steps']), 1)
         self.assertTrue(any('always()' in step.get('if', '') and 'plugin_signing.py cleanup' in step.get('run', '') for step in plugin['steps']))
         for name in ['ci.yml', 'release.yml']:
