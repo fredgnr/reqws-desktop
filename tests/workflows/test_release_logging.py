@@ -33,6 +33,8 @@ class ReleaseLoggingTests(unittest.TestCase):
         self.assertNotIn('private-password', result.stdout)
         self.assertNotIn('private-token', result.stdout)
         for job in self.workflow['jobs'].values():
+            if 'uses' in job:
+                continue
             self.assertTrue(any(step.get('run') == 'python3 scripts/log-release-context.py' for step in job['steps']))
 
     def test_publish_logs_preserve_verification_cleanup_and_exit_codes(self):
@@ -87,7 +89,7 @@ elif action=='delete':
                     **os.environ, 'PATH': str(root / 'bin') + os.pathsep + os.environ['PATH'],
                     'TAG': 'v1.2.3', 'VERSION': '1.2.3', 'RUNNER_TEMP': str(root),
                     'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
-                    'FIXTURE_SCENARIO': scenario, 'GH_TOKEN': 'private-token-sentinel',
+                    'FIXTURE_SCENARIO': scenario, 'REQWS_MARKETPLACE_MODE': 'bootstrap', 'GH_TOKEN': 'private-token-sentinel',
                 }
                 result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], cwd=root, env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, exit_code, result.stdout + result.stderr)

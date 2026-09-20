@@ -20,7 +20,7 @@ npm run check:goland
 npm run package:goland
 ```
 
-ZIP 位于 `integrations/goland/build/distributions/`。插件不签名、不发布 Marketplace、不自动安装或更新。只有可信且能对应当前源码的工件才应安装。
+本地测试 ZIP 位于 `integrations/goland/build/distributions/`，普通构建未签名。正式 Release 的 `ReqWS-X.Y.Z-goland-plugin.zip` 要求作者签名；校验和见同一 Release 的 SHA256SUMS。Marketplace 是否可安装及可更新以实际审核结果为准，当前不得从源码的发布能力推断已上架。首次上架与模式切换见[发布操作](../changes/goland-plugin-marketplace/bootstrap-and-operations.md)。只有可信且能对应当前源码的工件才应安装。
 
 手动安装：GoLand **Settings → Plugins → 齿轮菜单 → Install Plugin from Disk**，选择 ZIP，确认 ReqWS，再按 IDE 提示保存工作并重启。更新也使用相同步骤。Agent 安装必须由用户显式调用 manual-only 的 `$reqws-goland-plugin-install` 并确认 exact 工件与目标；普通开发或构建请求不授权安装或重启日常 IDE。
 

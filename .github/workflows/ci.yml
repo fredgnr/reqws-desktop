@@ -53,10 +53,13 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Run release packaging regression tests
-        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
+      - name: Set up Java for isolated plugin signature tests
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '25'
 
-      - name: Run project checks
+      - name: Set up OpenSSL for disposable identity tests
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -64,8 +67,13 @@ jobs:
           if ! brew list --versions openssl@3 >/dev/null 2>&1; then
             brew install openssl@3
           fi
-          export REQWS_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
-          npm run check
+          printf 'REQWS_OPENSSL=%s/bin/openssl\n' "$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Run release packaging regression tests
+        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
+
+      - name: Run project checks
+        run: npm run check
 
       - name: Package and verify the arm64 app
         run: npm run package:macos -- --skip-ci --skip-check --arch arm64
@@ -97,9 +105,9 @@ jobs:
         working-directory: integrations/goland
         env:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
-        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
 
       - name: Verify plugin release ZIP and version
         env:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
-        run: python3 scripts/prepare-goland-release.py --version "$PLUGIN_VERSION"
+        run: python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"

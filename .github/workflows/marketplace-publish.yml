@@ -1,0 +1,94 @@
+name: Publish JetBrains Marketplace
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: jetbrains-marketplace-${{ github.repository }}-stable
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate source and explicit mode
+        id: mode
+        env:
+          REQWS_MARKETPLACE_MODE: ${{ vars.REQWS_MARKETPLACE_MODE }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/publish_jetbrains_marketplace.py mode
+          python3 -c 'import sys; sys.path.insert(0, "scripts"); from publish_jetbrains_marketplace import GitHub, context, release_assets; g=GitHub(); c=context(g); release_assets(g.repo("releases/tags/" + c["tag"]), c["tag"])'
+          printf 'mode=%s\n' "$REQWS_MARKETPLACE_MODE" >> "$GITHUB_OUTPUT"
+
+  submit:
+    needs: validate
+    if: ${{ needs.validate.outputs.mode == 'automatic' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: jetbrains-marketplace
+    env:
+      REQWS_MARKETPLACE_MODE: ${{ vars.REQWS_MARKETPLACE_MODE }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Set isolated download paths
+        run: |
+          printf 'CANDIDATE_DIR=%s/marketplace-candidate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'SIGNER_JAR=%s/marketplace-zip-signer-0.1.43.jar\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Download pinned public verification tool
+        run: python3 scripts/plugin_signing.py download --signer "$SIGNER_JAR"
+      - name: Verify existing Release and audit prior submissions
+        id: candidate
+        run: python3 scripts/publish_jetbrains_marketplace.py prepare --directory "$CANDIDATE_DIR" --signer "$SIGNER_JAR"
+      - name: Persist intent before any POST
+        if: ${{ steps.candidate.outputs.upload == 'true' }}
+        id: intent
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: marketplace-intent-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CANDIDATE_DIR }}/intent/receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Read back intent and submit once
+        if: ${{ steps.candidate.outputs.upload == 'true' }}
+        env:
+          JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+          INTENT_ARTIFACT_ID: ${{ steps.intent.outputs.artifact-id }}
+        run: python3 scripts/publish_jetbrains_marketplace.py submit --directory "$CANDIDATE_DIR" --signer "$SIGNER_JAR" --intent-artifact-id "$INTENT_ARTIFACT_ID"
+      - name: Preserve submission result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: marketplace-result-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CANDIDATE_DIR }}/result/receipt.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Remove temporary public downloads
+        if: ${{ always() }}
+        run: |
+          python3 -c 'import os, pathlib, shutil; p=pathlib.Path(os.environ["CANDIDATE_DIR"]); shutil.rmtree(p) if p.exists() else None'
+          python3 -c 'import os, pathlib; pathlib.Path(os.environ["SIGNER_JAR"]).unlink(missing_ok=True)'

@@ -74,7 +74,7 @@ npm run check:goland
 npm run package:goland
 ```
 
-`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码候选交付前在环境支持时运行 `npm run check`，插件的最终代码/构建候选运行 `npm run check:goland`，共享 manifest 契约变化需要两侧检查。分阶段开发的中间子任务只做生产/测试编译和直接受影响方法/类的回归，不把每个检查点当作完整交付候选；实际受影响的安全和并发分支仍须当步验证。纯文档改动运行 `npm run docs:check`，不额外要求应用全量测试或 Gradle。既有 CI 与发布工作流不变；插件 GUI 验收范围按[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)收敛，不再沿用旧 Go 工具链门禁。
+`npm run check` 依次执行 TypeScript、ESLint、i18n、文档检查和完整 Vitest。它不隐式启动 Gradle；GoLand 插件使用单独的 `check:goland`。Desktop `package:macos` 也不把 `integrations/goland/` 源码或构建输出打入 Electron app。Desktop 代码候选交付前在环境支持时运行 `npm run check`，插件的最终代码/构建候选运行 `npm run check:goland`，共享 manifest 契约变化需要两侧检查。分阶段开发的中间子任务只做生产/测试编译和直接受影响方法/类的回归，不把每个检查点当作完整交付候选；实际受影响的安全和并发分支仍须当步验证。纯文档改动运行 `npm run docs:check`，不额外要求应用全量测试或 Gradle。既有 CI 与发布安全门禁保留，Marketplace 发布接入见[发布需求包](../changes/goland-plugin-marketplace/README.md)；插件 GUI 验收范围按[IDE 插件开发与测试规范](../standards/ide-plugin-development-testing.md)收敛，不再沿用旧 Go 工具链门禁。
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
@@ -272,7 +272,7 @@ npm run package:macos -- --skip-ci --skip-check
 
 GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。历史 ad-hoc 资产保持不变；后续工作流采用[个人自签名方案](../changes/macos-self-update/technical-design.md)，带 Hardened Runtime，但没有 Developer ID 或 Apple 公证。首个可更新版本需要手动 bootstrap。
 
-CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 25 上执行全部既有插件检查及单目标 GO-262.9437.286 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为 unsigned 独立附件，不嵌入 app，也不自动安装或上传 Marketplace。
+CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 25 上执行全部既有插件检查及单目标 GO-262.9437.286 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为独立作者签名附件，不嵌入 app 或自动安装；Marketplace 后置提交由 bootstrap/automatic/paused 模式控制，审核状态单独记录。
 
 Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后把本轮证书的管理员 Code Signing 信任改为明确拒绝并读回验证，再删除钥匙串及 P12。拒绝记录保留到一次性 runner 回收，避免删除最后一条管理员信任记录时等待交互授权；不修改系统授权规则，不适用于维护者本机的身份清理。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
 
