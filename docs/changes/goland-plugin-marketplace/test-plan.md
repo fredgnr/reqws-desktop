@@ -29,7 +29,7 @@ updated: 2026-09-20
 | T06 插件子集验证 | 仅下载插件及 SHA256SUMS 能成功；不要求未下载 Desktop；目标记录重复、名称替换、摘要不符失败 | M04/M08 |
 | T07 发布身份 | 非正式 tag、非目标仓库、不属于默认分支、Draft/prerelease、重复/零长资产、ref/asset 变化被拒绝 | M05/M08/M11 |
 | T08 工作流门禁 | publish 失败不提交；bootstrap/paused 明确非提交；非法模式失败；automatic 后置提交 | M05/M06/M07 |
-| T09 协议 | mock 验证固定官方 URL、xmlId、Stable/非 Hidden、Authorization；无 Token 泄露/跨域转发 | M07/M11 |
+| T09 协议 | 对 automatic 与 dispatch 重试的实际 multipart 请求断言固定官方 URL、`xmlId=com.reqws.workspace`、`family=intellij`、Stable/非 Hidden、Authorization；缺失/空白/错误 family 必须使协议断言失败；无 Token 泄露/跨域转发 | M07/M11 |
 | T10 响应分类 | 真实协议 fixture 的成功、401/403、明确拒绝、超时、HTML/畸形 JSON、版本冲突分别产生正确结论 | M09/M10 |
 | T11 独立重试 | 同一 Release 产物再次校验；不构建、不签名、不重新发布；可靠收据才跳过 POST | M08/M09 |
 | T12 不确定状态 | 收据缺失、过期、artifact 来源不可信、公开版本列表为空均不自动推断成功/不存在 | M09/M10 |

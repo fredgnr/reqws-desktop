@@ -92,7 +92,7 @@ Marketplace 还会执行自身签名，市场下载包不要求与上传前全�
 | 调用来源 | release.yml 在 publish 成功后调用；或显式 workflow_dispatch |
 | 必需上下文 | `refs/tags/vX.Y.Z`、固定 repository、解析后的 commit |
 | 模式 | Repository Variable `REQWS_MARKETPLACE_MODE`：bootstrap/automatic/paused |
-| 正式目的地 | 固定官方域名、固定 XML ID、Stable、非 Hidden，不允许调用方任意指定 |
+| 正式目的地 | 固定官方域名、固定 XML ID、`family=intellij`、Stable、非 Hidden，不允许调用方任意指定 |
 | 上传 Environment | `jetbrains-marketplace`，仅允许 `v*` tags，实际脚本再做严格正则与祖先检查 |
 | 签名 Environment | `jetbrains-plugin-signing`，仅允许 `v*` tags，生产密钥只给签名步骤 |
 | 权限 | 上传 `contents: read`；读取既有 CI 收据确有需要时加 `actions: read`；无 contents:write |
@@ -119,8 +119,10 @@ bootstrap/paused 的状态 job 不需要上传 Token；automatic 的上传 job �
 3. 只解析 SHA256SUMS 中目标插件的唯一标准记录，流式计算比对；拒绝重复目标条目或路径替换。不要对未下载的 Desktop/YAML 执行全文件 `sha256sum -c`，也不要把下载插件子集送给要求完整四资产的验证函数。
 4. 检查最终 ZIP 的 ID/version、兼容范围、结构及公开证书签名；上传前再次确认 tag/asset 身份未变化。受信任维护者仍是边界，摘要本身不能防御能同时替换资产和摘要的管理员。
 5. 检查已有提交证据；能确认相同提交则返回 already-submitted；不能确认的情况按下一节处理。
-6. 向固定 `https://plugins.jetbrains.com/api/updates/upload` 发送 multipart：`xmlId=com.reqws.workspace`、file、空 channel、`isHidden=false`、`containsAds=false`。Token 只放 Authorization header。
+6. 向固定 `https://plugins.jetbrains.com/api/updates/upload` 发送 multipart：`xmlId=com.reqws.workspace`、`family=intellij`、file、空 channel、`isHidden=false`、`containsAds=false`。Token 只放 Authorization header。
 7. 检查 HTTP 与响应体，保存脱敏收据及 CI summary。HTTP 2xx 但非预期响应/解析失败视为 unknown，而不是简单 green。
+
+XML-ID 上传必须同时传入 `xmlId` 与 `family=intellij`，automatic 提交和 `workflow_dispatch` 重试共用这一固定协议；不得省略 family、传空值，或用 `goland` / `GO` 替代。官方客户端的 [uploadByStringIdAndFamily](https://github.com/JetBrains/plugin-repository-rest-client/blob/d1f4f738092d27eefaa34d011ceb4519189291ee/rest/src/main/kotlin/org/jetbrains/intellij/pluginRepository/internal/api/PluginRepositoryService.kt) 将 family 声明为非空 multipart 字段，[ProductFamily.INTELLIJ](https://github.com/JetBrains/plugin-repository-rest-client/blob/d1f4f738092d27eefaa34d011ceb4519189291ee/rest/src/main/kotlin/org/jetbrains/intellij/pluginRepository/model/ProductFamily.kt) 的协议值是 `intellij`。T09 必须覆盖该字段及缺失/错误值负例，不把省略该字段的简化 HTTP 示例当成完整 XML-ID 协议。
 
 API 表单字段是 `xmlId`，不是说明文字中的 `pluginXmlId`。官方当前大小上限为 400 MB；客户端采用保守的 400,000,000 字节上限。连接/总超时有界；上传 POST 不配置盲目自动重试。只读下载可有限重试。[上传 API](https://plugins.jetbrains.com/docs/marketplace/plugin-upload.html)。
 
