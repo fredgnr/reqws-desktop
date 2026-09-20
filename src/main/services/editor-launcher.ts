@@ -1,3 +1,4 @@
+import { GOLAND_PROJECT_FILE, type GoLandWorkspaceState } from '../../shared/goland-workspace';
 import {
   execFile,
   spawn,
@@ -97,7 +98,7 @@ export interface EditorLauncherDependencies {
   systemApplicationsDirectory?: string;
   processEnvironment?: NodeJS.ProcessEnv;
   resolveGitPath?: () => Promise<string>;
-  resolveGoLandWorkspacePaths?: ResolveWorkspacePaths;
+  prepareGoLandWorkspace?: (workspaceId: string) => Promise<GoLandWorkspaceState>;
 }
 
 interface GoLandCandidate {
@@ -236,7 +237,7 @@ export class EditorLauncher {
   private readonly systemApplicationsDirectory: string;
   private readonly processEnvironment: NodeJS.ProcessEnv;
   private readonly resolveGitPath: () => Promise<string>;
-  private readonly resolveGoLandWorkspacePaths: ResolveWorkspacePaths;
+  private readonly prepareGoLandWorkspace: EditorLauncherDependencies['prepareGoLandWorkspace'];
 
   constructor(
     private readonly resolveWorkspacePaths: ResolveWorkspacePaths,
@@ -257,8 +258,7 @@ export class EditorLauncher {
     };
     this.resolveGitPath =
       dependencies.resolveGitPath ?? (() => GitRunner.resolveGitPath());
-    this.resolveGoLandWorkspacePaths =
-      dependencies.resolveGoLandWorkspacePaths ?? resolveWorkspacePaths;
+    this.prepareGoLandWorkspace = dependencies.prepareGoLandWorkspace;
   }
 
   async getAvailability(): Promise<SystemAvailability> {
@@ -291,14 +291,15 @@ export class EditorLauncher {
   }
 
   async openGoLand(workspaceId: string): Promise<void> {
-    const paths = await this.resolveGoLandWorkspacePaths(workspaceId);
-    await this.ensureCanonicalDirectory(paths.rootPath, 'workspace root');
-    await this.ensureRegularFile(
-      path.join(paths.rootPath, '.reqws', 'workspace.json'),
-      'workspace manifest',
-    );
+    if (!this.prepareGoLandWorkspace) {
+      throw new ReqwsError({ code: 'GOLAND_BINDING_INVALID', message: 'GoLand entry preparation is unavailable.' });
+    }
+    const state = await this.prepareGoLandWorkspace(workspaceId);
+    if (!state.project) throw new ReqwsError({ code: 'GOLAND_BINDING_INVALID', message: 'GoLand entry has no binding.' });
+    await this.ensureCanonicalDirectory(state.shellPath, 'GoLand entry');
+    await this.ensureRegularFile(path.join(state.shellPath, GOLAND_PROJECT_FILE), 'GoLand binding');
     const applicationPath = await this.ensureGoLandAvailable();
-    await this.runOpen(['-a', applicationPath, paths.rootPath]);
+    await this.runOpen(['-a', applicationPath, state.shellPath]);
   }
 
   async revealInFinder(workspaceId: string): Promise<void> {

@@ -87,7 +87,7 @@ class VcsRootInspectorTest {
     assertEquals(
       listOf(
         VcsWorkspaceDiagnosticCode.WORKSPACE_WIDE_GIT_ROOT,
-        VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT,
+        VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT,
       ),
       result.workspaceDiagnostics,
     )
@@ -96,7 +96,7 @@ class VcsRootInspectorTest {
   }
 
   @Test
-  fun `ignores nested nonexistent and ordinary extra mappings inside the workspace`() {
+  fun `reports extra mappings informationally without scanning retained repositories`() {
     val root = workspaceRoot()
     gitRepository(root, "active")
     Files.createDirectories(root.resolve("ordinary"))
@@ -114,7 +114,7 @@ class VcsRootInspectorTest {
     )
 
     assertEquals(VcsRepositoryStatus.CONFIGURED, result.repositoryStatuses.single().status)
-    assertEquals(emptyList<VcsWorkspaceDiagnosticCode>(), result.workspaceDiagnostics)
+    assertEquals(listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT), result.workspaceDiagnostics)
     assertFalse(result.degraded)
   }
 
@@ -183,7 +183,7 @@ class VcsRootInspectorTest {
 
     assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, result.repositoryStatuses.single().status)
     assertEquals(
-      listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+      listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT),
       result.workspaceDiagnostics,
     )
   }
@@ -210,7 +210,7 @@ class VcsRootInspectorTest {
 
     assertEquals(VcsRepositoryStatus.NOT_CONFIGURED, result.repositoryStatuses.single().status)
     assertEquals(
-      listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+      listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT),
       result.workspaceDiagnostics,
     )
   }
@@ -253,7 +253,7 @@ class VcsRootInspectorTest {
     assertEquals(50, result.repositoryStatuses.size)
     assertTrue(result.repositoryStatuses.all { it.status == VcsRepositoryStatus.CONFIGURED })
     assertEquals(
-      listOf(VcsWorkspaceDiagnosticCode.INACTIVE_GIT_ROOT),
+      listOf(VcsWorkspaceDiagnosticCode.EXTRA_GIT_ROOT),
       result.workspaceDiagnostics,
     )
   }

@@ -14,6 +14,11 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: ReqwsAPI = {
+  goLandWorkspaces: {
+    read: (workspaceId) => invoke(IPC_CHANNELS.goLandWorkspaces.read, workspaceId),
+    prepare: (input) => invoke(IPC_CHANNELS.goLandWorkspaces.prepare, input),
+    save: (input) => invoke(IPC_CHANNELS.goLandWorkspaces.save, input),
+  },
   repositories: {
     list: () => invoke(IPC_CHANNELS.repositories.list),
     create: (input) => invoke(IPC_CHANNELS.repositories.create, input),

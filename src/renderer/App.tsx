@@ -524,7 +524,6 @@ export function App({
           onForget={() => setConfirmation({ kind: 'forget-workspace' })}
           onOpenCursor={() => void runEditorAction(detail.id, () => api.editors.openCursor(detail.id), 'app.toasts.openedCursor')}
           onOpenCursorRoot={() => void runEditorAction(detail.id, () => api.editors.openCursorRoot(detail.id), 'app.toasts.openedCursorRoot')}
-          onOpenGoLand={() => void runEditorAction(detail.id, () => api.editors.openGoLand(detail.id), 'app.toasts.openedGoLand')}
           onOpenVSCode={() => void runEditorAction(detail.id, () => api.editors.openVSCode(detail.id), 'app.toasts.openedVSCode')}
           onRemoveRepository={(repository) => setConfirmation({ kind: 'remove-workspace-repository', repository })}
           onRevealFinder={() => void runEditorAction(detail.id, () => api.editors.revealInFinder(detail.id), 'app.toasts.revealedFinder')}

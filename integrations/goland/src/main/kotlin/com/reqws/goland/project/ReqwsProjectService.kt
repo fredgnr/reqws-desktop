@@ -63,6 +63,7 @@ class ReqwsProjectService private constructor(
 
   private val trace = runtimeOverrides?.trace ?: project.service<ReqwsSyncTrace>()
   private val disposed = AtomicBoolean(false)
+  private val projectionDirty = AtomicBoolean(false)
   private val lifecycleCommitLock = Any()
   private val readRequests = SyncReadRequestTracker()
   private val statePublisher = TerminalStatePublisher(
@@ -89,6 +90,8 @@ class ReqwsProjectService private constructor(
   private val initialProjectMetadataRetryRef = AtomicReference<Job?>()
   private val initialProjectMetadataDeadlineNanos = AtomicReference<Long?>()
   private val initialProjectMetadataRecoveryArmed = AtomicBoolean(false)
+  private val initialProjectMetadataSaveRequested = AtomicBoolean(false)
+  private val initialProjectMetadataObserved = AtomicBoolean(false)
   private val applyingState = AtomicReference<ApplyingState?>()
   private val candidateLock = Any()
   private val candidateStates = LinkedHashMap<Long, CandidateState>()
@@ -100,17 +103,13 @@ class ReqwsProjectService private constructor(
     manifestReader = ManifestReader(),
     trustGate = trustGate,
   )
-  private val projectionApplier by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-    ReqwsProjectionApplier.forProject(
-      project = project,
-      isServiceDisposed = disposed::get,
-    )
-  }
   private val coordinator = LatestWinsSyncCoordinator(
     scope = coroutineScope,
     applier = runtimeOverrides?.candidateApplier
       ?: SyncCandidateApplier<ManifestSnapshot> { candidate ->
-        projectionApplier.apply(candidate.value)
+        ReqwsProjectionApplier.forProject(project, disposed::get) {
+          candidate.sourceId?.let(readRequests::isCurrent) ?: false
+        }.apply(candidate.value)
       },
     committer = SyncCandidateCommitter { candidate ->
       runtimeOverrides?.beforeCandidateCommit?.invoke()
@@ -118,6 +117,10 @@ class ReqwsProjectService private constructor(
         if (disposed.get() || project.isDisposed) {
           throw CancellationException("ReqWS project service was disposed before digest commit")
         }
+        if (!trustGate.isTrusted() || candidate.sourceId?.let(readRequests::isCurrent) == false) {
+          throw CancellationException("Loading candidate was superseded before commit")
+        }
+        candidate.value.loading?.let { com.reqws.goland.loading.contract.LoadingSnapshotReader().verifyCurrent(it) }
         persistence.markApplied(candidate.digestSha256)
       }
     },
@@ -202,6 +205,16 @@ class ReqwsProjectService private constructor(
     require(projectMetadataReadinessMaxPolls > 0) {
       "The project metadata readiness poll limit must be positive"
     }
+    com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect(this)
+      .subscribe(com.intellij.ide.trustedProjects.TrustedProjectsListener.TOPIC,
+        object : com.intellij.ide.trustedProjects.TrustedProjectsListener {
+          override fun onProjectTrusted(locatedProject: com.intellij.ide.trustedProjects.TrustedProjectsLocator.LocatedProject) {
+            if (locatedProject.project == project) requestRefresh(SyncTrigger.TRUST_TRANSITION)
+          }
+          override fun onProjectUntrusted(locatedProject: com.intellij.ide.trustedProjects.TrustedProjectsLocator.LocatedProject) {
+            if (locatedProject.project == project) requestRefresh(SyncTrigger.TRUST_TRANSITION)
+          }
+        })
     registerProjectModelChangeMonitoring()
     if (trace.enabled) trace.record(SyncTraceEvent.SERVICE_STARTED)
   }
@@ -626,7 +639,7 @@ class ReqwsProjectService private constructor(
       finishVcsChangeMonitoringRevocation(revocation)
     }
     return try {
-      val projectRoot = ReqwsProjectDetector.projectRoot(project)
+      val projectRoot = runtimeOverrides?.projectRoot ?: ReqwsProjectDetector.projectRoot(project)
       val observedVcsRegistrationVersion = currentStartedVcsRegistrationVersion()
       val launched = coroutineScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
         val readingPublication = requireNotNull(readingPublicationRef.get()) {
@@ -775,7 +788,7 @@ class ReqwsProjectService private constructor(
         ) {
           rollback = statePublisher.prepareCompareAndPublish(
             expectedVersion = readingPublication.after.version,
-            next = readingPublication.after.stableState,
+            next = readingPublication.after.stableState.let { if (projectionDirty.get()) it.copy(validatedProjectionDigest = null) else it },
           )
         }
       }
@@ -812,7 +825,7 @@ class ReqwsProjectService private constructor(
       if (
         disposed.get() ||
         project.isDisposed ||
-        ReqwsProjectDetector.detect(project) == null
+        (runtimeOverrides?.projectRoot ?: ReqwsProjectDetector.projectRoot(project))?.let(ReqwsProjectDetector::detect) == null
       ) {
         return@launch
       }
@@ -863,7 +876,8 @@ class ReqwsProjectService private constructor(
 
   /**
    * Waits for GoLand itself to materialize the virgin project's `.idea` entry. The monitor only
-   * probes that exact path and submits one full latest-manifest refresh only when an entry appears.
+   * requests at most one normal native save for a verified virgin project, probes the exact path,
+   * and submits one full latest-manifest refresh only when an entry appears.
    * A bounded timeout publishes the cached failure without another apply. The authoritative model
    * adapter still validates type, containment, inode identity, and ownership before any mutation.
    */
@@ -894,6 +908,7 @@ class ReqwsProjectService private constructor(
         if (hasProjectMetadataRecoveryExpired(recovery)) break
         pollCount += 1
         shouldRefresh = try {
+          requestInitialProjectMetadataSave(recovery)
           projectMetadataReadinessProbe.shouldAttemptRefresh(recovery.projectRoot)
         } catch (cancellation: ProcessCanceledException) {
           throw cancellation
@@ -961,6 +976,28 @@ class ReqwsProjectService private constructor(
 
   private fun hasProjectMetadataRecoveryExpired(recovery: InitialProjectMetadataRecovery): Boolean =
     projectMetadataReadinessNanoTime() - recovery.deadlineNanos >= 0L
+
+  private fun requestInitialProjectMetadataSave(recovery: InitialProjectMetadataRecovery) {
+    if (initialProjectMetadataSaveRequested.get() || initialProjectMetadataObserved.get() || hasProjectMetadataRecoveryExpired(recovery) ||
+      !(runtimeOverrides?.projectMetadataInitializedProbe?.invoke() ?: project.isInitialized)) return
+    val loading = recovery.fallbackState.snapshot?.loading ?: return
+    readRequests.runIfLatest(recovery.predecessor) {
+      if (!isProjectMetadataRecoveryCurrent(recovery) || !trustGate.isTrusted() ||
+        persistence.lastAppliedDigest() != null) return@runIfLatest
+      com.reqws.goland.loading.contract.LoadingSnapshotReader().verifyCurrent(loading)
+      try {
+        Files.readAttributes(recovery.projectRoot.resolve(".idea"), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        initialProjectMetadataObserved.set(true)
+        return@runIfLatest
+      } catch (_: NoSuchFileException) {
+        // Only a still-missing virgin metadata entry can request the platform's ordinary save.
+      }
+      if (!hasProjectMetadataRecoveryExpired(recovery) && initialProjectMetadataSaveRequested.compareAndSet(false, true)) {
+        val requester = runtimeOverrides?.projectMetadataSaveRequester
+        if (requester != null) requester() else project.scheduleSave()
+      }
+    }
+  }
 
   private fun isProjectMetadataRecoveryCurrent(
     recovery: InitialProjectMetadataRecovery,
@@ -1097,6 +1134,11 @@ class ReqwsProjectService private constructor(
     request: SyncReadRequest,
     observedVcsRegistrationVersion: Long?,
   ) {
+    if (loaded.lifecycle in setOf(ReqwsLifecycleState.ERROR, ReqwsLifecycleState.SAFE_MODE_BLOCKED, ReqwsLifecycleState.INACTIVE)) {
+      project.service<com.reqws.goland.loading.shell.ShellPresentationCache>().publish(null) {
+        readRequests.isCurrent(request.generation) && !disposed.get()
+      }
+    }
     when (loaded.lifecycle) {
       ReqwsLifecycleState.INACTIVE -> {
         var revocation: VcsChangeMonitoringRevocation? = null
@@ -1143,12 +1185,12 @@ class ReqwsProjectService private constructor(
       ReqwsLifecycleState.ERROR -> {
         var revocation: VcsChangeMonitoringRevocation? = null
         try {
-          readRequests.runIfLatest(request) { trigger ->
+          readRequests.runIfLatestAndArmReconcile(request, SyncTrigger.PROJECT_MODEL_CHANGE) {
             trustMonitor.cancelPending()
             revocation = revokeUnacceptedVcsChangeMonitoring()
             coordinator.offerReadFailure(
               cause = ReadStateFailure(loaded),
-              trigger = trigger,
+              trigger = SyncTrigger.PROJECT_MODEL_CHANGE,
               digestSha256 = loaded.lastError?.digestSha256,
             )
           }
@@ -1207,6 +1249,7 @@ class ReqwsProjectService private constructor(
     if (disposed.get()) return
     when (event) {
       is SyncCoordinatorEvent.Applying -> {
+        projectionDirty.set(true)
         val candidate = event.sourceId?.let(::takeCandidate)
         if (event.sourceId != null && candidate == null) return
         val publication = statePublisher.prepareUpdate { current ->
@@ -1229,26 +1272,28 @@ class ReqwsProjectService private constructor(
         }
       }
       is SyncCoordinatorEvent.Applied -> {
+        if (event.sourceId?.let(readRequests::isCurrent) == false) return
         val candidate = takeApplying(event.sourceId, event.digestSha256)
         if (event.sourceId != null && candidate == null) return
         candidate?.sourceRequest?.let(
           ::completeInitialProjectMetadataRecovery,
         )
-        publish(
-          (candidate?.state ?: state).afterSuccessfulProjection(
+        publishProjectionSuccess(candidate?.sourceRequest,
+          (candidate?.state ?: state).copy(userRootCoverage = project.service<com.reqws.goland.loading.model.LoadedProjectionService>().coverageFor(event.digestSha256)).afterSuccessfulProjection(
             persistence.lastAppliedDigest() ?: event.digestSha256,
           ),
         )
       }
       is SyncCoordinatorEvent.NoOp -> {
+        if (event.sourceId?.let(readRequests::isCurrent) == false) return
         val candidate = event.sourceId?.let(::takeCandidate)
         if (event.sourceId != null && candidate == null) return
         candidate?.sourceRequest?.let(
           ::completeInitialProjectMetadataRecovery,
         )
         val loaded = candidate?.state ?: state
-        publish(
-          loaded.afterSuccessfulProjection(
+        publishProjectionSuccess(candidate?.sourceRequest,
+          loaded.copy(userRootCoverage = project.service<com.reqws.goland.loading.model.LoadedProjectionService>().coverageFor(event.digestSha256)).afterSuccessfulProjection(
             persistence.lastAppliedDigest() ?: event.digestSha256,
           ),
         )
@@ -1335,7 +1380,7 @@ class ReqwsProjectService private constructor(
         predecessor = candidate.sourceRequest,
         expectedStateVersion = applying.publication.after.version,
         digestSha256 = candidate.digestSha256,
-        projectRoot = snapshot.canonicalProjectRoot,
+        projectRoot = snapshot.loading?.binding?.shell ?: snapshot.canonicalProjectRoot,
         fallbackState = candidate.state,
         deadlineNanos = Long.MIN_VALUE,
       )
@@ -1477,12 +1522,19 @@ class ReqwsProjectService private constructor(
 
   private fun ensureWatcher(projectRoot: Path) {
     if (watcherRef.get() != null || disposed.get() || project.isDisposed) return
-    val watcher = manifestWatcherFactory.create(
-      project = project,
-      manifestPath = ReqwsProjectDetector.manifestPath(projectRoot),
-      coroutineScope = coroutineScope,
-      syncRequest = ManifestSyncRequest { requestRefresh(SyncTrigger.AUTOMATIC) },
-    )
+    if (projectRoot.fileName?.toString() != "goland" || projectRoot.parent?.fileName?.toString() != "ide" ||
+      projectRoot.parent?.parent?.fileName?.toString() != ".reqws") return
+    val paths = listOf(ReqwsProjectDetector.manifestPath(projectRoot), projectRoot.resolve("reqws-project.json"))
+    val watchers = mutableListOf<Disposable>()
+    try {
+      paths.forEach { path -> watchers += manifestWatcherFactory.create(
+        project, path, coroutineScope, ManifestSyncRequest { requestRefresh(SyncTrigger.AUTOMATIC) },
+      ) }
+    } catch (failure: Throwable) {
+      watchers.forEach { it.dispose() }
+      throw failure
+    }
+    val watcher = Disposable { watchers.forEach { it.dispose() } }
     if (!watcherRef.compareAndSet(null, watcher)) {
       watcher.dispose()
       return
@@ -1544,6 +1596,39 @@ class ReqwsProjectService private constructor(
       return AutoCloseable {}
     }
     return statePublisher.addListener(listener)
+  }
+
+  private fun publishProjectionSuccess(request: SyncReadRequest?, next: ReqwsProjectState) {
+    fun revokeAndRefresh() {
+      if (request == null) return
+      readRequests.runIfLatestAndArmReconcile(request, SyncTrigger.PROJECT_MODEL_CHANGE) {}
+      coroutineScope.launch {
+        project.service<com.reqws.goland.loading.shell.ShellPresentationCache>().publish(null) { readRequests.isCurrent(request.generation) && !disposed.get() }
+        if (readRequests.isCurrent(request.generation)) requestRefresh(SyncTrigger.AUTOMATIC)
+      }
+    }
+    fun commit() {
+      if (disposed.get() || project.isDisposed) return
+      if (!trustGate.isTrusted()) {
+        projectionDirty.set(true)
+        publish(next.copy(lifecycle = ReqwsLifecycleState.SAFE_MODE_BLOCKED, validatedProjectionDigest = null))
+        revokeAndRefresh()
+        return
+      }
+      try {
+        next.snapshot?.loading?.let { com.reqws.goland.loading.contract.LoadingSnapshotReader().verifyCurrent(it) }
+      } catch (failure: ProcessCanceledException) { throw failure
+      } catch (failure: CancellationException) { throw failure
+      } catch (failure: Exception) {
+        projectionDirty.set(true)
+        publish(next.copy(lifecycle = ReqwsLifecycleState.ERROR, validatedProjectionDigest = null, lastError = ReqwsProjectError("BINDING_ERROR")))
+        revokeAndRefresh()
+        return
+      }
+      projectionDirty.set(false)
+      publish(next)
+    }
+    if (request != null) readRequests.runIfLatest(request) { commit() } else commit()
   }
 
   private fun publish(next: ReqwsProjectState) {
@@ -1770,6 +1855,7 @@ internal fun interface ReqwsManifestWatcherFactory {
 }
 
 internal data class ReqwsProjectServiceRuntimeOverrides(
+  val projectRoot: Path? = null,
   val trustGate: ReqwsTrustGate? = null,
   val candidateApplier: SyncCandidateApplier<ManifestSnapshot>? = null,
   val trustPollMillis: Long? = null,
@@ -1791,6 +1877,8 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val projectMetadataReadinessProbe: ProjectMetadataReadinessProbe? = null,
   val projectMetadataReadinessMaxPolls: Int? = null,
   val projectMetadataReadinessNanoTime: (() -> Long)? = null,
+  val projectMetadataSaveRequester: (() -> Unit)? = null,
+  val projectMetadataInitializedProbe: (() -> Boolean)? = null,
   val manifestWatcherFactory: ReqwsManifestWatcherFactory? = null,
   val trace: ReqwsSyncTrace? = null,
 )

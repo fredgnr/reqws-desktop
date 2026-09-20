@@ -1,11 +1,14 @@
 ---
 title: GoLand 插件支持需求说明
 type: requirements
-status: active
+status: superseded
+superseded-by: ../goland-workspace-loading/README.md
 updated: 2026-09-19
 ---
 
 # GoLand 插件支持需求说明
+
+入口、模型、加载状态和平台基线已由[GoLand 工作加载集合](../goland-workspace-loading/README.md)替代；本文保留原实现的契约背景，不能据此要求新旧兼容。
 
 本文定义 ReqWS 本次 GoLand 支持的完整交付范围：跨 IDE manifest 契约、ReqWS Desktop 的 GoLand 启动入口，以及以 manifest 为目标状态的 GoLand 插件 v0.1。
 

@@ -22,7 +22,8 @@ internal class ReqwsProjectLoadEngine(
     }
 
     return try {
-      val snapshot = manifestReader.read(projectRoot)
+      val loading = com.reqws.goland.loading.contract.LoadingSnapshotReader(manifestReader).read(projectRoot)
+      val snapshot = loading.manifest.copy(digestSha256 = loading.digest, loading = loading)
       val lifecycle = when {
         !trustGate.isTrusted() -> ReqwsLifecycleState.SAFE_MODE_BLOCKED
         snapshot.missingRepositoryCount > 0 -> ReqwsLifecycleState.DEGRADED
@@ -34,16 +35,18 @@ internal class ReqwsProjectLoadEngine(
         lastAppliedDigest = previous.lastAppliedDigest,
         validatedProjectionDigest = previous.validatedProjectionDigest,
       )
-    } catch (exception: ManifestException) {
+    } catch (exception: com.intellij.openapi.progress.ProcessCanceledException) { throw exception
+    } catch (exception: kotlinx.coroutines.CancellationException) { throw exception
+    } catch (exception: Exception) {
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.ERROR,
         snapshot = previous.snapshot,
         lastAppliedDigest = previous.lastAppliedDigest,
         validatedProjectionDigest = previous.validatedProjectionDigest,
         lastError = ReqwsProjectError(
-          code = exception.code.name,
-          field = exception.field,
-          digestSha256 = exception.digestSha256,
+          code = (exception as? ManifestException)?.code?.name ?: "BINDING_ERROR",
+          field = (exception as? ManifestException)?.field,
+          digestSha256 = (exception as? ManifestException)?.digestSha256,
         ),
       )
     }

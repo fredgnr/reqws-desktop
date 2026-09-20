@@ -16,9 +16,20 @@ const focusableSelector = [
   'input:not([disabled])',
   'select:not([disabled])',
   'textarea:not([disabled])',
+  'summary:not([aria-disabled="true"])',
   '[href]',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
+
+function visibleFocusables(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(focusableSelector)].filter((element) => {
+    if (element.tabIndex < 0 || element.closest('[hidden], [aria-hidden="true"]')) return false;
+    for (let parent = element.parentElement; parent && parent !== container; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement && !parent.open && parent.querySelector(':scope > summary') !== element) return false;
+    }
+    return true;
+  });
+}
 
 export function Dialog({
   children,
@@ -33,7 +44,7 @@ export function Dialog({
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = containerRef.current;
-    const focusables = container?.querySelectorAll<HTMLElement>(focusableSelector);
+    const focusables = container ? visibleFocusables(container) : [];
     (focusables?.[0] ?? container)?.focus();
 
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -43,7 +54,7 @@ export function Dialog({
         return;
       }
       if (event.key !== 'Tab' || !container) return;
-      const current = [...container.querySelectorAll<HTMLElement>(focusableSelector)];
+      const current = visibleFocusables(container);
       if (current.length === 0) {
         event.preventDefault();
         container.focus();

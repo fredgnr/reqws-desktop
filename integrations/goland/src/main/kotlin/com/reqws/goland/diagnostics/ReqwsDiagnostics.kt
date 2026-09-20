@@ -2,12 +2,11 @@ package com.reqws.goland.diagnostics
 
 import com.reqws.goland.manifest.ManifestReader
 import com.reqws.goland.project.ReqwsProjectState
-import com.reqws.goland.projectmodel.REQWS_MODEL_STRATEGY
 import com.reqws.goland.vcs.VcsRepositoryStatus
 import java.nio.file.Path
 
 internal object ReqwsDiagnostics {
-  const val STRATEGY = REQWS_MODEL_STRATEGY
+  const val STRATEGY = "loaded-roots-v1"
 
   fun format(
     pluginVersion: String,

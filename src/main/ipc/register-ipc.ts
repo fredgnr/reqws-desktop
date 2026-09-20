@@ -1,4 +1,5 @@
 import type { IpcMain } from 'electron';
+import { createGoLandWorkspaceHandlers, type GoLandWorkspaceHandlerDependencies } from './goland-workspace-handlers';
 import { serializeReqwsError } from '../../shared/errors';
 import { IPC_CHANNELS } from '../../shared/ipc-channels';
 import { updateStateSchema } from '../../shared/update-schemas';
@@ -19,7 +20,7 @@ import type { SettingsHandlerDependencies } from './settings-handlers';
 import { createWorkspaceHandlers } from './workspace-handlers';
 import type { WorkspaceHandlerDependencies } from './workspace-handlers';
 
-export type RegisterIpcDependencies = RepositoryHandlerDependencies &
+export type RegisterIpcDependencies = GoLandWorkspaceHandlerDependencies & RepositoryHandlerDependencies &
   WorkspaceHandlerDependencies &
   SettingsHandlerDependencies &
   EditorHandlerDependencies &
@@ -31,6 +32,7 @@ const registrations = new WeakMap<IpcMainPort, { token: symbol; unsubscribe: () 
 
 function handlerMap(dependencies: RegisterIpcDependencies): IpcHandlerMap {
   return {
+    ...createGoLandWorkspaceHandlers(dependencies),
     ...createUpdateHandlers(dependencies),
     ...createRepositoryHandlers(dependencies),
     ...createWorkspaceHandlers(dependencies),

@@ -160,6 +160,10 @@
   },
   "workspaceDetail": {
     "openCursorRoot": "用 Cursor 打开代码目录",
+    "openCursorWorkspace": "打开工作区文件",
+    "filesTitle": "工作区文件",
+    "filesSummary": "工作区文件由 ReqWS 自动维护。",
+    "manageTitle": "管理工作区",
     "revealInFinder": "在 Finder 中显示",
     "editorDisabledPathIncomplete": "工作区路径不完整，无法用编辑器打开。",
     "editorsUnavailable": "以下编辑器不可用：{{editors}}",
@@ -351,7 +355,11 @@
       "UPDATE_UNSUPPORTED_LOCATION": "请将 ReqWS 安装在可写的“应用程序”目录或个人“应用程序”目录后再更新。",
       "UPDATE_CONFIG_INVALID": "更新配置无效，请使用可信发布的应用。",
       "UPDATE_RESTART_REQUIRED": "请重启 ReqWS 后再尝试更新。",
-      "UPDATE_TIMEOUT": "更新请求超时，请重新检查更新。"
+      "UPDATE_TIMEOUT": "更新请求超时，请重新检查更新。",
+      "GOLAND_ENTRY_CONFLICT": "GoLand 入口目录已存在，但没有属于此工作区的有效绑定。请保留目录并手动处理冲突。",
+      "GOLAND_BINDING_INVALID": "GoLand 绑定无效或目录已变化。请检查配置后重新加载。",
+      "GOLAND_SELECTION_CONFLICT": "加载配置已被修改。你的选择尚未保存，请重新加载后再编辑。",
+      "GOLAND_WRITE_FAILED": "GoLand 加载配置保存失败，请检查目录权限和磁盘空间。"
     }
   },
   "updates": {
@@ -385,5 +393,28 @@
       "invalid-config": "更新配置无效，其他功能仍可使用。",
       "restart-required": "请重启 ReqWS 后重试更新，其他功能仍可使用。"
     }
+  },
+  "golandLoading": {
+    "title": "GoLand 工作加载",
+    "description": "选择要加载的仓库。",
+    "mode": "加载模式",
+    "all": "默认全部",
+    "selected": "指定仓库",
+    "count": "已选择 {{count}} / {{total}} 个仓库",
+    "count_one": "已选择 {{count}} / {{total}} 个仓库",
+    "count_other": "已选择 {{count}} / {{total}} 个仓库",
+    "saving": "正在保存…",
+    "loading": "正在读取加载配置…",
+    "unsaved": "有未保存的更改",
+    "saved": "选择已保存",
+    "confirmSync": "请在 GoLand 插件中确认 IDE 同步状态。",
+    "membershipSummary": "未加载的仓库仍保留在此工作区。",
+    "rulesTitle": "加载规则",
+    "rulesSummary": "了解加载选择与新增仓库的处理方式。",
+    "allSummary": "自动加载当前仓库及之后新增的仓库。",
+    "save": "保存选择",
+    "saveAndOpen": "保存并打开 GoLand",
+    "reload": "重新加载已保存配置",
+    "membershipNotice": "未加载不会删除仓库或更改需求成员。指定集合不自动选择新增成员；本次保存会清理已移除成员的选择。"
   }
 }

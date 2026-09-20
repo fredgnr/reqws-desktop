@@ -26,6 +26,7 @@ import com.reqws.goland.project.ReqwsProjectState
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Container
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -55,7 +56,7 @@ internal class ReqwsToolWindowPanel(
   private val stateDispatcher = ReqwsToolWindowStateDispatcher()
   private val workspaceValue = manifestTextLabel()
   private val branchValue = manifestTextLabel()
-  private val activeRepositoriesValue = CompressibleTextLabel()
+  private val loadedRepositoriesValue = CompressibleTextLabel()
   private val statusValue = CompressibleTextLabel()
   private val repositoriesTitle = JBLabel(ReqwsBundle.message("section.repositories"))
   private val repositoriesCount = JBLabel("0")
@@ -157,8 +158,8 @@ internal class ReqwsToolWindowPanel(
     branchValue.font = JBFont.small()
     branchValue.foreground = UIUtil.getContextHelpForeground()
     branchValue.accessibleContext.accessibleName = ReqwsBundle.message("field.branch")
-    activeRepositoriesValue.font = JBFont.small()
-    activeRepositoriesValue.foreground = UIUtil.getContextHelpForeground()
+    loadedRepositoriesValue.font = JBFont.small()
+    loadedRepositoriesValue.foreground = UIUtil.getContextHelpForeground()
     identity.add(
       workspaceValue,
       GridBagConstraints().apply {
@@ -181,7 +182,7 @@ internal class ReqwsToolWindowPanel(
       },
     )
     identity.add(
-      activeRepositoriesValue,
+      loadedRepositoriesValue,
       GridBagConstraints().apply {
         gridx = 0
         gridy = 2
@@ -234,12 +235,12 @@ internal class ReqwsToolWindowPanel(
     branchValue.setManifestText(model.featureBranch.orEmpty())
     branchValue.setAccessibleManifestValue("field.branch", model.featureBranch.orEmpty())
     statusValue.applyStatus(model)
-    activeRepositoriesValue.text = ReqwsBundle.message(
-      "summary.activeRepositories",
-      model.repositories.size,
+    loadedRepositoriesValue.text = ReqwsBundle.message(
+      "summary.loadedRepositories",
+      model.loadedRepositoryCount,
     )
-    activeRepositoriesValue.toolTipText = safeTextTooltip(activeRepositoriesValue.text)
-    activeRepositoriesValue.accessibleContext.accessibleDescription = activeRepositoriesValue.text
+    loadedRepositoriesValue.toolTipText = safeTextTooltip(loadedRepositoriesValue.text)
+    loadedRepositoriesValue.accessibleContext.accessibleDescription = loadedRepositoriesValue.text
 
     repositoryModel.removeAllElements()
     model.repositories.forEach(repositoryModel::addElement)
@@ -290,8 +291,8 @@ internal class ReqwsToolWindowPanel(
 
 internal class ReqwsRepositoryListCellRenderer : ListCellRenderer<ReqwsRepositoryViewModel> {
   private val repositoryName = manifestTextLabel()
-  private val status = JBLabel()
-  private val panel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
+  private val status = CompressibleTextLabel()
+  private val panel = JPanel(RepositoryRowLayout(repositoryName, status)).apply {
     isOpaque = true
     add(repositoryName, BorderLayout.CENTER)
     add(status, BorderLayout.LINE_END)
@@ -305,6 +306,7 @@ internal class ReqwsRepositoryListCellRenderer : ListCellRenderer<ReqwsRepositor
     cellHasFocus: Boolean,
   ): Component {
     val statusText = ReqwsBundle.message(value.statusKey)
+    val detailText = value.statusDetailKey?.let { ReqwsBundle.message(it) }
     repositoryName.setManifestText(value.name)
     status.text = statusText
     status.icon = statusIcon(value.statusTone)
@@ -318,17 +320,46 @@ internal class ReqwsRepositoryListCellRenderer : ListCellRenderer<ReqwsRepositor
       JBUI.Borders.empty(5, 10)
     }
     panel.isOpaque = isSelected
+    panel.componentOrientation = list.componentOrientation
     panel.background = if (isSelected) list.selectionBackground else list.background
     repositoryName.foreground = if (isSelected) list.selectionForeground else list.foreground
     status.foreground = if (isSelected) list.selectionForeground else list.foreground
-    val tooltip = safeTextTooltip("${value.name} — $statusText")
+    val tooltip = safeTextTooltip(
+      listOfNotNull("${value.name} — $statusText", detailText).joinToString(" · "),
+    )
     panel.toolTipText = tooltip
     panel.accessibleContext.accessibleName = "${value.name}, $statusText"
+    panel.accessibleContext.accessibleDescription = detailText ?: statusText
     repositoryName.toolTipText = tooltip
     repositoryName.accessibleContext.accessibleName = value.name
     status.toolTipText = tooltip
     status.accessibleContext.accessibleName = statusText
+    status.accessibleContext.accessibleDescription = detailText ?: statusText
     return panel
+  }
+}
+
+/** BorderLayout's trailing preferred width can otherwise consume the entire repository name. */
+private class RepositoryRowLayout(
+  private val name: JComponent,
+  private val status: JComponent,
+) : BorderLayout(JBUI.scale(8), 0) {
+  override fun layoutContainer(parent: Container) {
+    val insets = parent.insets
+    val width = (parent.width - insets.left - insets.right).coerceAtLeast(0)
+    val height = (parent.height - insets.top - insets.bottom).coerceAtLeast(0)
+    val gap = hgap.coerceAtMost(width)
+    val textWidth = width - gap
+    val nameReserve = minOf(name.preferredSize.width, textWidth / 3)
+    val statusWidth = minOf(status.preferredSize.width, textWidth - nameReserve)
+    val nameWidth = textWidth - statusWidth
+    if (parent.componentOrientation.isLeftToRight) {
+      name.setBounds(insets.left, insets.top, nameWidth, height)
+      status.setBounds(insets.left + nameWidth + gap, insets.top, statusWidth, height)
+    } else {
+      status.setBounds(insets.left, insets.top, statusWidth, height)
+      name.setBounds(insets.left + statusWidth + gap, insets.top, nameWidth, height)
+    }
   }
 }
 

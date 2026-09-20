@@ -26,6 +26,11 @@ export interface AtomicJsonStoreOptions<T> {
   now?: () => Date;
 }
 
+export interface AtomicWriteOptions {
+  /** The caller owns directory creation and revalidates the bound destination before publication. */
+  assertDestination?: () => Promise<void>;
+}
+
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const TEMP_OPEN_ATTEMPTS = 4;
@@ -93,9 +98,11 @@ async function syncDirectory(directoryPath: string): Promise<void> {
 export async function writeFileAtomically(
   targetPath: string,
   content: string,
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
   const directoryPath = path.dirname(targetPath);
-  await mkdir(directoryPath, { recursive: true, mode: DIRECTORY_MODE });
+  if (options.assertDestination) await options.assertDestination();
+  else await mkdir(directoryPath, { recursive: true, mode: DIRECTORY_MODE });
 
   const { handle, tempPath } = await openUniqueTempFile(targetPath);
   let handleOpen = true;
@@ -106,12 +113,16 @@ export async function writeFileAtomically(
     await handle.sync();
     await handle.close();
     handleOpen = false;
+    await options.assertDestination?.();
     await rename(tempPath, targetPath);
     renamed = true;
     await syncDirectory(directoryPath);
   } finally {
     if (handleOpen) await handle.close().catch(() => undefined);
-    if (!renamed) await unlink(tempPath).catch(() => undefined);
+    if (!renamed) {
+      const safe = await options.assertDestination?.().then(() => true, () => false) ?? true;
+      if (safe) await unlink(tempPath).catch(() => undefined);
+    }
   }
 }
 
@@ -123,9 +134,11 @@ export async function writeFileAtomically(
 export async function writeFileAtomicallyIfAbsent(
   targetPath: string,
   content: string,
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
   const directoryPath = path.dirname(targetPath);
-  await mkdir(directoryPath, { recursive: true, mode: DIRECTORY_MODE });
+  if (options.assertDestination) await options.assertDestination();
+  else await mkdir(directoryPath, { recursive: true, mode: DIRECTORY_MODE });
 
   const { handle, tempPath } = await openUniqueTempFile(targetPath);
   let handleOpen = true;
@@ -134,28 +147,33 @@ export async function writeFileAtomicallyIfAbsent(
     await handle.sync();
     await handle.close();
     handleOpen = false;
+    await options.assertDestination?.();
     await link(tempPath, targetPath);
     await syncDirectory(directoryPath);
   } finally {
     if (handleOpen) await handle.close().catch(() => undefined);
-    await unlink(tempPath).catch(() => undefined);
+    const safe = await options.assertDestination?.().then(() => true, () => false) ?? true;
+    if (safe) await unlink(tempPath).catch(() => undefined);
   }
 }
 
 export async function writeJsonAtomically(
   targetPath: string,
   value: unknown,
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
-  await writeFileAtomically(targetPath, `${JSON.stringify(value, null, 2)}\n`);
+  await writeFileAtomically(targetPath, `${JSON.stringify(value, null, 2)}\n`, options);
 }
 
 export async function writeJsonAtomicallyIfAbsent(
   targetPath: string,
   value: unknown,
+  options: AtomicWriteOptions = {},
 ): Promise<void> {
   await writeFileAtomicallyIfAbsent(
     targetPath,
     `${JSON.stringify(value, null, 2)}\n`,
+    options,
   );
 }
 

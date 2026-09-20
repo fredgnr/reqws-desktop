@@ -25,19 +25,19 @@ updated: 2026-09-19
 | IDE 插件 | 只读消费 manifest、展示仓库集合、自动/手动刷新、必要的受管项目范围适配、只读 Git 配置诊断。 | 重做 Desktop 业务、写 manifest、执行 Git 生命周期命令、写 VCS mappings、访问仓库 URL 或删除仓库。 |
 | IDE / 语言插件 / 用户 | 语言模型、SDK、依赖解析、索引与代码分析、运行配置、编译、测试、调试以及用户维护的 Git 配置。 | 向 ReqWS 提供所有语言服务已完成的同步承诺。 |
 
-manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检查只能验证存在性、安全性和现有仓库契约，不能依据语言文件改变成员集合。保留仓库发现只服务于现有排除策略，不自动把磁盘上的额外仓库加入 manifest。
+manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检查只能验证存在性、安全性和现有仓库契约，不能依据语言文件改变成员集合。GoLand 加载选择由 Desktop 单独写入固定绑定文件；插件按 manifest 成员求交，不扫描额外目录推导 retained 成员。
 
 仓库里有无 `go.mod`、该文件是否有效、位于顶层还是子目录，均不得影响 ReqWS 的业务判定。也不得换成识别 `package.json`、`pom.xml` 等文件的通用语言检测框架。语言解耦不顺带改变独立 `.git`、gitfile/worktree、symlink 或 URL 的既有支持范围。
 
 ## 3. 插件实现约束
 
-插件对业务数据只读，不等于对 IDE 模型完全零写入。保留 workspace-root Content Root 与现有受管 excludes 策略：仅在受信任且 project/service 存活时修改能证明归 ReqWS 所有的条目；用户条目、普通目录和不归插件所有的配置保持不变。继续维护 ownership、稳定目录句柄、原子持久化、恢复、路径 containment、取消传播及 dispose 保护。
+插件对业务数据只读，不等于对 IDE 模型完全零写入。[独立入口方案](../changes/goland-workspace-loading/technical-design.md)替换大根加 excludes 策略：保留 native shell module/root，新增一个承载 module，仅逐项管理可证明所有权的仓库 roots，并精确排除与过滤入口。仅在受信任且 project/service 存活时修改能证明归 ReqWS 所有的条目；用户条目、普通目录和不归插件所有的配置保持不变。继续维护 ownership、稳定目录句柄、原子持久化、恢复、路径 containment、取消传播及 dispose 保护。
 
 不得在生产同步路径探测语言构建文件、查询 Go registry、等待语言服务、执行语言命令，或因语言状态失败而让 ReqWS 报同步失败。不要用 warning、开关、反射、可选依赖、空实现或永远成功的 stub 保留原 Go 检查链。
 
 通过公开受支持的平台 API 正确提交目录模型变更，并保留必要的正常事件。删除“Go registry 不一致 → 额外 roots event → 轮询 → 报错”专属反馈链；不得为补偿它而改成每次刷新无条件额外通知。任何保留的额外通知都必须有独立、可复现的语言无关需求、调用点和最小测试，不能仅凭旧类名中有 `ProjectRoots` 就保留。
 
-只使用项目声明的公开平台 API 基线；禁止 JetBrains `@Internal`、`@Experimental`、反射或私有 API。插件身份、GoLand 产品限制、现有兼容矩阵和发布流程不因这次解耦自动扩大。
+只使用项目声明的公开平台 API 基线；禁止 JetBrains `@Internal`、`@Experimental`、反射或私有 API。当前唯一目标为 GO-262.9437.286，编译、descriptor 和 Verifier 使用同一目标，不保留历史版本矩阵。插件身份、GoLand 产品限制和发布流程不变。围绕真实 shell capability 变化调用公开 `ProjectRootManagerEx.makeRootsChange(Runnable, RootsChangeRescanningInfo)` 的决策见[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)，不能无条件重复广播。
 
 ## 4. 成功与失败语义
 
@@ -45,7 +45,7 @@ manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检
 
 Workspace Model 与公开 `ProjectFileIndex` 的目录归属/排除结果仍需一致。检查 `isInContent`、`isExcluded` 是验证插件自己的适配结果，不要求等待 IDE 全部索引结束或代码语义分析完成。真实项目范围失败不得被当作“语言无关”而吞掉；缺失仓库、非法 manifest、ownership 冲突、Safe Mode 和取消仍按各自现有契约处理。
 
-Git mapping 的缺失、冲突或 retained 提示仍走独立的只读诊断语义，不在本变更中重新定义。语言服务尚未完成，或用户项目编译/测试失败，不应改变 ReqWS 同步结果。
+Git mapping 仅对加载且存在的仓库检查缺失/冲突；未加载成员和额外 mappings 是用户配置，插件不要求删除，不扫描 retained 仓库。语言服务尚未完成，或用户项目编译/测试失败，不应改变 ReqWS 同步结果。
 
 逻辑移除不是磁盘访问控制或代码执行禁令：不得要求磁盘上保留仓库的运行配置必然失效、无法执行；重新加入也不承诺运行配置立即恢复。
 
@@ -56,7 +56,7 @@ Git mapping 的缺失、冲突或 retained 提示仍走独立的只读诊断语�
 | Desktop | 本次确实涉及的 Git 封装、workspace 事务、启动和共享契约。 | 重新运行与插件文档或内部解耦无关的全部业务场景。 |
 | 插件单元/平台 | manifest、同步协调、受管范围、错误和恢复、只读 VCS 分类、状态展示、用户配置保护。 | 证明 GoLand 原生 Git、Go Modules 或语言工具链整体正确。 |
 | 必要 GUI 集成 | 真实 IDE 中插件加载、仓库增删重加、自动刷新和状态/范围一致。 | 每个动作之后重复引用查找、补全、go test、运行和调试。 |
-| 构建与兼容 | 插件自身 Kotlin/Gradle 测试、结构/配置验证及已有 Plugin Verifier 矩阵。 | 把 IDE 兼容性等同于用户 Go 项目测试成功。 |
+| 构建与兼容 | 插件自身 Kotlin/Gradle 测试、结构/配置验证及单一目标 Plugin Verifier。 | 把 IDE 兼容性等同于用户 Go 项目测试成功。 |
 
 基础 fixture 使用本地 Git 仓库与普通文本文件，不需要 Go SDK、Go Modules、外部依赖下载或账号。可增加一个小型对照回归，证明改变 `go.mod` 不改变插件判定；不得因此建立多语言编译矩阵。
 

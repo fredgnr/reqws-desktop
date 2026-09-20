@@ -12,6 +12,7 @@ data class ReqwsRepositoryViewModel(
   val name: String,
   val statusKey: String,
   val statusTone: ReqwsStatusTone,
+  val statusDetailKey: String? = null,
 )
 
 enum class ReqwsStatusTone {
@@ -38,6 +39,7 @@ data class ReqwsToolWindowViewModel(
   val syncEnabled: Boolean,
   val openManifestEnabled: Boolean,
   val copyDiagnosticsEnabled: Boolean,
+  val loadedRepositoryCount: Int = repositories.count { it.statusKey == "repository.loaded" },
 ) {
   companion object {
     fun from(state: ReqwsProjectState): ReqwsToolWindowViewModel {
@@ -98,6 +100,8 @@ data class ReqwsToolWindowViewModel(
           ReqwsRepositoryViewModel(
             name = repository.repository.name,
             statusKey = when {
+              repository.repository.catalogRepositoryId in state.userRootCoverage -> "repository.userRootCoverage"
+              snapshot?.loading != null && repository.repository.catalogRepositoryId !in snapshot.loading.loadedIds -> "repository.notLoaded"
               repository.availability == RepositoryAvailability.MISSING ||
                 vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> "repository.missing"
               projectContentUnavailable -> "repository.projectContentUnavailable"
@@ -107,9 +111,11 @@ data class ReqwsToolWindowViewModel(
               vcsStatus == VcsRepositoryStatus.NOT_CONFIGURED -> "repository.gitRootMissing"
               vcsStatus == VcsRepositoryStatus.WRONG_VCS ||
                 vcsStatus == VcsRepositoryStatus.DUPLICATE -> "repository.gitRootConflict"
-              else -> "repository.active"
+              else -> "repository.loaded"
             },
             statusTone = when {
+              repository.repository.catalogRepositoryId in state.userRootCoverage -> ReqwsStatusTone.WARNING
+              snapshot?.loading != null && repository.repository.catalogRepositoryId !in snapshot.loading.loadedIds -> ReqwsStatusTone.NEUTRAL
               repository.availability == RepositoryAvailability.MISSING ||
                 vcsStatus == VcsRepositoryStatus.MISSING_DIRECTORY -> ReqwsStatusTone.WARNING
               projectContentUnavailable -> ReqwsStatusTone.WARNING
@@ -119,8 +125,14 @@ data class ReqwsToolWindowViewModel(
                 ReqwsStatusTone.SUCCESS
               else -> ReqwsStatusTone.WARNING
             },
+            statusDetailKey = if (repository.repository.catalogRepositoryId in state.userRootCoverage) {
+              "repository.userRootCoverageDetail"
+            } else {
+              null
+            },
           )
         },
+        loadedRepositoryCount = if (projectionConfirmed) snapshot.repositories.count { it.availability == RepositoryAvailability.PRESENT && (snapshot.loading == null || it.repository.catalogRepositoryId in snapshot.loading.loadedIds) } else 0,
         digest = state.lastAppliedDigest?.take(DIGEST_DISPLAY_LENGTH),
         errorCode = state.lastError?.code,
         errorDetailKey = state.lastError?.projectContentFailureDetailKey(),

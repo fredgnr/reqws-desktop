@@ -39,6 +39,17 @@ internal class VerifiedAtomicStateFile<T>(
     withStableParent { it.writeAndVerify(value) }
   }
 
+  /** Keeps the directory-inode lock and descriptor alive across a model transaction/PFI wait. */
+  internal suspend fun <R> withStableParentSuspending(block: suspend (StableAccess) -> R): R {
+    val parent = file.parent ?: throw VerifiedAtomicStateFileException("The state file has no parent.")
+    return operations.openStableDirectory(parent).use { directory ->
+      directory.verifyCurrent()
+      val result = block(StableAccess(directory))
+      directory.verifyCurrent()
+      result
+    }
+  }
+
   internal fun <R> withStableParent(block: (StableAccess) -> R): R {
     val parent = file.parent
       ?: throw VerifiedAtomicStateFileException("The atomic state file has no parent directory.")
