@@ -4,18 +4,18 @@
 
 ## 状态与范围
 
-- 状态：`draft`；需求和方案待评审，尚未实现或启用 Marketplace 发布。
+- 状态：`active`；方案已确认，接续实现及分阶段上线中；不代表 Marketplace 已公开。
 - 设计日期：2026-09-20。
 - 代码基线：`main` 的 `c524a42e74de35622ef03c207daa04b2230f3e48`。
-- 交付分支：`feat/goland_plugin_market`；本次只提交文档及最近一级索引，不修改代码、工作流、凭据或市场状态，不合并 PR。
+- 交付 PR：#16（`feat/goland_plugin_market`）；完成代码、工作流、测试、文档和生产配置，通过门禁后合并。首版 v0.1.5，后续 v0.1.6 验证自动更新。
 - 目标实现包含首次人工上架、插件签名、稳定渠道自动提交、按 tag 独立重试、操作配置与最小验收；代码完成不等于市场已公开。
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [需求说明](requirements.md) | draft | 定义发布范围、生命周期、身份、安全边界与可验收要求。 |
-| [技术方案](technical-design.md) | draft | 定义同一产物发布链、工作流、失败恢复及可并行实施任务。 |
-| [首次上架与配置方案](bootstrap-and-operations.md) | draft | 定义账号资料、reqws-secret 唯一备份、临时材料清理、Environment 配置与维护流程。 |
-| [测试与验收方案](test-plan.md) | draft | 限定发布链测试、市场首次安装及两版本更新验收的证据范围。 |
+| [需求说明](requirements.md) | active | 定义发布范围、生命周期、身份、安全边界与可验收要求。 |
+| [技术方案](technical-design.md) | active | 定义同一产物发布链、工作流、失败恢复及可并行实施任务。 |
+| [首次上架与配置方案](bootstrap-and-operations.md) | active | 定义账号资料、reqws-secret 唯一备份、临时材料清理、Environment 配置与维护流程。 |
+| [测试与验收方案](test-plan.md) | active | 限定发布链测试、市场首次安装及两版本更新验收的证据范围。 |
 
 ## 关联与权威性
 
@@ -29,4 +29,4 @@
 
 ## 后续实施入口
 
-先读需求，再按技术方案的 S0→S1/S2/S3→S4→V 执行。首次 Marketplace 上传、真实证书/Secrets 操作、安装/重启 IDE、打 tag 和发布均有外部副作用，必须具备各自授权；文档 PR 不包含这些授权。
+先读需求，再按技术方案的 S0→S1/S2/S3→S4→V 执行。首次 Marketplace 上传、真实证书/Secrets 操作、安装/重启 IDE、打 tag 和发布均有外部副作用，必须具备各自授权；本次实施已有上述阶段授权；法律声明、macOS 审批和安装时确认仍由对应步骤处理。

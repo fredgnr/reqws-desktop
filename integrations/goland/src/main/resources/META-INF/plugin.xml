@@ -1,12 +1,21 @@
 <idea-plugin>
   <id>com.reqws.workspace</id>
   <name>ReqWS</name>
-  <vendor>ReqWS contributors</vendor>
+  <vendor email="z513317651@gmail.com" url="https://github.com/fredgnr/reqws-desktop">fredgnr</vendor>
 
   <resource-bundle>messages.ReqwsBundle</resource-bundle>
 
   <description><![CDATA[
-    Projects active content from a ReqWS workspace manifest and reports manual Git Root setup.
+    <p>Open the repositories selected in a ReqWS workspace together in GoLand.</p>
+    <p>Requires <a href="https://github.com/fredgnr/reqws-desktop">ReqWS Desktop</a>.
+    Create a workspace in Desktop, choose which repositories to load, and select Save and open GoLand.
+    After trusting the project, the ReqWS tool window reports synchronization and any manual Git Root setup.</p>
+    <p>The plugin reads Desktop-owned workspace configuration. It does not clone repositories,
+    run Git commands, modify language configuration, or change your Git Directory Mappings.</p>
+    <p><a href="https://github.com/fredgnr/reqws-desktop/blob/main/docs/guides/goland-plugin-guide.md">Getting started</a> ·
+    <a href="https://github.com/fredgnr/reqws-desktop/issues">Support</a> ·
+    <a href="https://github.com/fredgnr/reqws-desktop">Source code</a> ·
+    <a href="https://github.com/fredgnr/reqws-desktop/blob/main/LICENSE">MIT license</a></p>
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>

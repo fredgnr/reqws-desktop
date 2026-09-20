@@ -1,7 +1,7 @@
 ---
 title: GoLand 插件首次上架与凭据配置方案
 type: technical-design
-status: draft
+status: active
 updated: 2026-09-20
 ---
 
@@ -11,9 +11,9 @@ updated: 2026-09-20
 
 ## 1. 执行前提与授权
 
-本文是待实施流程，不表示工作流、签名身份或 Marketplace 条目已经创建。只有对应实现完成并通过[工程验收](test-plan.md)后，才执行真实发布步骤。
+本文描述已实现的配置入口与分阶段发布操作。工程和真实运营状态分开记录；只有对应机制通过测试后才初始化生产身份，发布前必须完成最终工程验收。
 
-当前文档 PR 不授权生成/上传生产密钥、写 GitHub Secrets/Environment、接受法律条款、上传市场、安装或重启 GoLand、创建 tag/Release。首次账号和法律身份资料由所有者填写；证书生成和 Secrets 上传交给获明确授权且具备工具的本地 Agent，不在聊天中索取秘密。
+本次接续实施已获独立身份备份/恢复、Secrets/Environment、合并及两版本发布授权。法律条款和 trader/non-trader 声明由所有者处理，IDE 安装仍须具体产物确认。首次账号和法律身份资料由所有者填写；证书生成和 Secrets 上传交给获明确授权且具备工具的本地 Agent，不在聊天中索取秘密。
 
 ## 2. 发布者和页面资料
 
@@ -41,7 +41,7 @@ Environment Secrets 是 CI 的受保护运行时副本，不是可替代私库�
 
 不在本机 home、桌面、下载目录、固定凭据目录或长期私库 clone 中留存备份，也不依赖本地钥匙串、shell history、编辑器恢复文件或同步盘保存材料。本地只允许操作期间的受限临时目录；正常结束、失败、取消后的清理按 §3.3 执行。现有 macOS Bundle ID、签名身份和 Environment 保持原样。
 
-私钥与其密码同存私库时，私库访问权限就是这组材料的安全边界，不把加密 PEM 误写成对私库读者的第二重保护。限制私库访问并保持 private；不在公开 PR 中展示秘密或私库文件内容。本次只更新方案，不读取、写入或迁移真实凭据。
+私钥与其密码同存私库时，私库访问权限就是这组材料的安全边界，不把加密 PEM 误写成对私库读者的第二重保护。限制私库访问并保持 private；不在公开 PR 中展示秘密或私库文件内容。初始化只处理新的插件命名空间，不读取或迁移已有 macOS 凭据。
 
 ### 3.2 本地生成示例（获得授权后）
 
@@ -139,7 +139,7 @@ gh workflow run marketplace-publish.yml \
   --repo fredgnr/reqws-desktop --ref vX.Y.Z
 ```
 
-命令中的 vX.Y.Z 替换为真实已发布 tag。此命令只能调用只读校验/上传流程，不构建或重新签名。当前文档提交没有新增这个工作流。
+命令中的 vX.Y.Z 替换为真实已发布 tag。此命令只能调用只读校验/上传流程，不构建或重新签名。该工作流同时供自动后置提交和按 tag 重试使用。
 
 | 情况 | 处理 |
 |---|---|
@@ -158,3 +158,19 @@ gh workflow run marketplace-publish.yml \
 每次真实操作记录操作者授权范围、tag/commit、CI run、Release/市场条目链接、脱敏结果与剩余问题。私钥、Token、密码和计算出的摘要不写进本文；产物摘要随 Release/CI 证据保存。
 
 完成标准见[需求 M01–M12](requirements.md)与[测试方案](test-plan.md)。仅当真实首版安装和更高版本更新均通过，才把“工程已实现”推进为“市场发布闭环已验证”。
+
+
+## 8. 配置工具
+
+`configure_plugin_publishing.py` 是所有者显式执行的维护入口，不进入 CI/Release job。它通过标准输入传递 GitHub API JSON 和 Secrets，不 clone 私库、不打印秘密。
+
+```bash
+# 先完成临时身份的机制验证；fixture 必须是已验证的确切 ZIP。
+python3 scripts/configure_plugin_publishing.py initialize --fixture <exact-unsigned-zip> --signer <zip-signer-0.1.43.jar>
+# 出错后复用已打印的私库 commit，不能重建或覆盖身份。
+python3 scripts/configure_plugin_publishing.py restore --commit <exact-private-commit> --fixture <exact-unsigned-zip> --signer <zip-signer-0.1.43.jar>
+# Token 只通过本地受控终端的隐藏输入提供，不在命令参数/聊天中填写。
+python3 scripts/configure_plugin_publishing.py token
+```
+
+插件身份使用 `reqws-desktop/jetbrains-plugin-signing/`，首次 Token 使用 `reqws-desktop/jetbrains-marketplace/`；命名空间已存在时初始化拒绝覆盖。脚本核对 private 仓库、远端 ref 更新、exact-commit 全部材料读回、密钥/证书/公钥及真实测试包验签，然后激活消费副本。Secret 同步失败可能留下部分运行时配置，必须按打印的远端 commit 恢复；不宣称已回滚。后续轮换需独立维护授权和新的备份记录。

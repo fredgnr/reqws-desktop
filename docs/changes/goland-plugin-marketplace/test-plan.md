@@ -1,7 +1,7 @@
 ---
 title: GoLand 插件 Marketplace 发布测试与验收方案
 type: test-plan
-status: draft
+status: active
 updated: 2026-09-20
 ---
 
@@ -13,7 +13,7 @@ updated: 2026-09-20
 
 本文件是未执行的计划，不是测试报告。检查必须绑定候选 exact commit、真实选择器与非零执行数量；构建、mock、磁盘安装、市场安装是不同证据，不能互相替代。
 
-本轮纯文档交付检查 `npm run docs:check` 与 diff/链接；不构建插件、不安装 IDE、不调用签名或市场上传。无法运行完整仓库检查时明确说明，不把自定义局部检查冒充该命令。
+本轮实施运行下面的工程检查，并分别记录生产配置、真实发布与 G01–G03。测试使用一次性证书和 mock HTTP/私库；不把 mock 结果当作真实上架证据。
 
 后续实现按[开发测试规范](../../standards/ide-plugin-development-testing.md)保留必要插件测试和兼容验证；中间阶段只跑受影响检查，最终集成候选才运行完整保留门禁。测试只用隔离临时 Git 仓库和测试证书，不读取真实 workspace/userData，不请求生产 Token。
 
@@ -52,7 +52,7 @@ npm run check:goland
 
 S1/S2 先运行新增/直接受影响方法或类，记录准确选择器；不在每个微小补丁重复全量。S4 运行新脚本测试、工作流回归和完整保留插件门禁；变更了现有 CI 调用不得省略普通无秘密路径。
 
-未来正式签名入口增加 requirePluginSigning 门禁，并对最终签名输入运行验签。若公开证书/私钥尚未配置，工程测试用临时身份验证机制，生产身份验收必须单独标 blocked。
+正式签名入口使用 requirePluginSigning 门禁，并对最终签名输入运行验签。若公开证书/私钥尚未配置，工程测试用临时身份验证机制，生产身份验收必须单独标 blocked。
 
 ## 4. 真实发布与 GUI：只做三个场景
 

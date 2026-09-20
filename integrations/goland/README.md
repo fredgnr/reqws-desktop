@@ -20,13 +20,13 @@ npm run check:goland
 npm run package:goland
 ```
 
-Intermediate work uses `compileKotlin compileTestKotlin` and affected `test --tests ...` selectors. Final integration runs the full plugin gate once after fixes. Gradle needs network access on the first dependency download. ZIPs are under `integrations/goland/build/distributions/`; caches, sandboxes and outputs must not be committed.
+Intermediate work uses `compileKotlin compileTestKotlin` and affected `test --tests ...` selectors. Final integration runs the full plugin gate once after fixes. Gradle needs network access on the first dependency download. `exportPluginArchivePath` writes the exact selected ZIP path to `build/release/plugin-archive.txt`; do not pick from `distributions/*.zip`. ZIPs are under `integrations/goland/build/distributions/`; caches, sandboxes and outputs must not be committed.
 
 To use an already installed **exact target** SDK for both compilation and verification, pass `-PreqwsGoLandSdkPath=/absolute/path/GoLand.app` to Gradle, or set `ORG_GRADLE_PROJECT_reqwsGoLandSdkPath` for the npm commands. The build checks the SDK build number. This option does not install or start that IDE. When Marketplace access is unavailable, `-PreqwsVerifierOffline=true` (or `ORG_GRADLE_PROJECT_reqwsVerifierOffline=true`) enables Verifier’s offline mode while retaining API and dependency checks against that SDK. CI uses online verification by default.
 
 `verifyForbiddenProductionSymbols` scans sources and the composed JAR. It rejects Go APIs, VCS mutation, external-process/reflection/private API symbols, the retired exclude adapter/ledger, and the disallowed Experimental notification path. Plugin Verifier retains target API/dependency checks. Production uses public `WorkspaceModel.update`, standard entity sources and a bounded public roots-change event around actual shell policy changes.
 
-Desktop `npm run check` stays independent of Gradle. CI/Release keep their separate plugin checks, version injection and ZIP integrity verification. Release still publishes an unsigned plugin ZIP separately; there is no automatic installation or Marketplace publication. No tag or Release is authorized by development checks.
+Desktop `npm run check` stays independent of Gradle. CI/Release keep their separate plugin checks, version injection and ZIP integrity verification. Formal releases require an independently signed plugin ZIP. The Release workflow submits those exact bytes to Marketplace in automatic mode; bootstrap and paused modes report their explicit non-submission state. Ordinary CI builds unsigned test candidates and receives no production secrets. Marketplace review and IDE installation are separate from build success. See the [publishing operations](../../docs/changes/goland-plugin-marketplace/bootstrap-and-operations.md).
 
 ## Use the dedicated entry
 

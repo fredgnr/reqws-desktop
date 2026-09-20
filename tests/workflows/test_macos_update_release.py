@@ -133,7 +133,7 @@ class UpdateWorkflowTests(unittest.TestCase):
         self.assertIn('with-macos-signing.mjs', signing['run'])
         self.assertIn('build-macos-release.mts', signing['run'])
         self.assertLess(next(index for index, step in enumerate(steps) if step.get('run') == 'npm ci'), steps.index(signing))
-        exposed = [(job, step) for job, config in workflow['jobs'].items() for step in config['steps'] if 'secrets.' in json.dumps(step)]
+        exposed = [(job, step) for job, config in workflow['jobs'].items() for step in config.get('steps', []) if 'MAC_SIGNING_P12' in json.dumps(step)]
         self.assertEqual(len(exposed), 1)
         self.assertEqual(exposed[0][0], 'package')
         self.assertTrue(any('always()' in step.get('if', '') and '--cleanup' in step.get('run', '') for step in steps))

@@ -5,6 +5,7 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
@@ -14,6 +15,9 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.intellij.platform.gradle.tasks.BuildPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.SignPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginSignatureTask
 import org.jetbrains.intellij.platform.gradle.tasks.ComposedJarTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
@@ -110,7 +114,7 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
 group = "com.reqws.goland"
 // CI and tag builds verify the same explicit version; local builds retain their default.
-version = providers.gradleProperty("releaseVersion").orElse("0.1.4").get()
+version = providers.gradleProperty("releaseVersion").orElse("0.1.5").get()
 
 dependencies {
   testImplementation("junit:junit:4.13.2")
@@ -127,6 +131,7 @@ dependencies {
       local(localSdk)
     }
     testFramework(TestFrameworkType.Platform)
+    zipSigner("0.1.43")
   }
 }
 
@@ -146,6 +151,8 @@ tasks {
   }
 }
 
+val releaseNotesVersion = project.version.toString()
+
 intellijPlatform {
   caching {
     ides {
@@ -156,6 +163,17 @@ intellijPlatform {
     id = "com.reqws.workspace"
     name = "ReqWS"
     version = project.version.toString()
+    changeNotes = providers.fileContents(layout.projectDirectory.file("CHANGELOG.md")).asText.map { text ->
+      val heading = "## $releaseNotesVersion"
+      val sections = text.split(Regex("(?m)^## "))
+      val matches = sections.drop(1).filter { it.lineSequence().first().trim() == releaseNotesVersion }
+      require(matches.size == 1) { "Expected exactly one changelog section: $heading" }
+      val notes = matches.single().substringAfter('\n', "").trim()
+      require(notes.isNotBlank() && !Regex("(?i)\\b(TODO|TBD|placeholder)\\b").containsMatchIn(notes)) {
+        "Release change notes must be nonempty and complete"
+      }
+      "<pre>" + notes.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
+    }.get()
     ideaVersion {
       sinceBuild = "262.9437.286"
       untilBuild = "262.9437.286"
@@ -240,4 +258,64 @@ tasks.named("buildPlugin") {
 // Offline verification still checks the exact local SDK and all bundled dependencies.
 tasks.named<VerifyPluginTask>("verifyPlugin") {
   offline = providers.gradleProperty("reqwsVerifierOffline").map(String::toBoolean).orElse(false)
+}
+
+
+@DisableCachingByDefault(because = "Exports the exact archive provider for the release consumer")
+abstract class ExportPluginArchiveTask : DefaultTask() {
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val archive: RegularFileProperty
+
+  @get:OutputFile
+  abstract val pathFile: RegularFileProperty
+
+  @TaskAction
+  fun exportPath() {
+    val candidate = archive.get().asFile
+    require(candidate.isFile && candidate.length() > 0) { "Plugin archive is missing" }
+    pathFile.get().asFile.apply {
+      parentFile.mkdirs()
+      writeText(candidate.absolutePath + "\n")
+    }
+  }
+}
+
+val requirePluginSigning = providers.gradleProperty("requirePluginSigning").map {
+  require(it == "true" || it == "false") { "requirePluginSigning must be true or false" }
+  it.toBoolean()
+}.orElse(false)
+val signingCertificate = providers.environmentVariable("REQWS_PLUGIN_CERTIFICATE_FILE")
+  .map { file(it) }.orElse(file("../../build/jetbrains/reqws-plugin-chain.crt"))
+val signingPreflight by tasks.registering(Exec::class) {
+  commandLine("python3", "../../scripts/plugin_signing.py", "preflight", "--certificate", signingCertificate.get())
+}
+val signedPlugin = tasks.named<SignPluginTask>("signPlugin") {
+  dependsOn(signingPreflight)
+  archiveFile.set(tasks.named<BuildPluginTask>("buildPlugin").flatMap { it.archiveFile })
+  certificateChainFile.fileProvider(signingCertificate)
+  privateKeyFile.fileProvider(providers.environmentVariable("REQWS_PLUGIN_PRIVATE_KEY_FILE").map { file(it) })
+  password.set(providers.environmentVariable("JETBRAINS_PLUGIN_PRIVATE_KEY_PASSWORD"))
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+}
+val checkedSignature = tasks.named<VerifyPluginSignatureTask>("verifyPluginSignature") {
+  dependsOn(signedPlugin)
+  inputArchiveFile.set(signedPlugin.flatMap { it.signedArchiveFile })
+  certificateChainFile.fileProvider(signingCertificate)
+  outputs.upToDateWhen { false }
+}
+if (requirePluginSigning.get()) {
+  require(!gradle.startParameter.isConfigurationCacheRequested) {
+    "Production signing requires --no-configuration-cache"
+  }
+}
+tasks.register<ExportPluginArchiveTask>("exportPluginArchivePath") {
+  if (requirePluginSigning.get()) {
+    dependsOn(checkedSignature)
+    archive.set(signedPlugin.flatMap { it.signedArchiveFile })
+  } else {
+    archive.set(tasks.named<BuildPluginTask>("buildPlugin").flatMap { it.archiveFile })
+  }
+  pathFile.set(layout.buildDirectory.file("release/plugin-archive.txt"))
 }

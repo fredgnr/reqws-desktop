@@ -25,6 +25,7 @@ jobs:
       CI: 'true'
     outputs:
       version: ${{ steps.version.outputs.version }}
+      marketplace-mode: ${{ vars.REQWS_MARKETPLACE_MODE }}
 
     steps:
       - name: Check out tag
@@ -40,6 +41,11 @@ jobs:
 
       - name: Log release job context
         run: python3 scripts/log-release-context.py
+
+      - name: Validate Marketplace mode and release source
+        env:
+          REQWS_MARKETPLACE_MODE: ${{ vars.REQWS_MARKETPLACE_MODE }}
+        run: python3 scripts/publish_jetbrains_marketplace.py mode
 
       - name: Validate tag and package versions
         id: version
@@ -114,10 +120,13 @@ jobs:
       - name: Log release job context
         run: python3 scripts/log-release-context.py
 
-      - name: Run release packaging regression tests
-        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
+      - name: Set up Java for isolated plugin signature tests
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '25'
 
-      - name: Run project checks
+      - name: Set up OpenSSL for disposable identity tests
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -125,8 +134,13 @@ jobs:
           if ! brew list --versions openssl@3 >/dev/null 2>&1; then
             brew install openssl@3
           fi
-          export REQWS_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
-          npm run check
+          printf 'REQWS_OPENSSL=%s/bin/openssl\n' "$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Run release packaging regression tests
+        run: python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v
+
+      - name: Run project checks
+        run: npm run check
 
   package:
     name: Package macOS (arm64)
@@ -192,6 +206,7 @@ jobs:
 
   goland-plugin:
     name: Package and verify GoLand plugin
+    environment: jetbrains-plugin-signing
     needs: validate
     runs-on: macos-15
     timeout-minutes: 120
@@ -215,8 +230,19 @@ jobs:
         working-directory: integrations/goland
         run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
 
+      - name: Sign and verify the exact plugin archive
+        id: plugin-signing
+        env:
+          JETBRAINS_PLUGIN_PRIVATE_KEY: ${{ secrets.JETBRAINS_PLUGIN_PRIVATE_KEY }}
+          JETBRAINS_PLUGIN_PRIVATE_KEY_PASSWORD: ${{ secrets.JETBRAINS_PLUGIN_PRIVATE_KEY_PASSWORD }}
+        run: python3 scripts/plugin_signing.py sign --version "$VERSION"
+
+      - name: Clean up temporary plugin signing material
+        if: ${{ always() && steps.plugin-signing.outcome != 'skipped' }}
+        run: python3 scripts/plugin_signing.py cleanup
+
       - name: Verify and stage plugin release ZIP
-        run: python3 scripts/prepare-goland-release.py --version "$VERSION"
+        run: python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$VERSION"
 
       - name: Upload intermediate plugin release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -244,6 +270,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
+      REQWS_MARKETPLACE_MODE: ${{ needs.validate.outputs.marketplace-mode }}
       VERSION: ${{ needs.validate.outputs.version }}
 
     steps:
@@ -330,7 +357,7 @@ jobs:
           > [!WARNING]
           > The macOS app ZIP uses a persistent personal self-signed identity. It is not Developer ID signed or notarized. The first update-enabled version requires manual installation; Gatekeeper may require individual approval.
 
-          The Desktop app is Apple silicon (arm64) only. The separate GoLand plugin ZIP is unsigned; install it with Install Plugin from Disk. It is not bundled into the app or published to JetBrains Marketplace."
+          The Desktop app is Apple silicon (arm64) only. The separate GoLand plugin ZIP is author-signed. Marketplace availability depends on JetBrains review. Marketplace mode: ${REQWS_MARKETPLACE_MODE}. Bootstrap requires manual initial upload; paused mode disables submission. The plugin is not bundled into the Desktop app."
 
           start_release_stage create-draft
           release_creation_attempted=true
@@ -381,3 +408,12 @@ jobs:
           start_release_stage publish-release
           gh release edit "$TAG" --draft=false
           release_creation_attempted=false
+
+
+  publish-marketplace:
+    name: Submit signed plugin to Marketplace
+    needs: [validate, publish]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/marketplace-publish.yml

@@ -1,7 +1,7 @@
 ---
 title: GoLand 插件 Marketplace 发布技术方案
 type: technical-design
-status: draft
+status: active
 updated: 2026-09-20
 ---
 
@@ -11,7 +11,7 @@ updated: 2026-09-20
 
 ## 1. 基线与差距
 
-本文仅设计目标行为，基线为 `c524a42e74de35622ef03c207daa04b2230f3e48`，不把其他未合并工作区方案当成当前实现。
+初始方案调研基线为 `c524a42e74de35622ef03c207daa04b2230f3e48`，下表保留初始差距背景；实现依据为后文的精确 262 构建及当前代码。
 
 | 位置 | 基线事实 | 实施改动 |
 |---|---|---|
@@ -23,7 +23,7 @@ updated: 2026-09-20
 | [prepare-goland-release.py](../../../scripts/prepare-goland-release.py) | 扫描 `distributions/*.zip` 并要求唯一；校验 descriptor；复制原字节 | 显式接收单个输入，区分 CI/正式发布用途 |
 | [verify-release-assets.py](../../../scripts/verify-release-assets.py) | 全资产集和 SHA256SUMS 验证 | 保留；上传端另做仅插件资产校验，不误用全量校验 |
 
-当前 Release 文案明确为 unsigned、从磁盘安装、未发布市场。实施时更新生成文案及受影响当前指南；历史报告不改写。
+初始基线 Release 文案为 unsigned、从磁盘安装、未发布市场；当前生成文案已改为作者签名并明确区分发布模式与市场审核。历史报告不改写。
 
 ## 2. 决策与架构
 
@@ -49,7 +49,7 @@ updated: 2026-09-20
 
 新增 `integrations/goland/CHANGELOG.md` 作为插件专属变更来源。S0 冻结简单的按 `## X.Y.Z` 分节约定，发布提取且转义该版本内容，缺失/空白/占位内容失败；不直接把包含 Desktop 内容的自动 GitHub notes 写入插件。Markdown 说明不自动触发 UI catalog 翻译工作流。
 
-基线的候选范围设为 `sinceBuild=261`、`untilBuild=262.*`，保留两项 Verifier。若后续集成代码只能支持 262，则一次性收窄到 262 并同步构建/Verifier/说明，不为 261 新增适配或迁移路径。S0 还需核对最低声明 build，不能只因测试了 2026.1.3 就声称所有更早 261 构建均已验证；最低构建未获证实时收窄到实际验证起点。每个候选必须在其声明范围内验证；不把 `untilBuild` 留空来隐含支持所有未来 IDE。[版本范围语义](https://plugins.jetbrains.com/docs/intellij/build-number-ranges.html)。
+实现基线已更新为 PR #16 的 `1f55654ef4b8f57cb72989a12edcee7037329ac1`，沿用已合入的唯一 GoLand 2026.2.1.1 / GO-262.9437.286：sinceBuild 与 untilBuild 均为 `262.9437.286`，Verifier 仅使用这一目标。不恢复 261 适配，也不扩展到未经验证的 262 构建。
 
 ## 4. 签名、产物选择与校验
 
@@ -57,7 +57,7 @@ updated: 2026-09-20
 
 插件使用独立 RSA 私钥和自签名证书，不复用 macOS `.p12`。全部密钥、公钥、证书链、密码及发布 Token 的唯一持久备份是私有仓库 [fredgnr/reqws-secret](https://github.com/fredgnr/reqws-secret)，不建立本地备份。生产私钥/密码仅向签名 Environment 提供运行时副本，Token 仅向上传 Environment 提供运行时副本。
 
-公开 PEM 证书链仍以 `build/jetbrains/reqws-plugin-chain.crt` 为发布候选内唯一受评审的验签输入，但该文件是从私库明确 commit 导出的公开消费副本，不是凭据备份源。更新时核对它与私库原件一致；不把私钥、密码或 Token 随证书提交到公开源码。此文件是目标新增文件，本轮不生成证书。
+公开 PEM 证书链仍以 `build/jetbrains/reqws-plugin-chain.crt` 为发布候选内唯一受评审的验签输入，但该文件是从私库明确 commit 导出的公开消费副本，不是凭据备份源。更新时核对它与私库原件一致；不把私钥、密码或 Token 随证书提交到公开源码。此文件是公开验签消费副本，其初始备份来源记录在同目录 README。
 
 初始化或轮换按“临时生成/恢复→提交 reqws-secret→从确切 commit 读回验证→配置 Secrets/公开验签副本→清理临时材料”执行。若远端保存或恢复验证失败，不激活新身份；临时材料不转为固定目录或离线备份。权限限制、故障及取消的清理规则见[配置方案](bootstrap-and-operations.md#33-远端备份读回验证与本地清理)。已有 macOS 材料保持身份和原有路径，不因本需求迁移。
 
@@ -110,7 +110,7 @@ bootstrap/paused 的状态 job 不需要上传 Token；automatic 的上传 job �
 
 ## 6. 上传端协议
 
-建议新增 `scripts/publish-jetbrains-marketplace.py`，使用标准库做输入/状态/JSON 检查，并以参数数组调用现有 `gh`/HTTP 客户端；固定远端，不使用 shell 拼接或把不受信任 Release 文案执行成脚本。
+使用 `scripts/publish_jetbrains_marketplace.py`，使用标准库做输入/状态/JSON 检查，并以参数数组调用现有 `gh`/HTTP 客户端；固定远端，不使用 shell 拼接或把不受信任 Release 文案执行成脚本。
 
 一次 automatic/重试执行必须：
 
@@ -145,7 +145,7 @@ API 表单字段是 `xmlId`，不是说明文字中的 `pluginXmlId`。官方当
 
 收据 schemaVersion=1，包含 repository、tag、commit、Release/asset ID、artifact 文件名与摘要、XML ID、version、channel、提交时间、run ID/attempt、HTTP 状态、已返回且经过验证的 update ID（可能为空）和本次 outcome。摘要仅在 CI artifact/Release 保存，不提交到 docs。
 
-原始成功响应的字段契约在 S0 用当前官方实现/可用真实脱敏样本确认，不猜测 API 提供哪些字段。仅有“2xx”而无法核实接收时记 unknown。收据只保存白名单字段，禁止保存 Token、私钥或任意服务端原文。
+成功响应字段契约已按固定官方 PluginUpdateBean 核对；当前测试使用按该类型构造的 fixture，不冒充真实服务端接收记录。仅有“2xx”而无法核实接收时记 unknown。收据只保存白名单字段，禁止保存 Token、私钥或任意服务端原文。
 
 使用具备可追溯 run 来源的 CI artifact 保存收据；不能从用户提交的任意 JSON 或不受信任 PR artifact 推导成功。收据缺失、过期或写入失败时不保证自动幂等，保留原 run 线索并转人工对账；不为此建立新数据库。
 
@@ -167,7 +167,7 @@ Release 正文使用准确且稳定的措辞：“插件 ZIP 已签名；Marketp
 
 ## 9. 实施拆分与 subagent
 
-不为拆分任务强制新增 PR；后续实现可以在本分支接续。主 Agent 负责合同冻结、集成、安全复核和最终验收；本轮仅设计，不宣称已启动 subagent。
+不为拆分任务强制新增 PR；后续实现可以在本分支接续。主 Agent 负责合同冻结、集成、安全复核和最终验收；这些阶段定义交付边界，并不要求同时启动代理。
 
 | 阶段 | 文件所有权与交付 | 依赖/最小验证 |
 |---|---|---|
@@ -184,8 +184,18 @@ subagent 优先继承主 Agent 的实际运行时模型，reasoning 至少 high�
 
 ## 10. 交付、风险与关联材料
 
-代码交付必须同步相关调用方与当前开发/安装说明；本设计不修改现有数据契约、历史证据或 macOS 身份。不为本次纯文档 PR 运行构建、安装、签名、真实上传或创建 tag。
+代码交付必须同步相关调用方与当前开发/安装说明；本设计不修改现有数据契约、历史证据或 macOS 身份。本次接续实现已获开发、配置、合并及两版本发布授权；法律声明、既有 macOS 审批及安装时的 exact-artifact 确认仍在对应步骤处理。
 
 风险主要为首版人工审核、Token 权限/撤销、证书有效期、服务端响应变化及结果不确定。对应处理是显式引导、最小权限、验签/有效期预检、固定协议测试和 unknown→人工对账，而不是静默放行。
 
 实际配置按[首次上架与配置方案](bootstrap-and-operations.md)，验证按[测试与验收方案](test-plan.md)，需求追踪按[M01–M12](requirements.md)。文档/索引遵循[文档规范](../../standards/documentation-standard.md)。
+
+
+## 11. 当前实现接口
+
+- `exportPluginArchivePath` 从 Gradle 的 `archiveFile` / `signedArchiveFile` Provider 导出 `build/release/plugin-archive.txt`。普通构建输出 unsigned；正式签名由 `plugin_signing.py sign --version X.Y.Z` 调用 `-PrequirePluginSigning=true --no-configuration-cache --no-build-cache`。签名使用固定 ZIP Signer 0.1.43。
+- `prepare-goland-release.py --input <exact-zip> --version X.Y.Z` 共享 `plugin_release.py` 的身份、元数据、有限兼容范围和 ZIP 安全校验，不再提供目录扫描接口。
+- 上传分为 `prepare` 与 `submit`：先验证资产和历史，上传不可变 intent artifact；`submit` 读回该 artifact，并在唯一 POST 前再次核对 tag、Release/asset 和签名。结果 artifact 保留 90 天，过期或缺失转人工对账。
+- 收据 JSON `schemaVersion=1`，记录 repository/tag/commit、Release/asset/checksum asset ID、filename/sha256、XML ID/version/channel、Marketplace plugin/update ID、run ID/attempt、HTTP status、postAttempted/outcome 和提交时间；不保留服务端原文。
+- 响应字段依据固定官方 `PluginUpdateBean`：id、pluginId、version、channel、hidden。HTTP 2xx 只有字段与目标一致才为 submitted。401/403/404/413/422 为明确失败，其余不明响应、超时、冲突为 unknown；公开查询为空不证明未提交。
+- 保留上传 intent 与最终结果用于恢复。可信最终成功结果覆盖同次 intent；可信未 POST 失败或明确拒绝可重试，其余未决尝试阻断。所有既往调用的 run attempt 必须有可追溯证据。

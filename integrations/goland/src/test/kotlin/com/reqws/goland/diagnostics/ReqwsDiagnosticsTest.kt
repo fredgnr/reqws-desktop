@@ -55,7 +55,7 @@ class ReqwsDiagnosticsTest {
     )
 
     val output = ReqwsDiagnostics.format(
-      pluginVersion = "0.1.4",
+      pluginVersion = "0.1.5",
       ideBuild = "GO-261.1",
       projectRoot = root,
       state = ReqwsProjectState(

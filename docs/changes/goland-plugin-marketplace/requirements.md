@@ -1,7 +1,7 @@
 ---
 title: GoLand 插件 Marketplace 发布需求
 type: requirements
-status: draft
+status: active
 updated: 2026-09-20
 ---
 
@@ -11,7 +11,7 @@ updated: 2026-09-20
 
 ## 1. 背景与目标
 
-当前插件由 `integrations/goland/` 独立构建，正式 tag 流水线已执行测试、Plugin Verifier、ZIP 身份校验和 GitHub Release 资产回读校验；尚未签名或提交 Marketplace。现状依据见[技术方案](technical-design.md)。
+插件由 `integrations/goland/` 独立构建。当前源码在既有测试、Plugin Verifier 和四资产回读门禁上新增作者签名及 Marketplace 后置提交；是否已真实发布、审核公开和通过市场更新验收须分别记录，不能由代码存在推断。
 
 目标日常操作保持为：更新统一版本、合入受信任代码、创建正式 tag；已有 macOS 发布审批通过并发布 GitHub Release 后，系统自动提交插件审核。首次上架由发布者手动建立市场条目，后续无需重复人工上传。
 
@@ -91,4 +91,4 @@ Desktop 继续唯一负责 manifest 写入和 Git 仓库生命周期；插件仍
 
 证据使用 exact Git commit、tag、CI run、Release asset 与 Marketplace update 的可追溯关系；真实摘要留在 Release 校验文件或 CI artifact，文档不粘贴计算出的摘要清单。
 
-本轮交付限于本需求、技术方案、配置方案、测试方案及索引。实现、真实签名、上传、安装和市场审核状态均不得伪装成已完成。
+本轮交付包含实现、配置及 v0.1.5 首次上架 / v0.1.6 自动更新验收。Vendor 为 fredgnr，邮箱 z513317651@gmail.com；法律身份声明由所有者完成。未执行的真实签名、上传、安装和审核不得标为完成。
