@@ -16,6 +16,7 @@
 | [技术方案](technical-design.md) | active | 定义同一产物发布链、工作流、失败恢复及可并行实施任务。 |
 | [首次上架与配置方案](bootstrap-and-operations.md) | active | 定义账号资料、reqws-secret 唯一备份、临时材料清理、Environment 配置与维护流程。 |
 | [测试与验收方案](test-plan.md) | active | 限定发布链测试、市场首次安装及两版本更新验收的证据范围。 |
+| [实施与验收记录](implementation-2026-09-20.md) | active | 记录当前工程检查、生产配置及尚待完成的真实发布和市场验收。 |
 
 ## 关联与权威性
 
