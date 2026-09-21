@@ -1,0 +1,59 @@
+name: Restore a shared download cache
+description: Restore on every ref; save only from opted-in default-branch push or manual jobs.
+inputs:
+  path:
+    description: Download cache paths, never source outputs or credentials.
+    required: true
+  key:
+    description: Exact dependency/tool version key.
+    required: true
+  restore-keys:
+    description: Optional same-toolchain fallback prefixes for content-addressed downloads.
+    default: ''
+  write:
+    description: Request a write; policy still rejects PRs, other branches, tags and other events.
+    default: 'false'
+outputs:
+  cache-hit:
+    description: Whether the exact key was restored.
+    value: ${{ steps.writer.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve cache ownership
+      id: policy
+      shell: bash
+      env:
+        REQUEST_CACHE_WRITE: ${{ inputs.write }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: python3 scripts/ci-cache-config.py policy
+
+    # The combined action saves in its post step, after the consumer succeeds.
+    # Readers never register a cache-save post step, even on a miss.
+    - name: Restore and save on the shared producer
+      if: steps.policy.outputs.write == 'true'
+      id: writer
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+
+    - name: Restore without saving
+      if: steps.policy.outputs.write != 'true'
+      id: reader
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+
+    - name: Summarize cache lookup
+      shell: bash
+      env:
+        CACHE_KEY: ${{ inputs.key }}
+        CACHE_WRITE: ${{ steps.policy.outputs.write }}
+        CACHE_HIT: ${{ steps.writer.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+      run: |
+        printf '\n- Download cache: `%s`; exact hit: `%s`; writable: `%s`.\n' \
+          "$CACHE_KEY" "${CACHE_HIT:-false}" "$CACHE_WRITE" >> "$GITHUB_STEP_SUMMARY"
