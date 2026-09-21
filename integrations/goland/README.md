@@ -1,8 +1,22 @@
 # ReqWS GoLand Plugin
 
-The plugin reads Desktop-owned workspace membership and loading selections, projects selected repositories into one managed module, hides the dedicated IDE entry, and observes user-owned Git configuration.
+Open the repositories you need for a ReqWS task together in one GoLand project. Keep workspace creation and repository management in Desktop; use this plugin to load the selected repositories and check their IDE status.
 
-This checkout implements the [dedicated-entry design](../../docs/changes/goland-workspace-loading/technical-design.md). See the [implementation record](../../docs/changes/goland-workspace-loading/implementation-2026-09-19.md) for completed checks and remaining acceptance work. Historical acceptance reports apply only to their original candidates.
+For example, a workspace can contain `api`, `web`, and `shared`, while GoLand loads only `api` and `shared`. The other repository stays on disk and remains a workspace member. This selection does not change Git Log/Commit filters or user-owned Directory Mappings.
+
+## Install and use
+
+The current target is **macOS GoLand 2026.2.1.1 / GO-262.9437.286**. Installing a release ZIP does not require a separate build toolchain.
+
+1. Create a workspace in ReqWS Desktop using the [Desktop guide](../../docs/guides/user-guide.md).
+2. Download the separate `ReqWS-<version>-goland-plugin.zip` from a trusted [Release](https://github.com/fredgnr/reqws-desktop/releases). Install it through **Settings → Plugins → Install Plugin from Disk**, then follow the IDE's restart prompt. The plugin is not bundled into Desktop.
+3. In Desktop's workspace details, choose **All by default** or **Selected repositories**, then **Save and open GoLand**. Do not open the ordinary workspace root instead.
+4. Trust the project only after checking its origin. Open the **ReqWS** tool window and expand the selected repositories in the normal **Project** panel to confirm the result.
+5. When the plugin reports missing Git roots, configure them in **Settings → Version Control → Directory Mappings**. The plugin only checks these mappings; it never changes them.
+
+The [GoLand user guide](../../docs/guides/goland-plugin-guide.md) covers the exact steps, loading choices, buttons, status messages and troubleshooting. Desktop updates do not update the plugin. Marketplace availability depends on actual review, not build or release success.
+
+The rest of this page is for plugin development. This checkout implements the [dedicated-entry design](../../docs/changes/goland-workspace-loading/technical-design.md). See the [implementation record](../../docs/changes/goland-workspace-loading/implementation-2026-09-19.md) for completed checks and remaining acceptance work. Historical reports apply only to their original candidates.
 
 ## Target and toolchain
 
@@ -36,7 +50,7 @@ Every Desktop GoLand launch prepares or reuses `<workspace>/.reqws/ide/goland/re
 
 The plugin reads both `.reqws/workspace.json` and the shell binding/selection. It does not write either business file. In initial Safe Mode it only reads and displays; projection requires trust. The normal Project view shows loaded repositories and user content, while the exact shell is excluded and filtered. The Tool Window distinguishes loaded, not loaded, missing and user-root coverage. Sync Now forces a complete check; it does not change the loading selection.
 
-Use [the user guide](../../docs/guides/goland-plugin-guide.md) for installation and troubleshooting. Agent-driven installation or IDE restart requires separate exact-artifact authorization through the manual-only installation skill.
+Agent-driven installation or IDE restart requires separate exact-artifact authorization through the manual-only installation skill.
 
 ## Ownership and safety
 

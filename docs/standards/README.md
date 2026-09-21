@@ -1,11 +1,12 @@
-# 项目规范索引
+# 项目规范
 
-本目录保存项目文档治理、IDE 插件开发与测试边界，以及按需使用的写作模板。
+按工作类型选择规范，不需要每次通读全部文件。
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [项目文档规范](documentation-standard.md) | active | 定义分类、状态、命名、文档影响判断、索引同步和完成检查。 |
-| [IDE 插件开发与测试规范](ide-plugin-development-testing.md) | active | 定义语言无关职责、阶段最小回归、Git/测试证据分工与 Gradle 版本管理。 |
-| [文档模板](templates/README.md) | active | 提供需求、技术方案、测试方案和交付记录的最小骨架。 |
+| [项目文档规范](documentation-standard.md) | active | 决定文档放哪里、如何标注状态、何时新增材料，以及怎样维护索引。 |
+| [中文文档写作规范](chinese-writing.md) | active | 按“说人话”原则改善表达，保留技术事实，并让截图与步骤对应。 |
+| [IDE 插件开发与测试规范](ide-plugin-development-testing.md) | active | 明确插件职责、分阶段回归、测试证据和 Gradle 版本管理要求。 |
+| [文档模板](templates/README.md) | active | 提供需求、方案、测试和交付记录的最小结构，按需使用。 |
 
-Agent 在需求开发和行为变更中通过项目级 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md) 执行文档工作流；各规范正文是对应范围的权威入口。
+Agent 修改需求、行为或文档结构时使用 [reqws-documentation Skill](../../.agents/skills/reqws-documentation/SKILL.md)。具体范围以对应规范为准；普通查阅不需要启动一整套文档流程。

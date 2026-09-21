@@ -1,31 +1,72 @@
 # ReqWS Desktop
 
-ReqWS 是一个仅在 macOS 本机运行的 Electron 应用，用来把同一项需求涉及的多个 Git 仓库组织成彼此物理隔离的功能工作区。每个仓库使用完整 clone 和独立 `.git`；ReqWS 生成受管 `.code-workspace` 供 VS Code/Cursor 使用，也可把 workspace root 交给本地安装的 ReqWS GoLand 插件。
+**把一个需求涉及的多个 Git 仓库，放进一个独立的工作区。**
 
-ReqWS 负责仓库目录、功能分支和工作区文件的创建与维护，但不会执行 pull、merge、rebase、push、创建 PR/MR 或自动删除用户工作区。
+例如，开发 `checkout-flow` 需要同时修改 `api`、`web` 和 `shared`。ReqWS 会把这三个仓库分别克隆到新的目录，在每个仓库中准备好 `feature/checkout-flow` 分支，再帮你用 VS Code、Cursor 或 GoLand 打开。
 
-## 文档入口
+另一个需求使用另一套目录。两套工作区不共用 `.git`，也不会改动你原来已有的本地仓库。创建的是新的 clone，不会带入原目录中尚未提交的修改。
 
-| 文档 | 适合谁 | 内容 |
-|---|---|---|
-| [使用说明](docs/guides/user-guide.md) | ReqWS 用户 | 安装、个人签名版的证书信任与应用内更新、Git 配置、工作区操作和数据保护。 |
-| [GoLand 插件使用指南](docs/guides/goland-plugin-guide.md) | GoLand 用户 | 图解插件编译安装、Tool Window 区块与按钮、状态、同步与安全排障。 |
-| [开发指南](docs/guides/development-guide.md) | 开发者 | 环境、架构边界、测试、国际化、文档和 macOS 交付流程。 |
-| [项目文档索引](docs/README.md) | 所有人 | 当前需求、技术方案、测试证据、交付记录、规范与历史资料。 |
+[下载与安装](docs/guides/installation.md) · [Desktop 使用指南](docs/guides/user-guide.md) · [GoLand 插件使用指南](docs/guides/goland-plugin-guide.md)
 
-## 主要能力
+## 它解决什么问题
 
-- 维护可搜索的 Git 仓库目录，并支持无凭据的 HTTPS 与 SSH 地址。
-- 为一项需求顺序 clone 多个仓库，并统一切换到指定功能分支。
-- 分别配置代码父目录和 `.code-workspace` 文件目录。
-- 用 VS Code、Cursor、GoLand 或 Finder 打开工作区；GoLand 插件从只读 manifest 自动投影活动项目范围，并只读检查用户在 GoLand Directory Mappings 中维护的 Git roots。
-- 增加或逻辑移除工作区仓库、重新生成管理文件，以及遗忘索引但保留磁盘内容。
-- 提供简体中文、英文和跟随系统的界面语言。
-- 用稳定错误码、阶段信息和可复制日志说明失败，并保留已公开的可恢复工件。
+不用每次手动重复“建目录 → 克隆几个仓库 → 准备分支 → 配置编辑器工作区”。先保存常用仓库的 Git 地址，之后按需求勾选即可。
 
-## 快速开始
+下面是目录示例，不是真实界面截图：
 
-开发运行需要 macOS、Node.js 24、npm 和 Git：
+```text
+需求 checkout-flow                   另一个需求 fix-login
+└── checkout-flow/                  └── fix-login/
+    ├── api/      独立 clone             ├── api/      另一份 clone
+    ├── web/      独立 clone             └── web/      另一份 clone
+    └── shared/   独立 clone
+```
+
+<!-- docs-asset: overview -->
+
+| 你要做的事 | 在 ReqWS 中怎么做 |
+|---|---|
+| 为一个需求准备多个仓库 | 添加仓库地址，创建工作区时勾选仓库并填写功能分支。 |
+| 并行处理不同需求 | 分别创建工作区，每个工作区使用独立的代码目录。 |
+| 找回之前的工作 | 按工作区名称、分支、仓库名或路径搜索，再用编辑器打开。 |
+| 需求中途增加仓库 | 在工作区详情中添加；ReqWS 会克隆仓库并准备该工作区的功能分支。 |
+| GoLand 当前只需要其中两个仓库 | 在 Desktop 中选择要加载的仓库，保存后由 GoLand 插件更新项目视图。 |
+
+ReqWS 管理工作区，不代替日常 Git 操作。提交、拉取、合并、推送和创建 PR/MR，仍在终端、编辑器或 Git 平台中完成。ReqWS 不会自动删除你的代码目录。
+
+## Desktop 和 GoLand 插件，各自做什么
+
+**Desktop 是管理入口。** 在这里保存仓库地址、创建工作区、增减需求成员、选择 GoLand 要加载的仓库，并打开编辑器。仓库配置、工作区索引和设置保存在本机。
+
+**GoLand 插件是 IDE 适配层，需要单独安装。** 它读取 Desktop 保存的选择，把选中的仓库显示在同一个 GoLand 项目中，并提示哪些 Git 根目录需要手动配置。它不克隆仓库、不切分支，也不回写 Desktop 配置。
+
+例如，需求包含 `api`、`web`、`shared`，但现在只改后端：在 Desktop 的“GoLand 工作加载”中选“指定仓库”，保留 `api`、`shared`，然后点击“保存并打开 GoLand”。`web` 仍在磁盘上，也仍属于该需求，只是不由 ReqWS 加载进当前 IDE 项目。
+
+<!-- docs-asset: goland-selection-result -->
+
+这里的“加载”针对项目内容，不等于 Git Log/Commit 的筛选。插件不会改动 GoLand 的 Directory Mappings；使用 VS Code 或 Cursor 时则不需要安装 ReqWS 插件。
+
+## 第一次使用
+
+先按[安装指南](docs/guides/installation.md)安装 Desktop，并让系统 Git 能访问你的仓库。当前 Release 的 Desktop 安装包面向 **macOS Apple silicon（arm64）**；GoLand 插件的当前目标是 **GoLand 2026.2.1.1 / GO-262.9437.286**。
+
+1. 在 **仓库 → 添加仓库** 中填写 Git 地址、名称和默认分支。保存这里只是登记仓库，不会立即克隆。
+2. 在 **工作区 → 创建工作区** 中填写名称和功能分支，选择代码位置、`.code-workspace` 文件位置，再勾选仓库。
+3. 等待状态变为 **就绪**，然后用 VS Code 或 Cursor 打开。使用 GoLand 时，先安装独立插件，再按[首次打开步骤](docs/guides/goland-plugin-guide.md#首次打开工作区)操作。
+
+仓库较多时会依次克隆。创建过程中请保持 ReqWS 运行；完整步骤、操作结果和失败处理见 [Desktop 使用指南](docs/guides/user-guide.md)。
+
+## 使用前需要知道
+
+每份工作区都是完整 clone，会占用独立磁盘空间。ReqWS 不使用 Git worktree，不持续替你对齐各仓库分支，也不提供云同步。
+
+“从工作区移除仓库”和“移除工作区记录”都会保留磁盘文件；暂时不想在 GoLand 中看见某个仓库，应调整加载选择，不要移除需求成员。`.code-workspace` 由 ReqWS 生成和维护，重新生成时会覆盖手工修改。
+
+个人签名版支持在设置中手动检查、下载和安装 Desktop 更新，但不是 Apple 公证版本。首次安装、证书信任及源码构建的区别见[安装与更新](docs/guides/installation.md)。Desktop 更新不负责更新 GoLand 插件；Marketplace 是否可安装，以实际审核结果为准。
+
+## 开发与项目资料
+
+从源码启动开发实例，需要 macOS、Node.js 24、npm 和 Git。在仓库根目录执行：
 
 ```bash
 nvm use
@@ -33,48 +74,6 @@ npm ci
 npm start
 ```
 
-从可信源码构建并安装到本机：
+这不是已安装 App 的更新方式。源码安装、打包和检查命令见[开发指南](docs/guides/development-guide.md)；GoLand 插件源码构建另需 JDK 25，见[插件开发入口](integrations/goland/README.md)。
 
-```bash
-nvm use
-npm run install:macos
-```
-
-不要用 `sudo` 包裹整个 npm 命令。默认源码构建采用 ad-hoc 签名且未经 Apple 公证，不启用应用内更新；安装参数与 Git 认证准备见[使用说明](docs/guides/user-guide.md)。
-
-## 个人签名版：首次安装、证书信任与自更新
-
-应用内更新面向 macOS Apple silicon（arm64），需要先手动安装使用固定证书签名、内置更新器的版本。旧 ad-hoc 版本和默认 `npm run install:macos` 构建不能仅靠导入证书获得更新能力。当前正式发布与干净用户环境验收仍待完成，以下用于受控个人试运行，进度见[实施记录](docs/changes/macos-self-update/implementation-2026-09-19.md)。
-
-1. 从[可信 Releases](https://github.com/fredgnr/reqws-desktop/releases)取得明确支持应用内更新的 `ReqWS-<版本>-macos-arm64.zip`，以及对应版本源码中的[公开证书 `reqws-signing.cer`](build/certificates/reqws-signing.cer)。核对发布说明、校验信息和维护者通过可信渠道提供的证书 SHA-256 指纹；不要只凭证书名称判断身份。
-2. 退出已有 ReqWS，备份应用数据后解压 ZIP，将 `ReqWS.app` 放到自己可写的 `~/Applications/ReqWS.app` 或 `/Applications/ReqWS.app`。只替换 App，保留用户数据和 workspace；不要从 ZIP、Downloads 或临时目录运行后直接更新。
-3. **需要为该个人签名版本添加信任时**，打开“钥匙串访问”，选择“登录（login）”，导入已核对的 `.cer`。双击 `ReqWS Personal Code Signing`，展开“信任”，仅将“代码签名”设为“始终信任”，其他用途保持系统默认；关闭窗口并按 macOS 提示授权。不要把顶部的所有用途统一设为“始终信任”。具体步骤见[安装与信任公开证书](docs/guides/user-guide.md#安装与信任公开证书)。
-4. 首次启动若被“未知开发者”提示拦截，在确认来源和签名可信后，按系统设置 → 隐私与安全性中的提示，仅为 ReqWS 选择“仍要打开”。证书信任不等于 Apple 公证，也不代替这一步；不要全局关闭 Gatekeeper。
-5. 打开 ReqWS 的“设置 → 应用更新”，依次选择“检查更新”“下载更新”“安装并重启”。只有维护者发布更高版本后才会发现更新；应用不会后台自动下载或在普通退出时安装。
-
-配置证书信任时只需导入公开 CER，**不要导入 P12、私钥或维护者的密码**。是否需要额外的用户证书信任仍以目标 Mac 的验收结果为准；若已正常更新，不必额外扩大信任。若出现签名无效、证书不匹配或应用损坏，停止安装并联系维护者，不通过信任陌生证书绕过。完整说明与 Apple 操作参考见[使用指南](docs/guides/user-guide.md#个人签名版本的应用内更新)。
-
-## 常用开发命令
-
-```bash
-npm run check          # 类型、lint、i18n、文档和全部测试
-npm run test:unit      # 单元测试
-npm run test:integration
-npm run test:renderer
-npm run package:macos  # 生成并验证 .app，不安装
-npm run check:goland   # 独立测试并验证 GoLand 插件
-npm run package:goland # 生成本地磁盘安装 ZIP
-```
-
-GoLand 插件需要 JDK 21，Gradle 构建与根 `npm run check`、Electron package 相互隔离；完整磁盘安装和界面说明见[GoLand 插件使用指南](docs/guides/goland-plugin-guide.md)，当前验证状态见[GoLand 支持需求包](docs/changes/goland-plugin-support/README.md)。完整命令语义、进程职责和变更清单见[开发指南](docs/guides/development-guide.md)。不要编辑或提交 `node_modules/`、`.vite/`、`out/`、`dist/`、`coverage/` 或 `integrations/goland/build/`。
-
-## 安全边界
-
-- Renderer 保持 sandbox、context isolation 和 web security；Node integration 关闭。
-- Preload 只暴露固定的 typed API，Main 对 IPC 输入再次做 Zod 校验。
-- Git 和编辑器命令使用参数数组及 `shell: false`，凭据交给系统 Git、SSH Agent 或 credential helper。
-- 路径和 manifest 在写入前执行 containment、realpath 与 symlink 校验。
-- GoLand 插件只读 manifest，不访问 repository URL、不执行 Git 生命周期命令；VCS Directory Mappings 在任何模式下都只读，Safe Mode 还禁止项目模型修改。
-- 状态、manifest 和 managed workspace 文件使用原子发布或替换；逻辑移除和遗忘不会删除磁盘内容。
-
-这些约束的实现细节和修改要求记录在[开发指南](docs/guides/development-guide.md)，需求来源及按次验证证据从[项目文档索引](docs/README.md)进入。
+[项目文档索引](docs/README.md)收录需求、设计和验证记录。参与本轮文档维护时，从[文档改进与本地交接](docs/changes/documentation-refresh/README.md)查看待补截图、对应段落和验收要求。
