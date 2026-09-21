@@ -2,7 +2,7 @@
 title: ReqWS Agent 协作指南
 type: guide
 status: active
-updated: 2026-09-19
+updated: 2026-09-21
 ---
 
 # ReqWS Agent 协作指南
@@ -48,6 +48,8 @@ updated: 2026-09-19
 | GoLand 代码、descriptor 或构建 | `npm run check:goland`；需要交付 ZIP 时再打包。 |
 | TS/Kotlin 共享 manifest 契约 | Desktop 与 GoLand 两侧检查。 |
 | 安装、GUI 或发布行为 | 对应环境和 exact-head 证据，遵守既有验收计划及确认边界。 |
+
+插件每次迭代记录最低系列 262 的影响；CI 保留编译、Light/Heavy 平台与 API 等全部自动门禁，只有完整 Starter/Driver 进程/UI 移到[本机入口](../changes/ide-plugin-compatibility-automation/local-integration.md)。`HeavyPlatformTestCase` 不是完整 IDE 场景。专用 profile 可交互登录 JetBrains Account、可选 License Server，不复制个人配置或假定继承登录。CI 与本机报告分开，签名产物不能借用签名前 UI 结果；更高版本无需 GUI/Computer Use 矩阵。用户要求只开发时记录未运行项，不执行授权准备。隔离 Starter 不激活日常用户 IDE 安装技能。
 
 文档 checker 不覆盖全部 skill 参考链接，也不执行模型行为评测。静态检查、模型 eval、完整应用测试和真实 GUI 证据是不同结论。不得通过更改 CI、跳过失败用例或清除翻译基线来减少工作；没有相关改动或新证据需求时不重复执行无关的大型检查。
 

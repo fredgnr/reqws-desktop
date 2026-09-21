@@ -1,0 +1,123 @@
+name: Frozen GoLand API verification
+
+on:
+  workflow_call:
+    inputs:
+      source-ref:
+        default: ''
+        type: string
+      candidate-artifact:
+        required: true
+        type: string
+      targets-artifact:
+        required: true
+        type: string
+      matrix:
+        required: true
+        type: string
+      historical:
+        default: false
+        type: boolean
+      evidence-artifact:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  api:
+    name: API ${{ matrix.target }}
+    runs-on: macos-15
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref }}
+      - uses: ./.github/actions/setup-goland
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.candidate-artifact }}
+          path: candidate
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.targets-artifact }}
+          path: targets
+      - name: Verify exact candidate and frozen target
+        env:
+          TARGET: ${{ matrix.target }}
+          HISTORICAL: ${{ inputs.historical }}
+        run: |
+          options=()
+          if [[ "$HISTORICAL" == true ]]; then options+=(--historical); fi
+          python3 scripts/run_ide_verifier.py --snapshot targets/targets.json --archive candidate/plugin.zip \
+            --version "$(cat candidate/version.txt)" --target "$TARGET" --output api-results "${options[@]}"
+      - name: Preserve target verdict and complete logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.evidence-artifact }}-api-${{ matrix.target }}
+          path: api-results
+          if-no-files-found: error
+          retention-days: 14
+
+  result:
+    name: CI API verification result
+    if: ${{ always() }}
+    needs: [api]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source-ref }}
+      - name: Require every applicable child job
+        env:
+          API_RESULT: ${{ needs.api.result }}
+        run: |
+          test "$API_RESULT" = success
+          echo "Local IDE integration: not run by CI; use the separate local report." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.candidate-artifact }}
+          path: candidate
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.targets-artifact }}
+          path: targets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.evidence-artifact }}-api-*
+          path: api-results
+          merge-multiple: true
+      - name: Require complete reports bound to these bytes
+        run: |
+          python3 scripts/run_ide_verifier.py --snapshot targets/targets.json --archive candidate/plugin.zip --output api-results --summarize
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          Path('candidate-evidence.json').write_text(json.dumps({
+            'candidateSha256': hashlib.sha256(Path('candidate/plugin.zip').read_bytes()).hexdigest(),
+            'snapshotSha256': hashlib.sha256(Path('targets/targets.json').read_bytes()).hexdigest(),
+            'status': 'passed', 'scope': 'ci-api',
+            'localIntegration': {'status': 'not-run', 'execution': 'local-only'},
+          }) + '\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.evidence-artifact }}
+          path: |
+            candidate-evidence.json
+            targets/targets.json
+          if-no-files-found: error
+          retention-days: 14

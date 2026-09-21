@@ -4,12 +4,17 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [改造方案](technical-design.md) | active | 定义兼容政策、自动 API 验证、固定环境的集成测试和 CI 改造边界。 |
+| [改造方案](technical-design.md) | active | 定义兼容政策、CI 平台/API 检查与仅本机完整 IDE 集成的边界。 |
 | [实施与验收](implementation-plan.md) | active | 拆分实施任务，列出迁移门槛、负向测试和最终交接要求。 |
+| [开发记录](implementation-2026-09-21.md) | active | 记录 S1–S3 开发、用例迁移映射、运行入口及当时未执行的验证。 |
+| [验证记录](verification-2026-09-21.md) | active | 记录开发后的实际回归结果、修复与本机授权阻塞；不代替完整 V 验收。 |
+| [本机集成入口](local-integration.md) | active | 说明专用环境账号授权准备、显式 ZIP 自动集成、状态隔离和独立报告。 |
 
 ## 当前状态
 
-2026-09-21 已确定目标政策；本次只提交方案和开发入口，不修改插件产物、Gradle 或工作流，也不宣称 262 全系列验证已经通过。`active` 表示可据此实施，不表示改造已交付。
+2026-09-21 已加入统一策略、产物检查、API 目标解析/汇总、固定环境 Starter/Driver 场景及 CI/Release/每周工作流。前两轮按用户要求仅开发；用户随后授权测试、回归和推送，实际结果见[验证记录](verification-2026-09-21.md)。本机完整 IDE 授权及 V 验收仍未完成，不能宣称自动化替代已全部生效。
+
+当前执行策略已调整：CI 保留编译、单元、Light/Heavy 平台、禁用 API、结构/产物策略及跨版本 Verifier；完整 GoLand 的 Starter/Driver 三组自动场景仅在本机固定 2026.2.1.1 运行。所有工作流不要求 License Server 或 IDE 授权，CI 结果不代表本机 UI 通过。专用测试环境允许 JetBrains Account 交互登录，License Server 可选；本轮没有启动该环境或登录账号。
 
 目标描述为 `<idea-version since-build="262"/>`。用户说的“最低 262.*”表示从整个 262 系列开始，不是把通配符写进 `since-build`。`until-build` 和 `strict-until-build` 都不设置。
 

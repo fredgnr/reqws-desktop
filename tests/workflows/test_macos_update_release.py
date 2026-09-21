@@ -144,7 +144,7 @@ class UpdateWorkflowTests(unittest.TestCase):
     def test_publish_joins_all_gates_and_verifies_downloaded_draft_before_publication(self):
         workflow = self.workflow('release.yml')
         publish = workflow['jobs']['publish']
-        self.assertEqual(set(publish['needs']), {'validate', 'checks', 'package', 'goland-plugin'})
+        self.assertEqual(set(publish['needs']), {'validate', 'checks', 'package', 'goland-plugin', 'plugin-verification'})
         self.assertEqual(publish['permissions'], {'contents': 'write'})
         self.assertNotIn('MAC_SIGNING_P12', json.dumps(publish))
         run = next(step['run'] for step in publish['steps'] if 'gh release create' in step.get('run', ''))

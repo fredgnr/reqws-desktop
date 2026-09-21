@@ -2,12 +2,14 @@
 title: GoLand 独立入口与工作加载集合技术方案
 type: technical-design
 status: active
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # GoLand 独立入口与工作加载集合技术方案
 
 本方案将 Desktop 的工作加载意图投影为受保护的 IDE 内容根，并分别处理入口文件范围和普通 Project 树呈现。
+
+本文的精确 IDE build 约束已由[兼容与自动化方案](../ide-plugin-compatibility-automation/README.md)替代：最低系列 262、无预设上限、固定代表环境和自动 API 集合。以下独立入口/所有权契约继续有效；历史 build 与验收结果仍只解释当时的候选。
 
 ## 1. 基线、结论与适用范围
 

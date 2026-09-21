@@ -2,7 +2,7 @@
 title: GitHub Actions CI 与 Release 需求说明
 type: requirements
 status: active
-updated: 2026-09-19
+updated: 2026-09-21
 ---
 
 # GitHub Actions CI 与 Release 需求说明
@@ -25,7 +25,7 @@ push、pull request 和人工检查使用同一质量基线；tag 发布具有�
 
 1. 所有 branch push、`pull_request` 和人工 `workflow_dispatch` 保留两个独立 job：Desktop `checks` 与 `goland-plugin`，以及原有可见检查名称。
 2. Desktop 在 `macos-15`、Node.js 24 上执行 `npm ci`、完整 `npm run check` 和 arm64 package smoke；新增发布脚本回归测试。package smoke 复用依赖和检查，不安装应用或创建 Release。
-3. GoLand 在 `macos-15`、JDK 25 上校验 Gradle wrapper，执行 `test`、`verifyPluginProjectConfiguration`、`verifyPluginStructure`、GoLand GO-262.9437.286 的 `verifyPlugin` 和 `buildPlugin`，并保留后者依赖的 `verifyForbiddenProductionSymbols`。CI 还验证候选 ZIP 的真实 ID、版本和校验和生成；不上传发布资产，不依赖 Desktop `node_modules`。
+3. GoLand 在 `macos-15`、JDK 25 上保留 Wrapper 校验、最低 GO 2026.2 编译、全部单元/Light/Heavy 平台 `test`、结构/产物策略及禁用 API 检查，构建一次候选；冻结的正式目标执行跨版本 `verifyPlugin`，最多两个 API 重任务并发，保留逐目标终态及同产物检查。完整 GoLand Starter/Driver 仅本机固定 2026.2.1.1 运行，CI/PR/Release/定期工作流不启动完整 IDE、不需要 IDE 授权凭据。详见[兼容方案](../ide-plugin-compatibility-automation/technical-design.md)。CI 核对 ZIP 真实 ID、版本、262 下限/无上限和校验和，required 汇总不掩盖自动检查失败/取消/缺失，也不能把 CI 成功或 skipped 表述为本机 UI 通过。
 4. Release 仍由 `v*` tag push 触发，只接受无前导零的 `vMAJOR.MINOR.PATCH`。版本必须同时等于 `package.json`、`package-lock.json` 顶层及根 package 版本；tag commit 必须可从默认分支到达。
 5. 轻量 `validate` 通过后，完整 Desktop 检查、arm64 app 打包和完整 GoLand 检查/打包并行执行。`publish` 必须等待四个前置 job 全部成功；打包中的 `--skip-check` 只避免重复执行，不豁免独立检查门禁。
 6. 发布插件的 Gradle project version、内嵌 `META-INF/plugin.xml` 版本和资产文件名必须与 tag 版本一致，plugin ID 必须为 `com.reqws.workspace`。CI 使用项目版本演练相同的覆盖和校验路径；本地无参数构建仍保留原有插件默认版本。

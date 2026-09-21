@@ -8,8 +8,9 @@ import stat
 import xml.etree.ElementTree as ET
 from zipfile import ZipFile
 
+from ide_compatibility import check_descriptor
+
 XML_ID = 'com.reqws.workspace'
-IDE_BUILD = '262.9437.286'
 VERSION_PATTERN = r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
 MAX_ARCHIVE_BYTES = 400_000_000
 MAX_EXPANDED_BYTES = 800_000_000
@@ -48,7 +49,7 @@ def checked_entries(archive):
     return entries
 
 
-def validate_plugin(path, version):
+def validate_plugin(path, version, *, historical=False):
     validate_version(version)
     path = regular_file(path)
     if not 0 < path.stat().st_size <= MAX_ARCHIVE_BYTES:
@@ -59,11 +60,15 @@ def validate_plugin(path, version):
         for entry in checked_entries(archive):
             member = PurePosixPath(entry.filename)
             roots.add(member.parts[0])
-            if len(member.parts) != 3 or member.parts[1] != 'lib' or member.suffix != '.jar':
+            if entry.filename.endswith('META-INF/plugin.xml'):
+                raise ValueError('Unexpected loose plugin descriptor')
+            if member.suffix != '.jar':
                 continue
             with ZipFile(io.BytesIO(archive.read(entry))) as jar:
                 for item in checked_entries(jar):
                     if item.filename == 'META-INF/plugin.xml':
+                        if len(member.parts) != 3 or member.parts[1] != 'lib':
+                            raise ValueError('Main descriptor must be in the top-level lib JAR')
                         if item.file_size > 1_000_000:
                             raise ValueError('Plugin descriptor is too large')
                         xml = jar.read(item).decode('utf-8')
@@ -82,8 +87,11 @@ def validate_plugin(path, version):
     if descriptor.tag != 'idea-plugin':
         raise ValueError('Invalid plugin descriptor root')
     bounds = descriptor.findall('idea-version')
-    if len(bounds) != 1 or any(bounds[0].get(key) != IDE_BUILD for key in ['since-build', 'until-build']):
-        raise ValueError('Plugin compatibility must match the verified GoLand build')
+    if historical:
+        if len(bounds) != 1:
+            raise ValueError('Missing historical compatibility descriptor')
+    else:
+        check_descriptor(descriptor)
     vendor = descriptor.findall('vendor')
     if (len(vendor) != 1 or (vendor[0].text or '').strip() != 'fredgnr'
             or vendor[0].get('email') != 'z513317651@gmail.com'
@@ -100,7 +108,7 @@ def validate_plugin(path, version):
     if icon.tag != '{http://www.w3.org/2000/svg}svg' or icon.get('viewBox') != '0 0 40 40':
         raise ValueError('Expected a 40 by 40 SVG plugin icon')
     return {'version': version, 'xmlId': XML_ID, 'sha256': hashlib.sha256(payload).hexdigest(),
-            'size': len(payload), 'since': IDE_BUILD, 'until': IDE_BUILD}
+            'size': len(payload), 'since': bounds[0].get('since-build'), 'until': bounds[0].get('until-build')}
 
 
 def plugin_checksum(manifest, filename):

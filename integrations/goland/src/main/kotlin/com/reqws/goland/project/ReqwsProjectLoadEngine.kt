@@ -33,7 +33,8 @@ internal class ReqwsProjectLoadEngine(
         lifecycle = lifecycle,
         snapshot = snapshot,
         lastAppliedDigest = previous.lastAppliedDigest,
-        validatedProjectionDigest = previous.validatedProjectionDigest,
+        validatedProjectionDigest = previous.validatedProjectionDigest
+          .takeUnless { lifecycle == ReqwsLifecycleState.SAFE_MODE_BLOCKED },
       )
     } catch (exception: com.intellij.openapi.progress.ProcessCanceledException) { throw exception
     } catch (exception: kotlinx.coroutines.CancellationException) { throw exception

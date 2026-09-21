@@ -144,6 +144,13 @@ class ReqwsProjectService private constructor(
     waiter = runtimeOverrides?.trustPollWaiter
       ?: TrustPollWaiter { delay(it) },
   )
+  private val trustRevocationMonitor = TrustTransitionMonitor(
+    scope = coroutineScope,
+    probe = TrustStateProbe(trustGate::isTrusted),
+    action = TrustedTransitionAction { requestRefresh(SyncTrigger.TRUST_TRANSITION) },
+    expectedTrusted = false,
+    waiter = runtimeOverrides?.trustRevocationPollWaiter ?: TrustPollWaiter { delay(it) },
+  )
   private val vcsChangeLifecycleLock = Any()
   private var vcsChangeMonitoringState = VcsChangeMonitoringState.NOT_STARTED
   private var vcsChangeRegistrationVersion = 0L
@@ -205,16 +212,6 @@ class ReqwsProjectService private constructor(
     require(projectMetadataReadinessMaxPolls > 0) {
       "The project metadata readiness poll limit must be positive"
     }
-    com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect(this)
-      .subscribe(com.intellij.ide.trustedProjects.TrustedProjectsListener.TOPIC,
-        object : com.intellij.ide.trustedProjects.TrustedProjectsListener {
-          override fun onProjectTrusted(locatedProject: com.intellij.ide.trustedProjects.TrustedProjectsLocator.LocatedProject) {
-            if (locatedProject.project == project) requestRefresh(SyncTrigger.TRUST_TRANSITION)
-          }
-          override fun onProjectUntrusted(locatedProject: com.intellij.ide.trustedProjects.TrustedProjectsLocator.LocatedProject) {
-            if (locatedProject.project == project) requestRefresh(SyncTrigger.TRUST_TRANSITION)
-          }
-        })
     registerProjectModelChangeMonitoring()
     if (trace.enabled) trace.record(SyncTraceEvent.SERVICE_STARTED)
   }
@@ -1094,6 +1091,7 @@ class ReqwsProjectService private constructor(
   ) {
     readRequests.runIfLatest(request) { trigger ->
       trustMonitor.cancelPending()
+      trustRevocationMonitor.cancelPending()
       val failedState = previous.copy(
         lifecycle = ReqwsLifecycleState.ERROR,
         lastError = ReqwsProjectError(
@@ -1145,6 +1143,7 @@ class ReqwsProjectService private constructor(
         try {
           readRequests.runIfLatest(request) {
             trustMonitor.cancelPending()
+            trustRevocationMonitor.cancelPending()
             revocation = revokeUnacceptedVcsChangeMonitoring()
             publish(loaded)
           }
@@ -1174,8 +1173,9 @@ class ReqwsProjectService private constructor(
         currentCoroutineContext().ensureActive()
         val accepted = readRequests.runIfLatest(request) {
           if (completeVcsChangeMonitoringPreparation(prepared.monitoring, accepted = true)) {
+            trustRevocationMonitor.cancelPending()
             publish(prepared.state)
-            trustMonitor.awaitTrusted()
+            trustMonitor.awaitState()
           }
         }
         if (!accepted) {
@@ -1187,6 +1187,7 @@ class ReqwsProjectService private constructor(
         try {
           readRequests.runIfLatestAndArmReconcile(request, SyncTrigger.PROJECT_MODEL_CHANGE) {
             trustMonitor.cancelPending()
+            trustRevocationMonitor.cancelPending()
             revocation = revokeUnacceptedVcsChangeMonitoring()
             coordinator.offerReadFailure(
               cause = ReadStateFailure(loaded),
@@ -1220,6 +1221,7 @@ class ReqwsProjectService private constructor(
         runtimeOverrides?.beforeCandidateOffer?.invoke()
         val accepted = readRequests.offerCandidateIfLatest(request) { trigger ->
           trustMonitor.cancelPending()
+          trustRevocationMonitor.awaitState()
           rememberCandidate(request.generation, snapshot.digestSha256, prepared.state, request)
           val offered = coordinator.offer(
             SyncCandidate(
@@ -1366,7 +1368,8 @@ class ReqwsProjectService private constructor(
           lastError = null,
         ),
       )
-      trustMonitor.awaitTrusted()
+      trustRevocationMonitor.cancelPending()
+      trustMonitor.awaitState()
       return
     }
 
@@ -1696,6 +1699,7 @@ class ReqwsProjectService private constructor(
     cleanup { projectModelChangeResources.debounceJob?.cancel() }
     cleanup { projectModelChangeResources.registration?.close() }
     cleanup { trustMonitor.close() }
+    cleanup { trustRevocationMonitor.close() }
     cleanup { watcherRef.getAndSet(null)?.dispose() }
     cleanup { coordinator.close() }
     cleanup { synchronized(candidateLock) { candidateStates.clear() } }
@@ -1860,6 +1864,7 @@ internal data class ReqwsProjectServiceRuntimeOverrides(
   val candidateApplier: SyncCandidateApplier<ManifestSnapshot>? = null,
   val trustPollMillis: Long? = null,
   val trustPollWaiter: TrustPollWaiter? = null,
+  val trustRevocationPollWaiter: TrustPollWaiter? = null,
   val vcsChangeRegistrar: ReqwsVcsChangeRegistrar? = null,
   val projectModelChangeRegistrar: ReqwsProjectModelChangeRegistrar? = null,
   val projectModelChangeDebounceWaiter: ReqwsProjectModelChangeDebounceWaiter? = null,

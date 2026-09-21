@@ -213,7 +213,7 @@ jobs:
 
       - name: Test, verify, and package the plugin
         working-directory: integrations/goland
-        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
+        run: ./gradlew compileIntegrationTestKotlin test verifyBaselineTestReports verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
 
       - name: Set up OpenSSL for plugin signing
         env:
@@ -239,6 +239,17 @@ jobs:
       - name: Verify and stage plugin release ZIP
         run: python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$VERSION"
 
+      - name: Export the final signed bytes to all compatibility consumers
+        run: python3 scripts/stage_ide_candidate.py --input "dist/release/ReqWS-${VERSION}-goland-plugin.zip" --version "$VERSION"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-ide-candidate
+          path: candidate
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
       - name: Upload intermediate plugin release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -250,6 +261,37 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  plugin-targets:
+    name: Freeze complete release API targets
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log release context
+        run: python3 scripts/log-release-context.py
+      - id: targets
+        run: python3 scripts/ide_compatibility.py resolve --mode full --output targets/targets.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-ide-targets
+          path: targets/targets.json
+          if-no-files-found: error
+          retention-days: 14
+
+  plugin-verification:
+    needs: [validate, goland-plugin, plugin-targets]
+    uses: ./.github/workflows/goland-verification.yml
+    with:
+      candidate-artifact: signed-ide-candidate
+      targets-artifact: signed-ide-targets
+      matrix: ${{ needs.plugin-targets.outputs.matrix }}
+      evidence-artifact: signed-ide-evidence
+
   publish:
     name: Publish GitHub release
     needs:
@@ -257,6 +299,7 @@ jobs:
       - checks
       - package
       - goland-plugin
+      - plugin-verification
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -286,6 +329,26 @@ jobs:
 
       - name: Verify release files and checksums
         run: python3 scripts/verify-release-assets.py --stage --directory dist/release --version "$VERSION"
+
+      - name: Download final candidate CI API evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-ide-evidence
+          path: compatibility-evidence
+
+      - name: Bind release bytes to completed CI API gates
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          evidence = json.loads(Path('compatibility-evidence/candidate-evidence.json').read_text())
+          archive = Path('dist/release') / f"ReqWS-{os.environ['VERSION']}-goland-plugin.zip"
+          if (evidence.get('scope') != 'ci-api' or evidence['status'] != 'passed'
+              or evidence.get('localIntegration', {}).get('status') != 'not-run'
+              or evidence['candidateSha256'] != hashlib.sha256(archive.read_bytes()).hexdigest()):
+              raise SystemExit('Final signed ZIP differs from the CI API candidate or evidence scope is invalid')
+          PY
+          echo "CI API evidence passed. Local IDE integration is recorded separately and is not run by this workflow." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create, verify, and publish release
         run: |

@@ -21,14 +21,14 @@ internal fun interface TrustedTransitionAction {
 }
 
 /**
- * Detects a Safe Mode -> trusted transition without depending on the experimental
- * TrustedProjectsListener API. The monitor only runs while a valid ReqWS project
- * is blocked, and stops after the first observed trusted state.
+ * Detects a trust transition through a public state probe. The service arms a monitor
+ * only for a valid ReqWS project and stops it after the first expected state.
  */
 internal class TrustTransitionMonitor(
   private val scope: CoroutineScope,
   private val probe: TrustStateProbe,
   private val action: TrustedTransitionAction,
+  private val expectedTrusted: Boolean = true,
   private val pollMillis: Long = DEFAULT_POLL_MILLIS,
   private val waiter: TrustPollWaiter = TrustPollWaiter { delay(it) },
   private val onFailure: (Throwable) -> Unit = {},
@@ -48,7 +48,7 @@ internal class TrustTransitionMonitor(
     }
   }
 
-  fun awaitTrusted(): Boolean = synchronized(lock) {
+  fun awaitState(): Boolean = synchronized(lock) {
     if (closed.get() || !parentJob.isActive) return false
     if (pollingJob?.isActive == true) {
       // A load started by the observed transition can become blocked again before this polling
@@ -69,7 +69,7 @@ internal class TrustTransitionMonitor(
     job = scope.launch(start = CoroutineStart.LAZY) {
       try {
         while (!closed.get()) {
-          if (probe.isTrusted()) {
+          if (probe.isTrusted() == expectedTrusted) {
             val mayRun = synchronized(lock) {
               if (pollingJob !== job || closed.get()) {
                 false
@@ -107,7 +107,7 @@ internal class TrustTransitionMonitor(
           requested && !closed.get() && parentJob.isActive
         }
       }
-      if (shouldRearm) awaitTrusted()
+      if (shouldRearm) awaitState()
     }
     job.start()
   }

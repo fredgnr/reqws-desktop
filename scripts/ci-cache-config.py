@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import sys
 
+from ide_compatibility import read_policy
+
 
 def may_write(requested, event, ref, default_branch):
     """Only an opted-in default-branch push/manual job can publish shared caches."""
@@ -39,19 +41,9 @@ def desktop_keys(root):
 
 
 def goland_keys(root):
-    # Read the two authoritative literal declarations without running Gradle
-    # before its caches are restored. A DSL refactor must update this reader.
-    source = (root / 'integrations/goland/build.gradle.kts').read_text()
-    # Ignore comments so an old version in an explanation cannot become a key.
-    source = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
-    build = re.findall(r'\bgoland\(\s*"([0-9.]+)"\s*\)', source)
-    verify = re.findall(r'create\(\s*IntelliJPlatformType\.GoLand\s*,\s*"([0-9.]+)"\s*\)', source)
-    if len(build) != 1 or len(verify) != 1 or build != verify:
-        raise ValueError('Expected one matching literal GoLand build/verifier version; update the cache reader with the Gradle DSL')
-    version = build[0]
-    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version):
-        raise ValueError('Unsupported GoLand version in cache key')
-    return {'goland-version': version}
+    policy = read_policy(root / 'integrations/goland/compatibility.properties')
+    return {'goland-product': policy['compileIdeProduct'], 'goland-version': policy['compileIdeVersion'],
+            'goland-ui-product': policy['uiTestIdeProduct'], 'goland-ui-version': policy['uiTestIdeVersion']}
 
 
 def goland_downloads(root, home):

@@ -2,7 +2,7 @@
 title: GitHub Release 交付说明
 type: delivery
 status: active
-updated: 2026-09-19
+updated: 2026-09-21
 ---
 
 # GitHub Release 交付说明
@@ -47,7 +47,7 @@ shasum -a 256 -c SHA256SUMS
 - 后续 `.app` 使用固定个人自签名与 Hardened Runtime，没有 Apple Developer ID 或 Apple 公证，不是 Gatekeeper-ready 公共发行包。
 - `codesign` 结构校验不代表其他 Mac 会信任应用；不应通过关闭 Gatekeeper 或移除安全属性绕过保护。
 - 不提供 DMG、后台自动更新、自动插件安装或跨架构 universal binary。
-- 当前插件编译/Verifier 目标已由[独立入口需求](../goland-workspace-loading/README.md)限定为 GO-262.9437.286，使用 JDK 25；历史发布证据不变，当前候选 GUI 验收独立记录。
+- 当时插件编译/Verifier 目标由[独立入口需求](../goland-workspace-loading/README.md)限定为 GO-262.9437.286，使用 JDK 25。后续 262 无上限及自动矩阵开发见[兼容记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)；历史发布证据不变，未执行的新候选验证不能沿用本报告。
 
 正式公开证书、Environment 配置和实际 GitHub 两版本/干净用户验收尚待完成，见[自更新实施记录](../macos-self-update/implementation-2026-09-19.md)。历史 ad-hoc Release 保持原状。
 

@@ -2,7 +2,7 @@
 title: ReqWS GoLand 插件使用指南
 type: guide
 status: active
-updated: 2026-09-20
+updated: 2026-09-22
 ---
 
 # ReqWS GoLand 插件使用指南
@@ -13,7 +13,7 @@ updated: 2026-09-20
 
 ## 1. 安装条件与构建
 
-唯一目标是 macOS GoLand **2026.2.1.1 / GO-262.9437.286**，不支持旧版本混用。源码构建使用 Node.js 24、JDK 25 和仓库锁定的 Gradle/Kotlin 工具链。
+当前开发中的兼容声明从 GoLand **262 系列**开始，不设置上限；编译基线为 **2026.2**，固定自动集成环境为 **2026.2.1.1**。开发后的[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)区分已执行检查与本机 UI 授权阻塞，新范围尚未形成完整验收结论；使用已发布版本时以其真实描述文件和发布说明为准。见[兼容开发记录](../changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md)。源码构建使用 Node.js 24、JDK 25 和仓库锁定的 Gradle/Kotlin 工具链。
 
 ```bash
 npm run check:goland

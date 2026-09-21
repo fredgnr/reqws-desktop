@@ -31,8 +31,8 @@ class TrustTransitionMonitorTest {
       },
     )
 
-    assertTrue(monitor.awaitTrusted())
-    assertTrue(monitor.awaitTrusted())
+    assertTrue(monitor.awaitState())
+    assertTrue(monitor.awaitState())
     polls.await()
     trusted.set(true)
     awaitCondition { actions.get() == 1 }
@@ -58,7 +58,7 @@ class TrustTransitionMonitorTest {
       },
     )
 
-    assertTrue(monitor.awaitTrusted())
+    assertTrue(monitor.awaitState())
     waiting.await()
     monitor.cancelPending()
     trusted.set(true)
@@ -100,7 +100,7 @@ class TrustTransitionMonitorTest {
 
       try {
         withTimeout(5_000) {
-          assertTrue(monitor.awaitTrusted())
+          assertTrue(monitor.awaitState())
           firstPollStarted.await()
           trusted.set(true)
           firstActionStarted.await()
@@ -108,7 +108,7 @@ class TrustTransitionMonitorTest {
           // This models the forced refresh loading SAFE_MODE_BLOCKED before the old polling job's
           // completion callback has cleared it.
           trusted.set(false)
-          assertTrue(monitor.awaitTrusted())
+          assertTrue(monitor.awaitState())
           releaseFirstAction.complete(Unit)
           secondPollStarted.await()
 
@@ -133,7 +133,7 @@ class TrustTransitionMonitorTest {
 
     monitor.close()
 
-    assertFalse(monitor.awaitTrusted())
+    assertFalse(monitor.awaitState())
     scope.cancel()
   }
 

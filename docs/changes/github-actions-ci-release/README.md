@@ -16,4 +16,4 @@
 
 本需求不改写 [MVP 交付快照](../mvp/README.md)。v0.1.1 的正式发布与资产复验已记录于测试索引；新的资产契约只适用于后续 tag，不删除历史 Intel 资产。可用版本和验证范围以对应报告及 GitHub Release 为准。
 
-当前 GoLand 构建使用 JDK 25 与唯一 GO-262.9437.286 目标，依据[独立入口方案](../goland-workspace-loading/README.md)；本包的历史 Release 结论不作为新候选验收。
+当前开发中的 GoLand 使用 JDK 25、最低 262 和无上限声明；CI 保留编译、单元/Light/Heavy 平台、禁用 API、结构/产物策略与动态 API 集合，完整 IDE 自动集成仅本机固定版本运行。CI/Release 不要求 IDE 授权，结果不代表本机 UI 已通过，见[兼容开发记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)。本轮未测试；历史 Release 结论不作为新候选验收。

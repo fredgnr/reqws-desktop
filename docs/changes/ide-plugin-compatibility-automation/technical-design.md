@@ -2,12 +2,20 @@
 title: IDE 插件兼容性与自动化回归改造方案
 type: technical-design
 status: active
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # IDE 插件兼容性与自动化回归改造方案
 
 本方案让 ReqWS 插件从 262 系列起按公开 API 兼容性持续支持更新 IDE，同时把重复的真机操作移入可复现的自动化流程。
+
+开发实现及验证缺口见[开发记录](implementation-2026-09-21.md)。下文描述目标契约；不代替本候选的执行证据。
+
+执行地点已调整：CI 保留编译（包括 Starter/Driver 宿主）、单元、Light/Heavy 平台、禁用 API、结构/产物策略及跨版本 Verifier；只有启动完整 GoLand 的 Starter/Driver L2/L3 在本机运行。PR、Release、定期工作流不启动完整 IDE、不请求 License Server 或 IDE 授权凭据。开发后的实际执行范围和未完成项见[验证记录](verification-2026-09-21.md)，不能从 CI 推导 UI 已通过。插件没有 Settings configurable，打包关闭 `buildSearchableOptions`，避免选项索引任务隐式启动 IDE。
+
+API 验证使用官方 Maven SDK 分发，不下载 OS 安装器。本机可以通过 `reqwsVerifierSdkPaths` 显式提供 JSON 路径数组以只读复用已有 SDK；产品、发行版、build 必须与选定目标一致，重复或不匹配必须失败。其他目标仍正常下载；该选项不影响编译 SDK，不启动已有 IDE，也不复用其用户配置或授权状态。
+
+最低 SDK 的真实 Verifier 检查发现 `TrustedProjectsListener` 在 2026.2 仍为 Experimental。信任恢复与撤销改为通过公开 `TrustedProjects.isProjectTrusted` 探针检测：仅对已确认的 ReqWS 项目按当前状态等待相反信任状态，默认一秒一次；恢复后仍强制同 digest 重放，撤销后进入 Safe Mode 并撤销 live proof。普通项目、错误终态及 dispose 取消轮询。模型写入和树能力读取继续同步检查当前信任状态，安全边界不依赖轮询时延。
 
 ## 1. 决策与非目标
 
@@ -87,7 +95,7 @@ intellijPlatform {
 
 新增产物策略检查应拒绝：`since-build="262.*"`、精确补丁下限、未经批准的 `263` 等更高下限，以及任何普通或 strict 上限。检查通过后才允许交给现有 release ZIP 校验和签名链路。
 
-候选只构建一次。Verifier 和 Starter 消费同一个候选 ZIP，不分别按目标 IDE 重编生产插件。PR 可用未签名候选；正式发布先形成最终待上传的签名 ZIP，再供 API 和固定环境集成消费，并重新检查 descriptor，签名后不再修改或重打包。现有版本、签名、ArchivePath 导出和 Marketplace 后置上传校验不削弱。
+候选只构建一次。CI Verifier 和本机 Starter 都消费显式指定的同一候选 ZIP，不分别重编生产插件。PR 可用未签名候选；正式发布的 API 检查消费最终签名 ZIP，声称正式产物已完成本机 UI 集成时也必须使用该最终签名 ZIP，不能借用签名前证据。签名后不修改或重打包。CI/Release 汇总只证明其自动检查，本机集成单独记录为未运行、环境阻塞、失败或通过，不把 CI 绿色或 skipped 写成 UI 通过。现有签名、版本、ArchivePath 和 Marketplace 上传校验不削弱。
 
 Marketplace 中若已有人工设置的远端兼容限制，不能假定改 GitHub ZIP 会自动覆盖它；由已授权发布流程核对。当前文档 PR 不执行市场写入。[S2]
 
@@ -100,6 +108,8 @@ Marketplace 中若已有人工设置的远端兼容限制，不能假定改 GitH
 清单至少记录获取时间、来源、产品、发行版本、实际 build、发布渠道、选择理由和是否必需；存入 CI artifact，不提交不断变动的完整发行台账。版本按整数分段比较，不按字典序排序。重复版本按产品和 build 去重，不能跨产品合并。
 
 矩阵分片默认最多两个重任务并发；容量不足时排队或明确报资源阻塞，不静默截断必需目标。
+
+每周 main 与已发布候选的 API 矩阵按阶段执行，避免两组各开两个 worker 而合计四个；main 的失败不阻止已发布候选独立取证，取消的工作流不再启动后一组。
 
 矩阵规则：
 
@@ -140,15 +150,15 @@ Verifier 负责二进制 API 兼容，不执行插件业务，也不证明 UI �
 
 | 层级 | 主要内容 | 运行位置 |
 |---|---|---|
-| L0 普通测试 | manifest、路径边界、状态机、去抖、latest-wins、原子持久化、错误分类。 | 现有快速测试环境。 |
-| L1 平台测试 | 真实 Workspace Model、ProjectFileIndex、所有权保护、保存重开、取消/dispose。 | 最低 262 SDK 的 Light/Heavy 测试，不启动可交互 IDE 窗口。 |
-| L2 进程集成 | 真实插件加载、VFS 自动消费、服务生命周期、完整 IDE 进程冷启动。 | 固定 GUI 代表版本的隔离 Starter 实例。 |
-| L3 自动 UI | 实际 Project 树、ReqWS 状态展示，以及普通项目不受影响。 | 同一固定代表环境，Driver 定位控件，不依赖截图识别。 |
+| L0 普通测试 | manifest、路径边界、状态机、去抖、latest-wins、原子持久化、错误分类。 | CI 保留。 |
+| L1 平台测试 | 真实 Workspace Model、ProjectFileIndex、所有权保护、保存重开、取消/dispose。 | CI 的最低 262 SDK Light/Heavy 测试，不启动完整 IDE。 |
+| L2 进程集成 | 真实插件加载、VFS 自动消费、服务生命周期、完整 IDE 进程冷启动。 | 仅本机固定 GoLand 2026.2.1.1 的隔离 Starter 实例。 |
+| L3 自动 UI | 实际 Project 树、ReqWS 状态展示，以及普通项目不受影响。 | 同一本机代表环境，Driver 自动定位和断言，不改成人工逐步回归。 |
 | L4 API 矩阵 | 对同一候选 ZIP 做跨版本二进制检查。 | 无需 GUI 的 Verifier job。 |
 
-平台测试使用真实平台组件，并非要求大量 mock。[S6] 涉及模块、多个 roots 和保存恢复的场景保留 Heavy 测试。[S7] 不机械拆分所有现有测试，不重复证明已覆盖的算法排列组合。
+平台测试使用真实平台组件，并非要求大量 mock。[S6] `HeavyPlatformTestCase` 属于 L1，继续在 CI 运行；不能因名称包含 Heavy 而迁出。涉及模块、多个 roots 和保存恢复的场景保留 Heavy 测试及所有安全、所有权、并发、恢复覆盖。[S7]
 
-新增跨进程/UI 测试使用独立 `integrationTest` source set 和 JUnit 5；现有 JUnit 4 平台测试不整体迁移。拟新增聚合入口 `checkIdeIntegration`，与现有 `check:goland` 的轻重层级在实施阶段明确；这些名字是目标设计，不是当前可执行命令。
+跨进程/UI 使用独立 `integrationTest` source set 和 JUnit 5；现有 JUnit 4 平台测试不迁移。本机入口 `scripts/run_local_ide.py` 提供 `prepare`（专用环境交互授权准备）和 `run`（显式 ZIP 的自动集成），调用 Gradle 的专用宿主任务。入口与 Gradle 任务均拒绝 CI；不与 `test`/`check`/`buildPlugin` 自动绑定，不重新构建生产插件。
 
 Starter、Driver 和相关测试依赖须使用互相匹配的固定版本，不使用 `LATEST`。先验证 262 代表版本的最小启动链路及库的实际接口，再扩展场景；测试依赖不得打进生产 ZIP。Driver 的测试侧实验性状态不构成放松生产禁用 API 规则的理由。[S8][S9]
 
@@ -166,7 +176,7 @@ Starter、Driver 和相关测试依赖须使用互相匹配的固定版本，不
 
 必须等待本次请求/配置 revision 对应的终态及模型收敛，而非任意旧 `Synced`、固定 sleep 或“后台指示器消失”。平台测试也不能假定项目打开就已执行完 `ProjectActivity`。[S11]
 
-将 IDE 进程异常通过 Starter 的错误上报桥接到测试失败；超时、冻结、异常退出、进程未清理、XML 报告缺失或全跳过同样不得通过。GitHub Actions 不是 TeamCity，需核实实际使用的 `CIServer` 处理，而不是只看到测试宿主正常退出。[S8]
+将 IDE 进程异常通过 Starter 的 `CIServer` 桥接到本机宿主失败，不能依赖仅适用于 TeamCity 的上报。超时、冻结、异常退出、进程未清理、XML 缺失/全跳过同样不得通过。[S8] 每轮报告绑定实际 ZIP 摘要、插件版本、实际 IDE 产品/版本/build、选择器、执行数量和退出结果；摘要只保留在本机报告，不提交源码台账。
 
 测试驱动可通过只读 API 获取同步结果辅助等待，但必须经过真实触发链路，并保留 UI 的最终断言。需要桥接时优先使用既有服务；不得为测试向生产暴露无保护的远程命令接口。
 
@@ -174,27 +184,33 @@ Starter、Driver 和相关测试依赖须使用互相匹配的固定版本，不
 
 保留现有必需检查名称 `GoLand plugin checks`，将其作为最终汇总；保持 `Checks and macOS package smoke` 及 Desktop、签名、发布门禁语义。新子任务失败或取消不能让汇总变绿。仅在路径分类确认无影响时，才给“不适用”的具名结果；无法判定时保守地按有影响运行。
 
-| 改动/触发 | 默认执行 | 不要求 |
+| 改动/触发 | CI 自动执行 | 本机单独记录 |
 |---|---|---|
-| 纯文档 | `docs:check`、短兼容影响说明。 | 构建插件、安装 IDE、GUI 回归。 |
-| 插件纯逻辑 | 受影响 L0/L1、集成候选的完整保留插件回归、产物策略、PR API 矩阵。 | 为每个逻辑 case 新增 GUI。 |
-| 项目模型/VFS/生命周期/Project 树/入口契约 | 上述检查，加固定代表环境的相关 L2/L3。 | 最高版本 GUI 或多版本 GUI 矩阵。 |
-| SDK、依赖、插件描述、构建、打包、测试框架或路径分类器 | 完整插件自动检查、固定代表环境集成和 API 矩阵。 | 默认 computer use。 |
-| 插件正式发布 | 完整保留测试、固定代表环境三个场景组、最终 ZIP 完整稳定 API 矩阵及原发布门禁。 | 人工最高版本回归。 |
+| 纯文档 | `docs:check`、短兼容影响说明。 | 无需完整 IDE。 |
+| 插件纯逻辑 | 编译、完整保留 L0/L1、产物策略及 API 矩阵。 | 按实际影响判断 L2/L3。 |
+| 项目模型/VFS/生命周期/Project 树/入口契约 | 上述自动 CI 范围，包括全部 Light/Heavy 平台覆盖。 | 固定代表环境的相关 L2/L3；未运行需明确记录。 |
+| SDK、依赖、descriptor、构建、打包、测试框架或分类器 | 完整自动 CI 范围与 API 矩阵。 | 固定代表环境三个场景组。 |
+| 插件正式发布 | 完整保留 L0/L1、最终签名 ZIP 的完整稳定 API 矩阵及原签名/资产门禁。 | 最终签名 ZIP 的固定环境集成状态独立；签名前报告不能复用。 |
 
 影响分类同时考虑新增、删除、重命名文件；覆盖共享 manifest/schema、Desktop GoLand 入口生成、工作流和缓存/发布脚本。分类器自身变化必须进入全插件门禁，不能靠修改 PR 文字绕过。
 
-建议 job 分为：影响与目标解析、基线测试/单次构建、API 分片、固定环境集成、必需检查汇总。无依赖的 API 和集成消费同一个构建 artifact 并行。GUI 首选已有 macOS runner 路线，不另造 Linux×macOS×Windows 矩阵；Verifier 可在无 GUI Linux runner 运行，但须校验目标分发包、JBR 和完整报告，不能借此宣称 Windows/Linux 产品体验已验收。
+job 分为：影响与目标解析、基线测试/单次构建、API 分片及必需检查汇总，不包含 Starter/Driver job。影响分类中的本机集成建议只作提示，不触发用户电脑。API 每次冻结目标，最多两个重任务并发；保留逐目标终态及同一 ZIP 检查。CI 证据明确写 `scope=ci-api`、`localIntegration.status=not-run`；发布汇总不读取或伪造本机 UI 通过。更高版本仅扩展 API 集合，不增加多版本本机 GUI。
 
 沿用默认分支独占共享缓存写入、PR/Release 只读策略。下载缓存键包含产品、发行版、OS/架构；基线/固定 GUI installer 可长期复用，高版本 installer 只保留有收益的少量条目或本次临时目录，不把所有矩阵下载永久塞入 cache。编译 SDK 与 API 目标分开后，`ci-cache-config.py` 和对应工作流测试必须一起更新。[R3][R4]
 
 禁止跨分支恢复整个 IDE config/system/plugins/project sandbox；避免把上次项目状态误当成恢复成功。日志、矩阵快照和测试结果走有保留期的 artifacts，而不是依赖 cache。保留现有缓存用量报告，比较新增矩阵前后的实际容量和命中情况，不预先承诺加速比例。
 
-## 8. 无人值守环境与 computer use 例外
+## 8. 本机环境、授权准备与隔离
 
-自动 GUI 运行前先检查图形会话、目标 IDE/插件可加载、测试依赖、必要权限以及合法授权方式。任何涉及 IDE 授权的配置使用 JetBrains 支持的方式；不能复制个人 license、用户配置或业务 workspace，也不把“下载成功”等同于可无人值守启动。
+本机自动集成前检查图形会话、固定 IDE、候选 ZIP、Driver 所需权限及实际授权状态。`JETBRAINS_LICENSE_SERVER` 只是可选方式；没有该变量时允许在专用测试环境通过 JetBrains Account 交互登录。`prepare --profile <专用目录>` 打开无项目的固定 GoLand，用户自行完成登录/权限准备并正常退出；此步骤只记授权准备会话已结束，不宣称授权或 UI 测试通过。
 
-所有 fixture、IDE 配置和运行目录都在隔离临时空间；测试只清理本次创建的目录与进程。生产插件的信任边界不放宽；正向 fixture 可预先信任，Safe Mode 负向测试不得全局开启信任绕过。
+授权复用采用显式、持久、仅供测试使用的 profile/config，IDE 直接读写该目录；不从日常 GoLand 复制许可证、账号令牌或整套配置，不假定日常登录会被继承。profile 必须由本入口从空目录初始化并带所有权标记，使用独占锁防止两个测试会话共享配置。目录留在本机，不进 cache、报告或 CI artifact；不自动注销或清理授权文件。
+
+固定 SDK/installer 与测试依赖在 profile 的独立下载缓存保留，以稳定测试 IDE 二进制路径和本机权限准备；不能把该缓存扩展为业务 workspace、system 或整套 sandbox 复用。每次仍核对 SDK ProductInfo 与实际运行目录。
+
+每轮新建独立运行目录，业务 fixture、`.idea`、system、plugins 和日志全部重新创建。专用 config 中的 workspace 存储、recentProjects 与 trusted-paths 等项目记录在启动前移入该轮的私有隔离区，不复制授权内容；禁止在授权准备窗口打开真实项目或导入/同步个人设置。冷启动组仅在同一轮、同一 fixture 内保留其持久模型。固定测试正向 fixture 可逐项预信任，Safe Mode 负向测试不得全局绕过信任。
+
+本机报告区分 `passed`、`failed`、`environment-blocked` 和 `not-run`；明确记录授权弹窗、图形会话缺失、权限拒绝、启动/连接未完成等原因。缺授权或无法确认启动状态不能绿色通过。授权准备成功退出也不能代替候选的九个 IDE 进程及三个自动场景结果。
 
 基础设施不可用时记录具体阻塞，先修环境或测试工具；不能自动转成“请用户手测最高版本”。确需用户级安装、系统首次授权/对话框、跨应用激活或难以稳定复现的原生问题时，才提出最小 computer use 例外：说明无法由当前自动化证明的契约、目标环境和预期结果，并取得相应授权。
 
@@ -226,7 +242,7 @@ CI 对最终产物的下限漂移强制失败，策略文件变化必须在 diff
 
 文档不提交源码/工件 SHA 清单。需要比对单次运行的同一 ZIP 或 JAR 时，在 CI 日志/artifact 中保留临时结果；Git 提交和既有 release 工件机制继续作为追踪入口。
 
-本次是方案交付，不修改 Gradle、生产代码、工作流或远端兼容设置，不运行新 IDE 矩阵。实现提交须同步开发标准、plugin README、开发指南、发布文档与安装 skill 中实际受影响的表述；历史验收报告保持当时结论。
+本轮调整代码和工作流的执行地点，不运行测试、GUI、授权准备、安装或登录；同步开发标准、插件 README、开发/验收指南和发布入口。历史验收结论保持原义，新的本机路径仍待验证。
 
 ## 11. 核对来源
 
