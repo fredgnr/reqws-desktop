@@ -1,9 +1,11 @@
 name: CI
 
 on:
+  # A PR has one run, rather than separate branch-push and merge-ref runs.
+  # Unsubmitted branches can still use workflow_dispatch.
   push:
     branches:
-      - '**'
+      - main
   pull_request:
     types:
       - opened
@@ -24,8 +26,8 @@ defaults:
     shell: bash
 
 jobs:
-  checks:
-    name: Checks and macOS package smoke
+  project-checks:
+    name: Project and workflow checks
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -37,20 +39,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up Desktop dependencies
+        uses: ./.github/actions/setup-desktop
         with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
+          npm-cache-write: 'true'
 
-      - name: Cache Electron downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/Library/Caches/electron
-          key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Install locked dependencies
+      - name: Install locked dependencies without the Electron runtime
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: npm ci
 
       - name: Set up Java for isolated plugin signature tests
@@ -75,8 +71,69 @@ jobs:
       - name: Run project checks
         run: npm run check
 
+  macos-package:
+    name: macOS package smoke
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Desktop dependencies
+        uses: ./.github/actions/setup-desktop
+        with:
+          electron: 'true'
+          electron-cache-write: 'true'
+
+      - name: Install locked dependencies
+        run: npm ci
+
       - name: Package and verify the arm64 app
         run: npm run package:macos -- --skip-ci --skip-check --arch arm64
+
+  # Preserve the existing required check name. Neither a failed nor a cancelled
+  # dependency may become a green aggregate; all original checks still run.
+  checks:
+    name: Checks and macOS package smoke
+    if: ${{ always() }}
+    needs: [project-checks, macos-package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Report repository cache usage
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api --paginate --slurp "repos/${GH_REPO}/actions/caches?per_page=100" > "$RUNNER_TEMP/reqws-caches.json"
+          python3 - "$RUNNER_TEMP/reqws-caches.json" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              caches = [entry for page in json.load(stream) for entry in page['actions_caches']]
+          print('\n### Repository cache snapshot\n')
+          print(f"{len(caches)} entries; {sum(c['size_in_bytes'] for c in caches) / 1024**3:.2f} GiB total.\n")
+          print('| Ref | Key | MiB |\n|---|---|---:|')
+          for entry in sorted(caches, key=lambda c: c['size_in_bytes'], reverse=True)[:20]:
+              ref = entry['ref'].replace('|', '\\|').replace('`', '')
+              key = entry['key'].replace('|', '\\|').replace('`', '')
+              print(f"| {ref} | {key} | {entry['size_in_bytes'] / 1024**2:.1f} |")
+          PY
+
+      - name: Require both Desktop gates
+        env:
+          CHECK_RESULT: ${{ needs.project-checks.result }}
+          PACKAGE_RESULT: ${{ needs.macos-package.result }}
+        run: |
+          test "$CHECK_RESULT" = success
+          test "$PACKAGE_RESULT" = success
 
   goland-plugin:
     name: GoLand plugin checks
@@ -93,6 +150,8 @@ jobs:
 
       - name: Set up GoLand build
         uses: ./.github/actions/setup-goland
+        with:
+          cache-write: 'true'
 
       # Exercise the same version override and ZIP staging as a tag build, without publishing.
       - name: Read plugin candidate version
@@ -111,3 +170,6 @@ jobs:
         env:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
+
+      - name: Verify the versioned GoLand download cache paths
+        run: python3 scripts/ci-cache-config.py goland-downloads
