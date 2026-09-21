@@ -20,7 +20,7 @@ from ide_compatibility import ROOT, digest, read_policy, write_json
 from plugin_release import validate_plugin
 
 PROFILE_MARKER = '.reqws-ide-profile.json'
-PROJECT_STATE = ('workspace', 'options/recentProjects.xml', 'options/recentProjectDirectories.xml',
+PROJECT_STATE = ('workspace', 'projects', 'options/recentProjects.xml', 'options/recentProjectDirectories.xml',
                  'options/trusted-paths.xml')
 
 

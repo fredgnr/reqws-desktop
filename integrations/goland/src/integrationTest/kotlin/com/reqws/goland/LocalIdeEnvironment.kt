@@ -15,6 +15,7 @@ import com.intellij.ide.starter.ci.NoCIServer
 import com.intellij.ide.starter.di.di
 import com.intellij.ide.starter.ide.IDETestContext
 import com.intellij.ide.starter.path.GlobalPaths
+import com.intellij.ide.starter.runner.IDERunContext
 import com.intellij.platform.testFramework.teamCity.TeamCityReporter.SyntheticTestKind
 import org.kodein.di.DI
 import org.kodein.di.bindSingleton
@@ -36,6 +37,9 @@ internal class LocalIdeEnvironment {
     "build" to System.getProperty("reqws.ui.build"))
 
   fun prepareHost() {
+    check(Path.of(System.getProperty("user.home")).toRealPath() == root.resolve("host-home").toRealPath()) {
+      "Starter must use the isolated host home, including its macOS saved-state cleanup"
+    }
     if (listOf("CI", "GITHUB_ACTIONS", "TEAMCITY_VERSION", "JENKINS_URL", "BUILD_BUILDID").any {
         System.getenv(it)?.lowercase() !in listOf(null, "", "0", "false")
       }) block("CI_NOT_ALLOWED", "Complete IDE integration is local-only; Heavy platform tests remain in CI.")
@@ -53,6 +57,12 @@ internal class LocalIdeEnvironment {
     check(marker.path("purpose").asText() == "reqws-local-ide-authorization")
     check(marker.path("version").asText() == expected["version"] && marker.path("build").asText() == expected["build"])
     check(Files.isDirectory(config) && !Files.isSymbolicLink(config) && !config.startsWith(root))
+    configureStarter()
+  }
+
+  private fun configureStarter() {
+    // Starter 262's DI setter logs stack frames 2..4 without bounding the slice.
+    // Keep a separate setup frame for the short standalone authorization entry.
     di = DI {
       extend(di)
       bindSingleton<GlobalPaths>(overrides = true) {
@@ -122,6 +132,16 @@ internal class LocalIdeEnvironment {
     for (key in listOf("idea.system.path", "idea.plugins.path")) {
       val value = Path.of(requireNotNull(properties.getProperty(key))).toRealPath()
       check(value.startsWith(root)) { "IDE runtime directory escaped the isolated run: $key" }
+    }
+  }
+
+  fun configureRun(context: IDERunContext) {
+    context.artifactsPublishingEnabled = false
+    context.addVMOptionsPatch {
+      // Apply after Starter's defaults: the dedicated profile must retain the user's
+      // actual consent state, without test flags claiming agreements were accepted.
+      listOf("jb.consents.confirmation.enabled", "jb.privacy.policy.text", "jb.privacy.policy.ai.assistant.text",
+        "marketplace.eula.reviewed.and.accepted", "writerside.eula.reviewed.and.accepted").forEach(::clearSystemProperty)
     }
   }
 

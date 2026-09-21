@@ -434,7 +434,7 @@ tasks.named("buildPlugin") { dependsOn(verifyCompatibilityDescriptor) }
 val integrationTestSourceSet = sourceSets.create("integrationTest")
 dependencies {
   val starterVersion = policy("starterVersion")
-  listOf("ide-starter-squashed", "ide-starter-junit5", "ide-starter-driver", "ide-starter-product-goland").forEach {
+  listOf("ide-starter-squashed", "ide-starter-driver", "ide-starter-product-goland").forEach {
     add(integrationTestSourceSet.implementationConfigurationName, "com.jetbrains.intellij.tools:$it:$starterVersion")
   }
   listOf("driver-client", "driver-sdk", "driver-model").forEach {
@@ -444,6 +444,11 @@ dependencies {
   add(integrationTestSourceSet.implementationConfigurationName, "org.junit.jupiter:junit-jupiter:5.11.4")
   add(integrationTestSourceSet.runtimeOnlyConfigurationName, "org.junit.platform:junit-platform-launcher:1.11.4")
   add(integrationTestSourceSet.implementationConfigurationName, "org.kodein.di:kodein-di-jvm:7.26.1")
+}
+// Starter's optional JUnit listeners kill processes by a shared "ide-tests" path match.
+// Local sessions own explicit process handles; never load that global cleanup extension.
+configurations.matching { it.name.startsWith("integrationTest") }.configureEach {
+  exclude(group = "com.jetbrains.intellij.tools", module = "ide-starter-junit5")
 }
 val integrationTest by tasks.registering(Test::class) {
   notCompatibleWithConfigurationCache("Each integration run allocates isolated process state and a fresh evidence directory")
@@ -461,7 +466,7 @@ val integrationTest by tasks.registering(Test::class) {
   systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
   systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
   systemProperty("reqws.plugin.version", project.version.toString())
-  systemProperty("junit.jupiter.extensions.autodetection.enabled", "true")
+  systemProperty("junit.jupiter.extensions.autodetection.enabled", "false")
   if (providers.gradleProperty("reqwsLocalIdeRunRoot").isPresent) {
     val runRoot = file(providers.gradleProperty("reqwsLocalIdeRunRoot").get())
     reports.junitXml.outputLocation.set(runRoot.resolve("junit"))
@@ -475,6 +480,7 @@ val integrationTest by tasks.registering(Test::class) {
     systemProperty("reqws.plugin.expectedSha256", providers.gradleProperty("reqwsPluginSha256").get())
     systemProperty("reqws.integration.root", runRoot.absolutePath)
     systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
   }
 }
 
@@ -485,6 +491,7 @@ fun requireLocalIdeLauncher(): Pair<java.io.File, java.io.File> {
   val runRoot = file(providers.gradleProperty("reqwsLocalIdeRunRoot").get())
   val profile = file(providers.gradleProperty("reqwsLocalIdeProfile").get())
   require(runRoot.isDirectory && profile.resolve(".reqws-ide-profile.json").isFile)
+  require(runRoot.resolve("host-home").mkdirs() || runRoot.resolve("host-home").isDirectory)
   require(providers.environmentVariable("REQWS_LOCAL_IDE_RUN_ROOT").orNull == runRoot.absolutePath &&
     providers.environmentVariable("REQWS_LOCAL_IDE_PROFILE").orNull == profile.absolutePath) {
     "Use scripts/run_local_ide.py to lock the dedicated profile and allocate fresh run state"
@@ -522,6 +529,7 @@ tasks.register<JavaExec>("prepareLocalIdeAuthorization") {
     val (runRoot, profile) = requireLocalIdeLauncher()
     systemProperty("reqws.integration.root", runRoot.absolutePath)
     systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
   }
 }
 

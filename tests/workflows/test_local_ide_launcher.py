@@ -48,6 +48,8 @@ class LocalProfileTests(unittest.TestCase):
         (config / 'options').mkdir()
         (config / 'workspace').mkdir()
         (config / 'workspace/fixture.xml').write_text('previous test project state')
+        (config / 'projects/GoLandWorkspace').mkdir(parents=True)
+        (config / 'projects/GoLandWorkspace/keep.txt').write_text('IDE-generated welcome workspace')
         (config / 'options/recentProjects.xml').write_text('previous fixture')
         # An inert sentinel proves unrelated persistent files are neither read, moved nor copied.
         (config / 'persistent-sentinel').write_text('fixture-state')
@@ -55,6 +57,9 @@ class LocalProfileTests(unittest.TestCase):
         with lock_profile(profile): isolate_project_state(profile, run)
         self.assertFalse((config / 'workspace').exists())
         self.assertTrue((run / 'private-previous-project-state/workspace/fixture.xml').exists())
+        self.assertFalse((config / 'projects').exists())
+        self.assertEqual((run / 'private-previous-project-state/projects/GoLandWorkspace/keep.txt').read_text(),
+                         'IDE-generated welcome workspace')
         self.assertEqual((config / 'persistent-sentinel').read_text(), 'fixture-state')
         self.assertFalse(any(path.name == 'persistent-sentinel' for path in run.rglob('*')))
         self.assertEqual(first, initialize_profile(profile, self.policy)[1])

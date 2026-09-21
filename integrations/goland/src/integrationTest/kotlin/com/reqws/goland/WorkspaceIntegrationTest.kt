@@ -55,12 +55,16 @@ class WorkspaceIntegrationTest {
     val ordinary = Files.createTempDirectory(root, "ordinary-")
     ordinary.resolve("readme.txt").writeText("ordinary project\n")
     withIde(context("ordinary", ordinary)) {
-      assertEquals("INACTIVE", service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name())
-      assertFalse(getModules().any { it.getName().startsWith("reqws-") })
+      waitFor("ordinary project detection completed without activating ReqWS", 30.seconds) {
+        service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name() == "INACTIVE"
+      }
+      assertFalse(getModules().any { it.getName().startsWith("reqws-", ignoreCase = true) })
       openToolWindow("Project")
       val tree = ideFrame().projectView().projectViewTree
-      tree.expandAll()
-      assertTrue(tree.collectExpandedPaths().any { it.path.last() == "readme.txt" })
+      waitFor("ordinary project file is visible in the Project tree", 30.seconds) {
+        tree.expandAll(10.seconds)
+        tree.collectExpandedPaths().any { it.path.last() == "readme.txt" }
+      }
     }
     assertFalse(Files.exists(ordinary.resolve(".idea/reqws-loaded-roots.json")))
     assertFalse(Files.exists(ordinary.resolve(".reqws")))
@@ -112,7 +116,7 @@ class WorkspaceIntegrationTest {
     check(digest() == candidateDigest) { "Candidate changed before launch" }
     environment.recordLaunchRequested()
     val run = try {
-      context.runIdeWithDriver(runTimeout = 10.minutes)
+      context.runIdeWithDriver(runTimeout = 10.minutes) { environment.configureRun(this) }
     } catch (failure: Exception) {
       environment.reportPermissionBlock(failure)
       environment.block("IDE_START_UNAVAILABLE", "The isolated IDE could not start; inspect private diagnostics for authorization, graphical-session or permission blockers.", failure)
@@ -194,9 +198,14 @@ class WorkspaceIntegrationTest {
     val tree = ideFrame().projectView().projectViewTree
     waitFor("actual Project tree matches revision ${fixture.revision}", 1.minutes) {
       tree.expandAll(10.seconds)
-      val paths = tree.collectExpandedPaths().map { it.path }
+      val displayedPaths = tree.collectExpandedPaths().map { it.path }
+      Files.writeString(root.resolve("project-tree-${processes.last()}.txt"),
+        displayedPaths.joinToString("\n") { it.joinToString(" > ") })
+      // The fixed IDE appends a module name and/or absolute location to content-root labels.
+      // Match complete fixture names after removing only these presentation suffixes.
+      val paths = displayedPaths.map { path -> path.map { it.substringBefore(" [").substringBefore(" /") } }
       setOf("repo-a", "repo-b").all { repo -> paths.any { repo in it } == (repo in selected) } &&
-        paths.none { path -> path.drop(1).any { it in setOf(".reqws", "reqws-project.json", "goland") } } &&
+        paths.none { path -> path.any { it in setOf(".reqws", "reqws-project.json", "goland") } } &&
         paths.any { "user-content" in it && it.last() == "keep.txt" } &&
         selected.all { repo -> paths.any { it.takeLast(3) == listOf(repo, "docs", "probe.txt") } }
     }

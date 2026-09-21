@@ -204,11 +204,11 @@ job 分为：影响与目标解析、基线测试/单次构建、API 分片及�
 
 本机自动集成前检查图形会话、固定 IDE、候选 ZIP、Driver 所需权限及实际授权状态。`JETBRAINS_LICENSE_SERVER` 只是可选方式；没有该变量时允许在专用测试环境通过 JetBrains Account 交互登录。`prepare --profile <专用目录>` 打开无项目的固定 GoLand，用户自行完成登录/权限准备并正常退出；此步骤只记授权准备会话已结束，不宣称授权或 UI 测试通过。
 
-授权复用采用显式、持久、仅供测试使用的 profile/config，IDE 直接读写该目录；不从日常 GoLand 复制许可证、账号令牌或整套配置，不假定日常登录会被继承。profile 必须由本入口从空目录初始化并带所有权标记，使用独占锁防止两个测试会话共享配置。目录留在本机，不进 cache、报告或 CI artifact；不自动注销或清理授权文件。
+授权复用采用显式、持久、仅供测试使用的 profile/config，IDE 直接读写该目录；不从日常 GoLand 复制许可证、账号令牌或整套配置，不假定日常登录会被继承。profile 必须由本入口从空目录初始化并带所有权标记，使用独占锁防止两个测试会话共享配置。Starter 宿主使用本轮独立 JVM `user.home`；排除带全局进程清理的可选 `ide-starter-junit5`，只按本轮进程句柄退出和清理，保留 JUnit 5 执行、IDE 错误上报与进程终态检查。目录留在本机，不进 cache、报告或 CI artifact；不自动注销或清理授权文件。
 
 固定 SDK/installer 与测试依赖在 profile 的独立下载缓存保留，以稳定测试 IDE 二进制路径和本机权限准备；不能把该缓存扩展为业务 workspace、system 或整套 sandbox 复用。每次仍核对 SDK ProductInfo 与实际运行目录。
 
-每轮新建独立运行目录，业务 fixture、`.idea`、system、plugins 和日志全部重新创建。专用 config 中的 workspace 存储、recentProjects 与 trusted-paths 等项目记录在启动前移入该轮的私有隔离区，不复制授权内容；禁止在授权准备窗口打开真实项目或导入/同步个人设置。冷启动组仅在同一轮、同一 fixture 内保留其持久模型。固定测试正向 fixture 可逐项预信任，Safe Mode 负向测试不得全局绕过信任。
+每轮新建独立运行目录，业务 fixture、`.idea`、system、plugins 和日志全部重新创建。专用 config 中的 workspace 存储、IDE 自动生成的 projects 欢迎工作区、recentProjects 与 trusted-paths 等项目记录在启动前移入该轮的私有隔离区，不复制授权内容；禁止在授权准备窗口打开真实项目或导入/同步个人设置。冷启动组仅在同一轮、同一 fixture 内保留其持久模型。固定测试正向 fixture 可逐项预信任，Safe Mode 负向测试不得全局绕过信任。
 
 本机报告区分 `passed`、`failed`、`environment-blocked` 和 `not-run`；明确记录授权弹窗、图形会话缺失、权限拒绝、启动/连接未完成等原因。缺授权或无法确认启动状态不能绿色通过。授权准备成功退出也不能代替候选的九个 IDE 进程及三个自动场景结果。
 

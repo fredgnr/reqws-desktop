@@ -2,14 +2,14 @@
 title: IDE 插件兼容性与自动化回归实施与验收
 type: test-plan
 status: active
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # IDE 插件兼容性与自动化回归实施与验收
 
 本文把改造拆成可验证的任务，并规定何时可以用自动化证据替代旧的 computer use 回归要求。
 
-政策和技术取舍以[改造方案](technical-design.md)为准；开发落点与未执行项见[开发记录](implementation-2026-09-21.md)。L0/L1/L4 继续在 CI，只有完整 IDE 的 L2/L3 移到本机。授权准备另用专用测试 profile 供用户交互登录，业务 fixture 每轮隔离。后续授权执行的测试结果见[验证记录](verification-2026-09-21.md)；本机授权与未运行的 UI 场景单独记录。
+政策和技术取舍以[改造方案](technical-design.md)为准；开发落点与未执行项见[开发记录](implementation-2026-09-21.md)。L0/L1/L4 继续在 CI，只有完整 IDE 的 L2/L3 移到本机。授权准备另用专用测试 profile 供用户交互登录，业务 fixture 每轮隔离。后续授权执行的测试结果见[验证记录](verification-2026-09-21.md)；本机启动后发现的宿主/fixture 修复和实际场景结果另见[本机回归记录](local-verification-2026-09-22.md)，账号复用和未执行的故障注入继续单独记录。
 
 ## 1. 实施顺序和协作
 

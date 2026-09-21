@@ -39,7 +39,9 @@ internal class WorkspaceFixture(parent: Path) {
       <module fileurl="file://${'$'}PROJECT_DIR${'$'}/.idea/user.iml" filepath="${'$'}PROJECT_DIR${'$'}/.idea/user.iml"/>
       </modules></component></project>
     """.trimIndent())
-    idea.resolve("shell.iml").writeText(module("file://${'$'}MODULE_DIR${'$'}/.."))
+    // MODULE_DIR in an .idea module resolves to the project directory in this IDE.
+    // Use the actual shell URL so the fixture cannot accidentally own its parent.
+    idea.resolve("shell.iml").writeText(module(shell.toUri().toString().removeSuffix("/")))
     idea.resolve("user.iml").writeText(module(root.resolve("user-content").toUri().toString().removeSuffix("/")))
     select(listOf("repo-a", "repo-b"))
   }

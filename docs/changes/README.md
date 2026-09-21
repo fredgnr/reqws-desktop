@@ -10,7 +10,7 @@
 | [GoLand 工作加载集合与独立入口](goland-workspace-loading/README.md) | active | 独立入口与加载契约验收完成；后续详情方案一已实现并通过浏览器设计与交互验证，尚未发布。 | 2026-09-20 |
 | [GoLand 插件 Marketplace 发布](goland-plugin-marketplace/README.md) | active | 实现独立插件签名、Release 后置提交与安全重试，分阶段完成首次上架和两版本市场验收。 | 2026-09-20 |
 | [GoLand 插件支持](goland-plugin-support/README.md) | active | 通用需求/设计已同步 S1/S2 的语言无关契约，保留原交付证据并链接当前验收。 | 2026-09-19 |
-| [IDE 插件兼容性与自动化回归](ide-plugin-compatibility-automation/README.md) | active | 最低 262、无上限；CI 保留平台/API，完整 IDE 自动化仅本机；记录实际回归与 UI 授权阻塞。 | 2026-09-22 |
+| [IDE 插件兼容性与自动化回归](ide-plugin-compatibility-automation/README.md) | active | 最低 262、无上限；CI 保留平台/API，完整 IDE 自动化仅本机；记录平台/API 与本机正向回归，以及剩余验收边界。 | 2026-09-22 |
 | [IDE 插件语言解耦](ide-plugin-language-decoupling/README.md) | active | S1/S2 已提交；V 完整自动化、双版本兼容、打包及必要真实 GUI 通过，GUI 为 manifest 边界集成。 | 2026-09-19 |
 | [macOS 个人自用自更新](macos-self-update/README.md) | active | S1/S2、隔离升级、身份/Environment 配置及私有备份完成；正式 CI、两版本及干净用户验收待完成。 | 2026-09-19 |
 | [ReqWS Desktop MVP](mvp/README.md) | archived | 保存 MVP 1.0 的覆盖矩阵、交付快照和目标机验证证据。 | 2026-08-13 |

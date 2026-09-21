@@ -9,7 +9,7 @@ updated: 2026-09-22
 
 本入口在本机固定 GoLand 2026.2.1.1 上自动验证候选 ZIP 的 Project 树、真实自动刷新和冷启动恢复，并将授权准备、CI 结果与本机运行结果分开。
 
-开发后的检查结果见[验证记录](verification-2026-09-21.md)。专用环境尚未完成账号登录或权限验证，以下完整 IDE 场景仍无通过结论。技术边界见[改造方案](technical-design.md)，实现状态见[开发记录](implementation-2026-09-21.md)。
+开发后的检查结果见[验证记录](verification-2026-09-21.md)。后续获准执行的固定代表环境正向集成及宿主隔离修复见[本机回归记录](local-verification-2026-09-22.md)；JetBrains Account 登录与长期授权复用仍未验证。技术边界见[改造方案](technical-design.md)，实现状态见[开发记录](implementation-2026-09-21.md)。
 
 ## 1. 执行范围
 
@@ -26,7 +26,7 @@ npm run prepare:goland:authorization -- \
   --profile "$HOME/.reqws-ide-tests/goland-2026.2.1.1"
 ```
 
-入口拒绝 CI、已有非空未标记目录、用户 symlink 和并发 profile 使用。它打开固定代表版本的无项目测试环境；用户可在 GoLand 的 Manage Subscriptions / JetBrains Account 界面自行登录，准备所需 macOS 图形自动化权限，然后**正常退出本次测试 IDE**。不操作日常 IDE，不打开真实项目，不导入或同步个人 IDE 设置。Starter 使用专用下载/运行目录；首次依赖下载可能需要网络，不把测试环境下载视作系统应用安装。
+入口拒绝 CI、已有非空未标记目录、用户 symlink 和并发 profile 使用。它不传入业务项目，打开固定代表版本的专用测试环境；GoLand 可能在专用 config 下自动生成 `projects/GoLandWorkspace` 欢迎工作区，该目录同样在下轮隔离。用户可在 GoLand 的 Manage Subscriptions / JetBrains Account 界面自行登录，准备所需 macOS 图形自动化权限，然后**正常退出本次测试 IDE**。不操作日常 IDE，不打开真实项目，不导入或同步个人 IDE 设置。Starter 使用专用下载/运行目录；首次依赖下载可能需要网络，不把测试环境下载视作系统应用安装。
 
 `JETBRAINS_LICENSE_SERVER` 可选；已有获授权的 Floating License Server / License Vault 时可在本机环境中配置无内嵌凭据、无 query token 的 HTTPS URL。没有该变量不阻止 JetBrains Account 交互登录。脚本不接收账号密码或 Token，不复制日常 GoLand 的许可证、账号数据或配置，不假定日常登录会被测试环境继承。[GoLand 官方注册说明](https://www.jetbrains.com/help/go/register.html)
 
@@ -53,9 +53,13 @@ npm run check:goland:integration -- \
 
 ## 4. 授权复用与业务状态隔离
 
-用户态配置仅复用专用授权 config。profile 下另缓存固定版本的官方 installer/SDK 与测试依赖，使专用 IDE 的二进制路径稳定，便于准备 macOS 权限；该缓存不含业务 fixture 或项目/system 状态，也不引用日常 IDE 安装。每轮创建新的 `reqws-local-ide-*` 私有目录，fixture、`.idea`、system、实际安装的 plugins、日志、XML 全部隔离，不能恢复上轮 sandbox。通过 IDE 运行时属性核对实际 config/system/plugins 位置。
+用户态配置仅复用专用授权 config。授权准备不注入“已接受协议”标志，首次协议由用户在专用环境自行处理。有效试用可作为当次运行的实际授权状态，但不能证明 JetBrains Account 登录或后续授权复用。
 
-profile 独占锁覆盖整个准备/集成会话。启动前将专用 config 的 `workspace`、`recentProjects.xml`、`recentProjectDirectories.xml`、`trusted-paths.xml` 移到该轮 `private-previous-project-state`，并设置不自动重开上轮项目；这些都是专用测试配置中的项目记录，不读取、移动或清理授权文件。冷启动只在同一轮保留对应 fixture 的模型状态。
+profile 下另缓存固定版本的官方 installer/SDK 与测试依赖，使专用 IDE 的二进制路径稳定，便于准备 macOS 权限；该缓存不含业务 fixture 或项目/system 状态，也不引用日常 IDE 安装。每轮创建新的 `reqws-local-ide-*` 私有目录，fixture、`.idea`、system、实际安装的 plugins、日志、XML 全部隔离，不能恢复上轮 sandbox。通过 IDE 运行时属性核对实际 config/system/plugins 位置。
+
+Starter 宿主 JVM 的 `user.home` 指向本轮独立 `host-home`，启动时核对路径，防止第三方库访问日常 IDE 的 macOS saved-state。宿主不加载带通用进程扫描/清理逻辑的 `ide-starter-junit5` 扩展；仍使用 JUnit 5 执行用例，由本轮进程句柄负责退出及异常清理。
+
+profile 独占锁覆盖整个准备/集成会话。启动前将专用 config 的 `workspace`、IDE 自动生成的 `projects`、`recentProjects.xml`、`recentProjectDirectories.xml`、`trusted-paths.xml` 移到该轮 `private-previous-project-state`，并设置不自动重开上轮项目；这些都是专用测试配置中的项目记录，不读取、移动或清理授权文件。冷启动只在同一轮保留对应 fixture 的模型状态。
 
 profile 和私有项目状态不上传，不纳入 CI cache 或报告附件。脚本不自动删除用户工作区、不关闭或强杀日常 IDE；异常清理仅限本轮宿主创建的进程。未确认正常清理时保留 `profile/active-session.json` 并阻止下轮修改项目记录。应先检查其中指向的私有运行目录、确认并正常退出该专用实例，再明确清除这一会话标记；不得通过删除 IDE 原生锁或关闭日常 IDE 来重试。
 
