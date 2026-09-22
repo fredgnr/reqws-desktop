@@ -1,5 +1,9 @@
 # ReqWS GoLand plugin changes
 
+## 0.1.7
+
+- Bump the plugin version to 0.1.7.
+
 ## 0.1.6
 
 - Bump the plugin version to 0.1.6.
