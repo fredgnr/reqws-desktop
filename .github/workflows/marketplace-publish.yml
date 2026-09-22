@@ -2,6 +2,10 @@ name: Publish JetBrains Marketplace
 
 on:
   workflow_call:
+    secrets:
+      JETBRAINS_MARKETPLACE_TOKEN:
+        description: Named contract for the protected Marketplace environment secret.
+        required: false
   workflow_dispatch:
 
 permissions:

@@ -28,7 +28,7 @@ updated: 2026-09-22
 | T05 ZIP 安全 | 保留损坏/重复条目、symlink、路径逃逸、多个 descriptor、异常 XML、ID/version 不符负例 | M02/M04 |
 | T06 插件子集验证 | 仅下载插件及 SHA256SUMS 能成功；不要求未下载 Desktop；目标记录重复、名称替换、摘要不符失败 | M04/M08 |
 | T07 发布身份 | 非正式 tag、非目标仓库、不属于默认分支、Draft/prerelease、重复/零长资产、ref/asset 变化被拒绝 | M05/M08/M11 |
-| T08 工作流门禁 | publish 失败不提交；bootstrap/paused 明确非提交；非法模式失败；automatic 后置提交 | M05/M06/M07 |
+| T08 工作流门禁 | publish 失败不提交；bootstrap/paused 明确非提交；非法模式失败；automatic 后置提交；调用方与被调用方仅具名绑定 Marketplace Token，禁止 inherit，非自动模式保留无 Token 路径 | M05/M06/M07 |
 | T09 协议 | 对 automatic 与 dispatch 重试的实际 multipart 请求断言固定官方 URL、`xmlId=com.reqws.workspace`、`family=intellij`、Stable/非 Hidden、Authorization；缺失/空白/错误 family 必须使协议断言失败；无 Token 泄露/跨域转发 | M07/M11 |
 | T10 响应分类 | 真实协议 fixture 的成功、401/403、明确拒绝、超时、HTML/畸形 JSON、版本冲突分别产生正确结论 | M09/M10 |
 | T11 独立重试 | 同一 Release 产物再次校验；不构建、不签名、不重新发布；可靠收据才跳过 POST；通过实际 GitHub 客户端验证 Artifact 使用 JSON API Accept 读取 ZIP、Release asset 使用 octet-stream，下载失败禁止 POST 且仅输出固定脱敏诊断 | M08/M09 |

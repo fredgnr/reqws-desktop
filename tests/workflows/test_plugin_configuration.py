@@ -88,6 +88,25 @@ class ConfigurationSafetyTests(unittest.TestCase):
 
 
 class MarketplaceWorkflowTests(unittest.TestCase):
+    def test_reusable_call_binds_only_the_marketplace_environment_secret(self):
+        workflow = release_tests.UpdateWorkflowTests.workflow('marketplace-publish.yml')
+        declaration = (workflow['on']['workflow_call'] or {}).get('secrets', {})
+        self.assertEqual(set(declaration), {'JETBRAINS_MARKETPLACE_TOKEN'})
+        self.assertIs(declaration['JETBRAINS_MARKETPLACE_TOKEN']['required'], False)
+        release = release_tests.UpdateWorkflowTests.workflow('release.yml')
+        caller = release['jobs']['publish-marketplace']
+        self.assertEqual(caller['secrets'], {
+            'JETBRAINS_MARKETPLACE_TOKEN': '${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}',
+        })
+        self.assertNotIn('environment', caller)
+        self.assertEqual(workflow['jobs']['submit']['environment'], 'jetbrains-marketplace')
+        secret_steps = [step for step in workflow['jobs']['submit']['steps']
+                        if 'secrets.' in json.dumps(step)]
+        self.assertEqual(len(secret_steps), 1)
+        self.assertIn('publish_jetbrains_marketplace.py submit', secret_steps[0]['run'])
+        self.assertEqual(secret_steps[0]['env']['JETBRAINS_MARKETPLACE_TOKEN'],
+                         '${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}')
+
     def test_entrypoints_gates_and_permissions(self):
         workflow = release_tests.UpdateWorkflowTests.workflow('marketplace-publish.yml')
         self.assertEqual(set(workflow['on']), {'workflow_call', 'workflow_dispatch'})
