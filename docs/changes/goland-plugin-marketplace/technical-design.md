@@ -2,7 +2,7 @@
 title: GoLand 插件 Marketplace 发布技术方案
 type: technical-design
 status: active
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # GoLand 插件 Marketplace 发布技术方案
@@ -148,6 +148,8 @@ API 表单字段是 `xmlId`，不是说明文字中的 `pluginXmlId`。官方当
 成功响应字段契约已按固定官方 PluginUpdateBean 核对；当前测试使用按该类型构造的 fixture，不冒充真实服务端接收记录。仅有“2xx”而无法核实接收时记 unknown。收据只保存白名单字段，禁止保存 Token、私钥或任意服务端原文。
 
 使用具备可追溯 run 来源的 CI artifact 保存收据；不能从用户提交的任意 JSON 或不受信任 PR artifact 推导成功。收据缺失、过期或写入失败时不保证自动幂等，保留原 run 线索并转人工对账；不为此建立新数据库。
+
+收据 Artifact 下载使用 `Accept: application/vnd.github+json` 发起 GitHub API 请求，并将重定向后的 ZIP 按原始字节读取；只有 Release asset 下载使用 `application/octet-stream`。请求媒体类型与响应是否解析 JSON 分开控制，不能由“下载二进制”推导请求头，否则 Artifact 端点会返回 HTTP 415。依据见 [GitHub Artifact 下载 API](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact)。下载失败只输出固定的本地操作名称，不回显命令输出、服务端原文或凭据。
 
 ### 7.2 不把公开查询当作全部状态
 

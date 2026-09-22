@@ -2,7 +2,7 @@
 title: GoLand 插件 Marketplace 发布测试与验收方案
 type: test-plan
 status: active
-updated: 2026-09-20
+updated: 2026-09-22
 ---
 
 # GoLand 插件 Marketplace 发布测试与验收方案
@@ -31,7 +31,7 @@ updated: 2026-09-20
 | T08 工作流门禁 | publish 失败不提交；bootstrap/paused 明确非提交；非法模式失败；automatic 后置提交 | M05/M06/M07 |
 | T09 协议 | 对 automatic 与 dispatch 重试的实际 multipart 请求断言固定官方 URL、`xmlId=com.reqws.workspace`、`family=intellij`、Stable/非 Hidden、Authorization；缺失/空白/错误 family 必须使协议断言失败；无 Token 泄露/跨域转发 | M07/M11 |
 | T10 响应分类 | 真实协议 fixture 的成功、401/403、明确拒绝、超时、HTML/畸形 JSON、版本冲突分别产生正确结论 | M09/M10 |
-| T11 独立重试 | 同一 Release 产物再次校验；不构建、不签名、不重新发布；可靠收据才跳过 POST | M08/M09 |
+| T11 独立重试 | 同一 Release 产物再次校验；不构建、不签名、不重新发布；可靠收据才跳过 POST；通过实际 GitHub 客户端验证 Artifact 使用 JSON API Accept 读取 ZIP、Release asset 使用 octet-stream，下载失败禁止 POST 且仅输出固定脱敏诊断 | M08/M09 |
 | T12 不确定状态 | 收据缺失、过期、artifact 来源不可信、公开版本列表为空均不自动推断成功/不存在 | M09/M10 |
 | T13 故障隔离 | 市场失败保留公开 Release；不触发旧 Draft 清理；不改变 macOS 审批及四资产集合 | M05/M10 |
 | T14 凭据及日志 | 步骤最小注入、并发入口一致、脱敏收据；只备份到 reqws-secret、明确 commit 读回恢复、消费副本一致、失败/取消清理且无本地备份；无生产密钥进入缓存/artifact | M11 |

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from zipfile import ZipFile
 from email.parser import BytesParser
 from email.policy import default
 
@@ -40,6 +41,56 @@ def release():
 def success():
     # Fields from the pinned official PluginUpdateBean, not a claimed live API sample.
     return {'id': 55, 'pluginId': 40, 'version': '1.2.3', 'channel': '', 'hidden': False}
+
+
+def receipt_archive(receipt):
+    stream = io.BytesIO()
+    with ZipFile(stream, 'w') as archive:
+        archive.writestr('receipt.json', json.dumps(receipt))
+    return stream.getvalue()
+
+
+def github_response(args, **kwargs):
+    """The API media type and the returned archive format are separate contracts."""
+    path = args[2]
+    accept = args[args.index('--header') + 1] if '--header' in args else 'Accept: application/vnd.github+json'
+    expected = ('application/octet-stream' if '/releases/assets/' in path
+                else 'application/vnd.github+json')
+    if accept != 'Accept: ' + expected:
+        return Mock(returncode=1, stdout=b'{"status":"415"}',
+                    stderr=b'gh: Unsupported Accept header (HTTP 415)')
+    return Mock(returncode=0, stdout=b'', stderr=b'')
+
+
+class GitHubDownloadTests(unittest.TestCase):
+    def test_artifact_zip_readback_uses_json_api_accept(self):
+        receipt = candidate()
+        payload = receipt_archive(receipt)
+        def server(args, **kwargs):
+            response = github_response(args, **kwargs)
+            if not response.returncode:
+                response.stdout = payload
+            return response
+        with patch.object(market.subprocess, 'run', side_effect=server):
+            self.assertEqual(market.GitHub().artifact({'id': 50, 'expired': False}), receipt)
+
+    def test_artifact_download_failure_and_size_limit_still_block_readback(self):
+        for code, payload in [(1, b'{"status":"415"}'), (0, b'x' * 100_001)]:
+            with self.subTest(code=code), patch.object(market.subprocess, 'run', return_value=Mock(
+                    returncode=code, stdout=payload, stderr=b'private server text')):
+                with self.assertRaisesRegex(market.PublishingError, '^GitHub API artifact download failed$'):
+                    market.GitHub().artifact({'id': 50, 'expired': False})
+
+    def test_artifact_archive_shape_and_receipt_size_remain_restricted(self):
+        for names in [['receipt.json', 'extra.txt'], ['nested/receipt.json'], ['receipt.json']]:
+            stream = io.BytesIO()
+            with ZipFile(stream, 'w') as archive:
+                for name in names:
+                    archive.writestr(name, b'x' * 16_385 if names == ['receipt.json'] else b'{}')
+            with self.subTest(names=names), patch.object(market.subprocess, 'run', return_value=Mock(
+                    returncode=0, stdout=stream.getvalue(), stderr=b'')):
+                with self.assertRaises(market.UnknownSubmission):
+                    market.GitHub().artifact({'id': 50, 'expired': False})
 
 
 class MarketplaceProtocolTests(unittest.TestCase):
@@ -255,6 +306,91 @@ class SubmissionIntegrationTests(unittest.TestCase):
         self.github.repo.side_effect = lambda path: mutated if path.startswith('releases/') else previous(path)
         with self.assertRaises(ValueError): self.submit()
         self.market.upload.assert_not_called()
+
+    def test_submit_reads_durable_intent_through_github_transport_before_post(self):
+        artifact = {'id': 50, 'name': market.artifact_name('intent', self.candidate),
+                    'workflow_run': {'id': 100}, 'expired': False}
+        responses = {
+            f'repos/{market.REPOSITORY}/actions/artifacts/50': json.dumps(artifact).encode(),
+            f'repos/{market.REPOSITORY}/actions/artifacts/50/zip': receipt_archive(self.intent),
+            f'repos/{market.REPOSITORY}/releases/tags/v1.2.3': json.dumps(release()).encode(),
+        }
+        def server(args, **kwargs):
+            self.market.upload.assert_not_called()
+            response = github_response(args, **kwargs)
+            if not response.returncode:
+                response.stdout = responses[args[2]]
+            return response
+        self.github = market.GitHub()
+        with patch.object(market.subprocess, 'run', side_effect=server):
+            result = self.submit()
+        self.assertEqual(result['outcome'], 'submitted')
+        self.market.upload.assert_called_once_with(self.archive, 'mock-private-token')
+
+    def test_prepare_downloads_release_asset_bytes_with_octet_stream(self):
+        archive = self.archive.read_bytes()
+        checksum = (self.candidate['sha256'] + '  ' + self.archive.name + '\n').encode()
+        current_release = release()
+        for asset, content in zip(current_release['assets'], [archive, checksum]):
+            asset['size'] = len(content)
+        responses = {
+            f'repos/{market.REPOSITORY}/releases/tags/v1.2.3': json.dumps(current_release).encode(),
+            f'repos/{market.REPOSITORY}/releases/assets/30': archive,
+            f'repos/{market.REPOSITORY}/releases/assets/31': checksum,
+        }
+        def server(args, **kwargs):
+            response = github_response(args, **kwargs)
+            if not response.returncode:
+                response.stdout = responses[args[2]]
+            return response
+        download = self.directory / 'download'
+        download.mkdir()
+        with patch.object(market.subprocess, 'run', side_effect=server), \
+                patch.object(market, 'history_decision', return_value='upload'):
+            result = market.prepare(market.GitHub(), self.market, download, Path('signer.jar'), Path('cert.pem'))
+        self.assertEqual(result['outcome'], 'prepared')
+        self.assertEqual((download / self.archive.name).read_bytes(), archive)
+        self.assertEqual((download / 'SHA256SUMS').read_bytes(), checksum)
+        self.market.upload.assert_not_called()
+
+    def test_artifact_download_failure_reports_safe_diagnostic_without_post(self):
+        artifact = {'id': 50, 'name': market.artifact_name('intent', self.candidate),
+                    'workflow_run': {'id': 100}, 'expired': False}
+        def server(args, **kwargs):
+            if args[2].endswith('/zip'):
+                return Mock(returncode=1, stdout=b'{"status":"415"}',
+                            stderr=b'private-token\n::error::untrusted server text')
+            return Mock(returncode=0, stdout=json.dumps(artifact).encode(), stderr=b'')
+        arguments = ['publisher', 'submit', '--directory', str(self.directory),
+                     '--signer', 'signer.jar', '--intent-artifact-id', '50']
+        receipt = {**self.candidate, 'outcome': 'submission-failed', 'postAttempted': False}
+        market.save(self.directory / 'result/receipt.json', receipt)
+        with patch.object(sys, 'argv', arguments), patch.dict(os.environ, {'REQWS_MARKETPLACE_MODE': 'automatic'}), \
+                patch.object(market.subprocess, 'run', side_effect=server), \
+                patch.object(market, 'Marketplace', return_value=self.market), \
+                patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+            self.assertEqual(market.main(), 1)
+        self.market.upload.assert_not_called()
+        self.assertEqual(market.strict_json((self.directory / 'result/receipt.json').read_bytes()), receipt)
+        self.assertIn('submission-failed. GitHub API artifact download failed.', stderr.getvalue())
+        for private in ['private-token', '::error::', 'untrusted server text']:
+            self.assertNotIn(private, stderr.getvalue())
+
+    def test_missing_token_reports_configuration_error_without_post(self):
+        arguments = ['publisher', 'submit', '--directory', str(self.directory),
+                     '--signer', 'signer.jar', '--intent-artifact-id', '50']
+        receipt = {**self.candidate, 'outcome': 'submission-failed', 'postAttempted': False}
+        market.save(self.directory / 'result/receipt.json', receipt)
+        with patch.object(sys, 'argv', arguments), \
+                patch.dict(os.environ, {'REQWS_MARKETPLACE_MODE': 'automatic', 'JETBRAINS_MARKETPLACE_TOKEN': ''}), \
+                patch.object(market, 'GitHub', return_value=self.github), \
+                patch.object(market, 'Marketplace', return_value=self.market), \
+                patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+            self.assertEqual(market.main(), 1)
+        self.market.upload.assert_not_called()
+        self.assertEqual(market.strict_json((self.directory / 'result/receipt.json').read_bytes()), receipt)
+        self.assertIn('submission-failed. JETBRAINS_MARKETPLACE_TOKEN is missing in the jetbrains-marketplace job.',
+                      stderr.getvalue())
 
 
 if __name__ == '__main__':
