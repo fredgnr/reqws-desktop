@@ -17,6 +17,7 @@
 | [首次上架与配置方案](bootstrap-and-operations.md) | active | 定义账号资料、reqws-secret 唯一备份、临时材料清理、Environment 配置与维护流程。 |
 | [测试与验收方案](test-plan.md) | active | 限定发布链测试、市场首次安装及两版本更新验收的证据范围。 |
 | [实施与验收记录](implementation-2026-09-20.md) | active | 记录当前工程检查、生产配置及尚待完成的真实发布和市场验收。 |
+| [跳过上传后的重试修复](history-retry-fix-2026-09-22.md) | active | 记录逐 attempt 的未上传证明、回归范围和旧 tag 不随 main 更新的边界。 |
 
 ## 关联与权威性
 
