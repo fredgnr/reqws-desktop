@@ -71,3 +71,13 @@ JetBrains 缓存代理出现 TLS 握手失败时，本轮使用固定 Gradle 插
 默认专用 profile 不存在，且未配置可选 License Server；没有授权准备证据。未启动完整 GoLand、未代用户登录账号，三组 Starter/Driver 实际 UI 场景及 I1–I8 真实故障演练没有通过结论。后续须按[本机入口](local-integration.md)完成专用环境授权，再对显式候选 ZIP 自动运行。
 
 正式签名候选尚未生成或验证，临时证书测试不能作为正式签名 ZIP 的 API/UI 证据。此前历史验收报告仍仅适用于原候选。只有全部所需证据完成后才能按[实施与验收](implementation-plan.md)完成 V，不能提前撤销未被验证替代的旧覆盖。
+
+## 2026-09-22：CI API 分片日志补充
+
+PR #21 的 [API GO-262.8665.270 job](https://github.com/fredgnr/reqws-desktop/actions/runs/35678320812/job/106591056433?pr=21) 在查阅时已运行约 31 分钟，仍停留在 `Verify exact candidate and frozen target`；其他六个 API 目标已成功。实时页面只有包装命令，没有 Gradle 输出，未完成 job 的归档日志接口返回 404。代码确认包装器此前只将输出写入文件；这是已确认的可观察性缺口，尚不足以确定实际下载阻塞或 JVM 卡死原因。
+
+新增 `verifier_process.py` 实时转发完整输出，并保留原始 `gradle.log`。Gradle 使用 plain/info/stacktrace，控制台记录目标、阶段和每 30 秒心跳；5 分钟静默或 90 分钟超时前采集本次进程组状态和有界 Java 线程栈。取消/超时仍为非通过终态，诊断失败不能掩盖兼容失败；详细产物位置见 [CI 排查说明](../github-actions-ci-release/technical-design.md)。不改目标集合、两并发上限、最低 262、候选字节或 IDE 执行地点。
+
+实际验证：完整工作流脚本测试 117 项通过，包括新增 7 项真实临时进程测试；覆盖实时/部分 UTF-8 输出、心跳、诊断失败、取消、超时及其他进程组不受影响。受控 Java 25 进程成功采集其实际线程栈，未启动 IDE。对原未签名候选在最低 GO 2026.2 / 262.8665.270 上实际运行 Verifier，缓存条件下 51.7 秒通过，实时输出、30 秒心跳、逐目标终态和耗时记录均可见。该次只运行一个目标，不能记成重跑七目标矩阵。
+
+日志分别为 `/tmp/reqws-verifier-logging-workflows.log`、`/tmp/reqws-verifier-diagnostic-probe.log` 和 `/tmp/reqws-verifier-logging-20260922/live.log`，逐目标文件在同目录 `results/GO-262.8665.270`。actionlint、文档检查和静态差异审阅通过。没有重建生产插件、运行 GUI 或处理正式签名材料；原有平台/API/UI 历史证据保持各自范围。新增日志只对后续运行生效，不能据此补写旧 job 未输出的实时诊断。

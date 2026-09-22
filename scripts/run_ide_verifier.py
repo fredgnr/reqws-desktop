@@ -2,15 +2,16 @@
 
 import argparse
 import json
-import os
 import signal
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 from ide_compatibility import ROOT, digest, load_snapshot, write_json
 from plugin_release import validate_plugin
+from verifier_process import announce, run_logged_process, timestamp
 
 # Verifier 1.410 emits these reports even when Gradle's process exit is successful.
 BLOCKING_REPORTS = ('compatibility-problems.txt', 'internal-api-usages.txt',
@@ -46,40 +47,35 @@ def classify(reports, target, version, returncode, task_log=''):
 
 def run_target(snapshot_path, target, archive, version, output, historical=False):
     output.mkdir(parents=True, exist_ok=False)
+    started_at, started = timestamp(), time.monotonic()
+    announce(target['id'], f"validating candidate: version={version}; IDE={target['version']}; "
+             f"archive={archive}; snapshot={snapshot_path}; evidence={output}")
     before = validate_plugin(archive, version, historical=historical)['sha256']
     reports = output / 'reports'
     command = [str(ROOT / 'integrations/goland/gradlew'), '-p', str(ROOT / 'integrations/goland'),
-               'verifyPlugin', '--no-daemon', '--no-configuration-cache', f'-PreleaseVersion={version}',
+               'verifyPlugin', '--no-daemon', '--no-configuration-cache', '--console=plain', '--info', '--stacktrace',
+               f'-PreleaseVersion={version}',
                f'-PreqwsPluginArchive={archive.resolve()}',
                f'-PreqwsVerificationSnapshot={snapshot_path.resolve()}',
                f"-PreqwsVerificationTarget={target['id']}", f'-PreqwsVerificationReports={reports.resolve()}']
     code = None
     log_path = output / 'gradle.log'
     try:
-        with log_path.open('w') as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            try:
-                code = process.wait(timeout=5400)
-            except subprocess.TimeoutExpired:
-                # Only the process group created by this invocation, never a user's IDE.
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    process.wait(timeout=20)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=20)
-                except ProcessLookupError:
-                    pass
-                raise
-        status, message = classify(reports, target, version, code, log_path.read_text())
+        announce(target['id'], f'launching Gradle; live output follows; complete log={log_path}; timeout=5400s')
+        code = run_logged_process(command, log_path, target['id'])
+        announce(target['id'], f'Gradle exited with code={code}; reading terminal verdict from {reports}')
+        status, message = classify(reports, target, version, code, log_path.read_text(errors='replace'))
     except (OSError, subprocess.TimeoutExpired) as error:
         status, message = 'infrastructure-blocked', str(error)
+    except KeyboardInterrupt as error:
+        status, message = 'infrastructure-blocked', str(error) or 'Verification interrupted; owned process group stopped'
     if digest(archive) != before:
         status, message = 'infrastructure-blocked', 'Candidate bytes changed during verification'
     result = {'schemaVersion': 1, 'target': target, 'candidateSha256': before, 'version': version,
-              'snapshotSha256': digest(snapshot_path), 'status': status, 'message': message, 'exitCode': code}
+              'snapshotSha256': digest(snapshot_path), 'status': status, 'message': message, 'exitCode': code,
+              'startedAt': started_at, 'finishedAt': timestamp(), 'durationSeconds': round(time.monotonic() - started, 1)}
     write_json(output / 'result.json', result)
-    print(f"{target['id']}: {status}: {message}", flush=True)
+    announce(target['id'], f"terminal status={status}; duration={result['durationSeconds']}s; {message}")
     return result
 
 
@@ -130,6 +126,12 @@ def main():
 
 
 if __name__ == '__main__':
+    # GitHub cancellation sends SIGINT/SIGTERM before escalation. Preserve the
+    # current target's non-passing result and stop only its own process group.
+    def interrupted(signum, _frame):
+        # BaseException escapes best-effort diagnostic error handling as well.
+        raise KeyboardInterrupt(f'Verification cancelled by signal {signum}; owned process group stopped')
+    signal.signal(signal.SIGTERM, interrupted)
     try:
         main()
     except (OSError, ValueError, KeyError, TypeError) as error:

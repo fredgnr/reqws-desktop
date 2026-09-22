@@ -7,7 +7,7 @@
 | [改造方案](technical-design.md) | active | 定义兼容政策、CI 平台/API 检查与仅本机完整 IDE 集成的边界。 |
 | [实施与验收](implementation-plan.md) | active | 拆分实施任务，列出迁移门槛、负向测试和最终交接要求。 |
 | [开发记录](implementation-2026-09-21.md) | active | 记录 S1–S3 开发、用例迁移映射、运行入口及当时未执行的验证。 |
-| [验证记录](verification-2026-09-21.md) | active | 记录开发后的实际回归结果、修复与本机授权阻塞；不代替完整 V 验收。 |
+| [验证记录](verification-2026-09-21.md) | active | 记录平台/API 回归、早期授权阻塞及 CI 分片日志验证；不代替完整 V 验收。 |
 | [本机回归记录](local-verification-2026-09-22.md) | active | 记录获准启动 IDE 后的自动场景、宿主隔离修复和剩余验收边界。 |
 | [本机集成入口](local-integration.md) | active | 说明专用环境账号授权准备、显式 ZIP 自动集成、状态隔离和独立报告。 |
 

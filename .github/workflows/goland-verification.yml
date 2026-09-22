@@ -59,7 +59,7 @@ jobs:
         run: |
           options=()
           if [[ "$HISTORICAL" == true ]]; then options+=(--historical); fi
-          python3 scripts/run_ide_verifier.py --snapshot targets/targets.json --archive candidate/plugin.zip \
+          python3 -u scripts/run_ide_verifier.py --snapshot targets/targets.json --archive candidate/plugin.zip \
             --version "$(cat candidate/version.txt)" --target "$TARGET" --output api-results "${options[@]}"
       - name: Preserve target verdict and complete logs
         if: ${{ always() }}

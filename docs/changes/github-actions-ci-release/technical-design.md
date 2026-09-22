@@ -2,7 +2,7 @@
 title: GitHub Actions CI 与 Release 技术方案
 type: technical-design
 status: active
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # GitHub Actions CI 与 Release 技术方案
@@ -21,7 +21,15 @@ Desktop 保留 Node 24、`npm ci`、完整 `npm run check` 和 arm64 package smo
 
 `buildPlugin` 依赖生产禁用 API 和 descriptor 策略检查。基线 SDK 为 GO 2026.2，descriptor 只有 `since-build="262"`。CI 从 `package.json` 读取版本，保留编译和全部单元/Light/Heavy 平台覆盖，构建后经 Release ZIP 校验路径导出 `plugin.zip` 与 `version.txt`。独立 job 冻结官方 API 集合，`goland-verification.yml` 对同一 ZIP 执行最多两并发的 API 矩阵。完整 GoLand Starter/Driver 已移到本机，任何 CI 工作流都不启动它或请求 IDE 授权。影响分类仅提示本机集成建议，不触发用户电脑。首次迁移未验收前 PR 保守使用完整正式集合，不能提前退为抽样。
 
-`.github/actions/setup-goland/action.yml` 共享 Temurin 25、Wrapper validation、Gradle setup 和独立 installer 缓存；版本从 `compatibility.properties` 读取。所有第三方 Actions 继续固定到完整 commit SHA。新入口按本轮要求尚未运行，环境与验收缺口见[开发记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)。
+`.github/actions/setup-goland/action.yml` 共享 Temurin 25、Wrapper validation、Gradle setup 和独立 installer 缓存；版本从 `compatibility.properties` 读取。所有第三方 Actions 继续固定到完整 commit SHA。开发状态与分轮执行结果分别见[开发记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)和[验证记录](../ide-plugin-compatibility-automation/verification-2026-09-21.md)，不能把实现描述或日志心跳当作验收通过。
+
+## API 分片长时间无输出的诊断
+
+`goland-verification.yml` 以无缓冲 Python 启动 Verifier 包装器；Gradle 使用 `--console=plain --info --stacktrace`，原始输出实时送到 Actions 并完整保留在 `api-results/<target>/gradle.log`。目标开始、Gradle 退出和兼容终态分别标记；每 30 秒的心跳给出 PID、运行/静默时长、日志字节数及最后一个 Gradle task，不能把心跳当成验证通过。
+
+连续 5 分钟无输出时，在同目录的 `diagnostics/` 保存仅属于本次进程组的进程状态及 Java 线程栈；静默采集最多三轮，90 分钟超时前额外采集一次。每次 Java attach 有 15 秒上限，最多四个 JVM；诊断失败不吞掉原始失败，也不重启任务、放宽超时或跳过目标。`progress.json` 保留当前阶段，`result.json` 记录最终终态、起止时间和耗时。现有 `always()` artifact 步骤收集这些文件，不上传 SDK/依赖缓存，不启用 debug 或环境变量转储。
+
+若运行中的 job 日志下载返回 404，应先看 Actions 实时步骤输出；日志归档尚不可用本身不是卡死证据。下载/解压和 Verifier 活跃计算从 info 输出、日志增长及进程/线程样本判断，缺终态仍不能通过。本改动不改变最低 262、固定 UI 代表版本、冻结目标清单、最多两个 API 重任务并发或候选 ZIP 一致性约束，不启动完整 IDE。
 
 ## 缓存策略
 
