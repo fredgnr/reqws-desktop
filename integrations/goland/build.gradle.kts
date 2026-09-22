@@ -23,6 +23,9 @@ import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.zip.ZipFile
+import java.util.Properties
+import java.time.Duration
+import groovy.json.JsonSlurper
 
 plugins {
   id("org.jetbrains.kotlin.jvm")
@@ -114,7 +117,59 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
 group = "com.reqws.goland"
 // CI and tag builds verify the same explicit version; local builds retain their default.
-version = providers.gradleProperty("releaseVersion").orElse("0.1.5").get()
+version = providers.gradleProperty("releaseVersion").orElse("0.1.6").get()
+
+val compatibilityPolicy = Properties().apply {
+  layout.projectDirectory.file("compatibility.properties").asFile.inputStream().use(::load)
+}
+fun policy(key: String): String = requireNotNull(compatibilityPolicy.getProperty(key)) { "Missing policy: $key" }
+require(policy("minimumPlatformBranch") == "262") { "Only platform branch 262 is approved" }
+require(policy("compileIdeProduct") == "GO" && policy("uiTestIdeProduct") == "GO" && policy("verificationProducts") == "GO")
+val candidateArchive = providers.gradleProperty("reqwsPluginArchive")
+val verificationSnapshot = providers.gradleProperty("reqwsVerificationSnapshot").orNull
+val verificationTarget = providers.gradleProperty("reqwsVerificationTarget").orNull
+val frozenTargets: List<Map<*, *>> = if (verificationSnapshot != null) {
+  val snapshot = JsonSlurper().parse(file(verificationSnapshot)) as Map<*, *>
+  require(snapshot["schemaVersion"] == 1 && snapshot["policy"] == compatibilityPolicy.entries.associate { it.key.toString() to it.value.toString() })
+  val targets = snapshot["targets"] as List<*>
+  require(targets.isNotEmpty()) { "Frozen matrix cannot be empty" }
+  targets.map { it as Map<*, *> }.filter { verificationTarget == null || it["id"] == verificationTarget }.also {
+    require(it.isNotEmpty()) { "Requested target is absent from the frozen matrix" }
+  }
+} else emptyList()
+require(verificationTarget == null || verificationSnapshot != null)
+
+fun sdkInfo(sdk: java.io.File): Map<*, *> {
+  val infoFile = listOf(sdk.resolve("product-info.json"), sdk.resolve("Resources/product-info.json"),
+    sdk.resolve("Contents/Resources/product-info.json")).singleOrNull { it.isFile }
+    ?: error("SDK must have exactly one product-info.json: $sdk")
+  return JsonSlurper().parse(infoFile) as Map<*, *>
+}
+fun validateSdk(path: String, role: String) {
+  val info = sdkInfo(file(path))
+  require(info["productCode"] == policy(role + "IdeProduct") && info["version"] == policy(role + "IdeVersion")) {
+    "$role SDK must be ${policy(role + "IdeProduct")}-${policy(role + "IdeVersion")}; overrides never change the policy"
+  }
+  require(info["buildNumber"] == policy(role + "IdeBuild")) { "SDK build differs from the approved role" }
+  require((info["minRequiredJavaVersion"] as? Number)?.toInt() == 25) { "Baseline requires Java 25 ProductInfo" }
+}
+
+// Optional read-only SDK reuse for local API checks. This never selects a different
+// target, affects compilation, copies user settings, or starts an installed IDE.
+val verifierSdkPaths = providers.gradleProperty("reqwsVerifierSdkPaths").orNull?.let { value ->
+  (JsonSlurper().parseText(value) as List<*>).map { file(it as String) }
+} ?: emptyList()
+fun verifierSdk(version: String, build: String): java.io.File? {
+  val matching = verifierSdkPaths.filter { sdk ->
+    val info = sdkInfo(sdk)
+    require(info["productCode"] == "GO") { "Verifier SDK overrides must be GoLand" }
+    info["version"] == version
+  }
+  require(matching.size <= 1) { "Ambiguous local verifier SDK for $version" }
+  return matching.singleOrNull()?.also {
+    require(sdkInfo(it)["buildNumber"] == build) { "Local verifier SDK differs from frozen target $version / $build" }
+  }
+}
 
 dependencies {
   testImplementation("junit:junit:4.13.2")
@@ -122,16 +177,14 @@ dependencies {
   intellijPlatform {
     val localSdk = providers.gradleProperty("reqwsGoLandSdkPath").orNull
     if (localSdk == null) {
-      goland("2026.2.1.1")
+      goland(policy("compileIdeVersion"))
     } else {
-      val info = file("$localSdk/Contents/Resources/product-info.json")
-      require(info.isFile && info.readText().contains("\"buildNumber\": \"262.9437.286\"")) {
-        "reqwsGoLandSdkPath must identify GO-262.9437.286"
-      }
+      validateSdk(localSdk, "compile")
       local(localSdk)
     }
     testFramework(TestFrameworkType.Platform)
     zipSigner("0.1.43")
+    pluginVerifier(policy("pluginVerifierVersion"))
   }
 }
 
@@ -154,6 +207,9 @@ tasks {
 val releaseNotesVersion = project.version.toString()
 
 intellijPlatform {
+  // ReqWS has no Settings configurables. Do not launch an IDE to index absent options
+  // during CI packaging; full IDE processes belong to the explicit local harness.
+  buildSearchableOptions = false
   caching {
     ides {
       enabled = true
@@ -175,14 +231,40 @@ intellijPlatform {
       "<pre>" + notes.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
     }.get()
     ideaVersion {
-      sinceBuild = "262.9437.286"
-      untilBuild = "262.9437.286"
+      sinceBuild = policy("minimumPlatformBranch")
+      untilBuild = provider { null }
     }
   }
   pluginVerification {
+    failureLevel = listOf(
+      VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+      VerifyPluginTask.FailureLevel.INVALID_PLUGIN,
+      VerifyPluginTask.FailureLevel.MISSING_DEPENDENCIES,
+      VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
+      VerifyPluginTask.FailureLevel.EXPERIMENTAL_API_USAGES,
+      VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
+      VerifyPluginTask.FailureLevel.NON_EXTENDABLE_API_USAGES,
+    )
     ides {
-      val localSdk = providers.gradleProperty("reqwsGoLandSdkPath").orNull
-      if (localSdk == null) create(IntelliJPlatformType.GoLand, "2026.2.1.1") else local(localSdk)
+      fun registerTarget(version: String, build: String) {
+        val sdk = verifierSdk(version, build)
+        if (sdk != null) local(sdk) else create(IntelliJPlatformType.GoLand, version) {
+          // API inspection needs the official SDK, not an OS installer or GUI runtime.
+          useInstaller = false
+        }
+      }
+      if (frozenTargets.isNotEmpty()) {
+        frozenTargets.forEach { target ->
+          require(target["product"] == "GO" && target["channel"] == "release" && target["required"] == true)
+          registerTarget(target["version"] as String, target["build"] as String)
+        }
+      } else {
+        val localSdk = providers.gradleProperty("reqwsGoLandSdkPath").orNull
+        if (localSdk == null) registerTarget(policy("compileIdeVersion"), policy("compileIdeBuild")) else local(localSdk)
+        if (policy("uiTestIdeVersion") != policy("compileIdeVersion")) {
+          registerTarget(policy("uiTestIdeVersion"), policy("uiTestIdeBuild"))
+        }
+      }
     }
   }
 }
@@ -202,6 +284,8 @@ val forbiddenProductionSymbols = listOf(
   "VgoModulesRegistry",
   "VgoIntegrationManager",
   "VgoStatusTracker",
+  "com.intellij.ide.trustedProjects.TrustedProjectsListener",
+  "com/intellij/ide/trustedProjects/TrustedProjectsListener",
   "trackModule",
   "scheduleUpdatingDependenciesOfAllModules",
   "scheduleUpdatingDependencies",
@@ -255,8 +339,27 @@ tasks.named("buildPlugin") {
   dependsOn(verifyForbiddenProductionSymbols)
 }
 
-// Offline verification still checks the exact local SDK and all bundled dependencies.
+// Offline verification retains API/dependency checks; CI requires fresh frozen targets.
 tasks.named<VerifyPluginTask>("verifyPlugin") {
+  notCompatibleWithConfigurationCache("Frozen ProductInfo assertions use this run's target snapshot")
+  mustRunAfter("compileIntegrationTestKotlin", "test", "verifyBaselineTestReports")
+  if (candidateArchive.isPresent) archiveFile.set(file(candidateArchive.get()))
+  // Verifier recreates its reports tree. Keep downloaded dependencies outside it.
+  verificationReportsDirectory.set(layout.buildDirectory.dir("reports/pluginVerifier/results"))
+  providers.gradleProperty("reqwsVerificationReports").orNull?.let { verificationReportsDirectory.set(file(it)) }
+  // A user's shared Verifier cache may contain unrelated Marketplace plugins whose
+  // metadata lookup can fail before this candidate is inspected. Keep our cache scoped.
+  systemProperty("plugin.verifier.home.dir", layout.buildDirectory.dir("reports/pluginVerifier/verifier-home").get().asFile)
+  doFirst {
+    if (frozenTargets.isNotEmpty()) {
+      val expected = frozenTargets.map { "${it["product"]}-${it["build"]}" }.toSet()
+      val actual = ides.files.map { sdk ->
+        val info = sdkInfo(sdk)
+        "${info["productCode"]}-${info["buildNumber"]}"
+      }.toSet()
+      require(actual == expected) { "Downloaded IDE ProductInfo differs from frozen targets: $actual / $expected" }
+    }
+  }
   offline = providers.gradleProperty("reqwsVerifierOffline").map(String::toBoolean).orElse(false)
 }
 
@@ -318,4 +421,119 @@ tasks.register<ExportPluginArchiveTask>("exportPluginArchivePath") {
     archive.set(tasks.named<BuildPluginTask>("buildPlugin").flatMap { it.archiveFile })
   }
   pathFile.set(layout.buildDirectory.file("release/plugin-archive.txt"))
+}
+
+val verifyCompatibilityDescriptor by tasks.registering(Exec::class) {
+  dependsOn("patchPluginXml")
+  commandLine("python3", "../../scripts/ide_compatibility.py", "descriptor",
+    "src/main/resources/META-INF/plugin.xml", "build/tmp/patchPluginXml/plugin.xml")
+}
+tasks.named("buildPlugin") { dependsOn(verifyCompatibilityDescriptor) }
+
+// Host-side Starter/Driver dependencies never extend production configurations.
+val integrationTestSourceSet = sourceSets.create("integrationTest")
+dependencies {
+  val starterVersion = policy("starterVersion")
+  listOf("ide-starter-squashed", "ide-starter-driver", "ide-starter-product-goland").forEach {
+    add(integrationTestSourceSet.implementationConfigurationName, "com.jetbrains.intellij.tools:$it:$starterVersion")
+  }
+  listOf("driver-client", "driver-sdk", "driver-model").forEach {
+    add(integrationTestSourceSet.implementationConfigurationName, "com.jetbrains.intellij.driver:$it:$starterVersion")
+  }
+  add(integrationTestSourceSet.implementationConfigurationName, "org.jetbrains.kotlin:kotlin-stdlib:2.4.0")
+  add(integrationTestSourceSet.implementationConfigurationName, "org.junit.jupiter:junit-jupiter:5.11.4")
+  add(integrationTestSourceSet.runtimeOnlyConfigurationName, "org.junit.platform:junit-platform-launcher:1.11.4")
+  add(integrationTestSourceSet.implementationConfigurationName, "org.kodein.di:kodein-di-jvm:7.26.1")
+}
+// Starter's optional JUnit listeners kill processes by a shared "ide-tests" path match.
+// Local sessions own explicit process handles; never load that global cleanup extension.
+configurations.matching { it.name.startsWith("integrationTest") }.configureEach {
+  exclude(group = "com.jetbrains.intellij.tools", module = "ide-starter-junit5")
+}
+val integrationTest by tasks.registering(Test::class) {
+  notCompatibleWithConfigurationCache("Each integration run allocates isolated process state and a fresh evidence directory")
+  description = "Local-only: runs three complete-IDE scenario groups against an explicit candidate ZIP."
+  group = "verification"
+  testClassesDirs = integrationTestSourceSet.output.classesDirs
+  classpath = integrationTestSourceSet.runtimeClasspath
+  useJUnitPlatform()
+  maxParallelForks = 1
+  failOnNoDiscoveredTests = true
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+  timeout.set(Duration.ofMinutes(50))
+  systemProperty("java.awt.headless", "false")
+  systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
+  systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
+  systemProperty("reqws.plugin.version", project.version.toString())
+  systemProperty("junit.jupiter.extensions.autodetection.enabled", "false")
+  if (providers.gradleProperty("reqwsLocalIdeRunRoot").isPresent) {
+    val runRoot = file(providers.gradleProperty("reqwsLocalIdeRunRoot").get())
+    reports.junitXml.outputLocation.set(runRoot.resolve("junit"))
+    reports.html.outputLocation.set(runRoot.resolve("test-report"))
+  }
+  doFirst {
+    val (runRoot, profile) = requireLocalIdeLauncher()
+    require(candidateArchive.isPresent) { "Supply the exact candidate ZIP through scripts/run_local_ide.py run" }
+    require(file(candidateArchive.get()).isFile)
+    systemProperty("reqws.plugin.archive", file(candidateArchive.get()).absolutePath)
+    systemProperty("reqws.plugin.expectedSha256", providers.gradleProperty("reqwsPluginSha256").get())
+    systemProperty("reqws.integration.root", runRoot.absolutePath)
+    systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+  }
+}
+
+fun requireLocalIdeLauncher(): Pair<java.io.File, java.io.File> {
+  require(listOf("CI", "GITHUB_ACTIONS", "TEAMCITY_VERSION", "JENKINS_URL", "BUILD_BUILDID").none {
+    providers.environmentVariable(it).orNull?.lowercase() !in listOf(null, "", "0", "false")
+  }) { "Complete IDE startup is local-only. Heavy platform tests remain in CI." }
+  val runRoot = file(providers.gradleProperty("reqwsLocalIdeRunRoot").get())
+  val profile = file(providers.gradleProperty("reqwsLocalIdeProfile").get())
+  require(runRoot.isDirectory && profile.resolve(".reqws-ide-profile.json").isFile)
+  require(runRoot.resolve("host-home").mkdirs() || runRoot.resolve("host-home").isDirectory)
+  require(providers.environmentVariable("REQWS_LOCAL_IDE_RUN_ROOT").orNull == runRoot.absolutePath &&
+    providers.environmentVariable("REQWS_LOCAL_IDE_PROFILE").orNull == profile.absolutePath) {
+    "Use scripts/run_local_ide.py to lock the dedicated profile and allocate fresh run state"
+  }
+  return runRoot to profile
+}
+
+val verifyIdeIntegrationReports by tasks.registering(Exec::class) {
+  notCompatibleWithConfigurationCache("Local report location is unique to this run")
+  mustRunAfter(integrationTest)
+  doFirst {
+    val (runRoot, _) = requireLocalIdeLauncher()
+    commandLine("python3", "../../scripts/check_ide_test_reports.py",
+      runRoot.resolve("junit"), runRoot.resolve("run-root.txt"))
+  }
+}
+integrationTest.configure { finalizedBy(verifyIdeIntegrationReports) }
+tasks.register("checkIdeIntegration") {
+  description = "Local-only integration; invoke with scripts/run_local_ide.py run. Never rebuilds the candidate."
+  group = "verification"
+  dependsOn(integrationTest, verifyIdeIntegrationReports)
+}
+
+tasks.register<JavaExec>("prepareLocalIdeAuthorization") {
+  notCompatibleWithConfigurationCache("Interactive local authorization uses a dedicated profile and a fresh run directory")
+  description = "Local-only: opens the dedicated GoLand authorization environment without a business project."
+  group = "verification"
+  classpath = integrationTestSourceSet.runtimeClasspath
+  mainClass.set("com.reqws.goland.LocalIdeAuthorization")
+  timeout.set(Duration.ofMinutes(50))
+  systemProperty("java.awt.headless", "false")
+  systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
+  systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
+  doFirst {
+    val (runRoot, profile) = requireLocalIdeLauncher()
+    systemProperty("reqws.integration.root", runRoot.absolutePath)
+    systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+  }
+}
+
+val verifyBaselineTestReports by tasks.registering(Exec::class) {
+  dependsOn("test")
+  commandLine("python3", "../../scripts/check_junit_reports.py", "build/test-results/test")
 }

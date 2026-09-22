@@ -33,7 +33,8 @@ class PluginReleaseTests(unittest.TestCase):
             jar.writestr("com/reqws/Example.class", b"fixture")
             if descriptor:
                 jar.writestr("META-INF/plugin.xml", f'<idea-plugin><id>{plugin_id}</id><name>ReqWS</name><version>{version}</version>'
-                             '<idea-version since-build="262.9437.286" until-build="262.9437.286"/>'
+                             '<idea-version since-build="262"/>'
+                             '<depends>com.intellij.modules.platform</depends><depends>com.intellij.modules.goland</depends><depends>com.intellij.modules.vcs</depends>'
                              '<vendor email="z513317651@gmail.com" url="https://github.com/fredgnr/reqws-desktop">fredgnr</vendor>'
                              '<description>ReqWS Desktop workspace integration.</description>'
                              '<change-notes>First signed distribution.</change-notes></idea-plugin>')
@@ -128,8 +129,13 @@ class PluginReleaseTests(unittest.TestCase):
     def test_rejects_incomplete_metadata_and_xml_entities(self):
         mutations = [
             ('<name>ReqWS</name>', '<name>Other</name>'),
-            ('since-build="262.9437.286"', 'since-build="261"'),
-            ('until-build="262.9437.286"', 'until-build="262.*"'),
+            ('since-build="262"', 'since-build="261"'),
+            ('since-build="262"', 'since-build="262.*"'),
+            ('since-build="262"', 'since-build="262.9437.286"'),
+            ('since-build="262"', 'since-build="263"'),
+            ('since-build="262"', 'since-build="262" until-build="262.*"'),
+            ('since-build="262"', 'since-build="262" strict-until-build="263"'),
+            ('<depends>com.intellij.modules.goland</depends>', ''),
             ('z513317651@gmail.com', ''),
             ('First signed distribution.', 'TODO'),
             ('First signed distribution.', ''),

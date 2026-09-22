@@ -2,12 +2,14 @@
 title: GoLand 工作加载集合测试与本地验收
 type: test-plan
 status: active
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # GoLand 工作加载集合测试与本地验收
 
 本计划验证 ReqWS 控制链、项目模型、持久化和用户配置保护；GUI 直接通过 GoLand 普通 Project 面板观察目录与文件。
+
+后续版本政策和自动化替代以[兼容与自动化方案](../ide-plugin-compatibility-automation/README.md)为准：只有完整 Starter/Driver 进程/UI 场景移到本机，Light/Heavy 平台测试继续在 CI；不新增最高版本 GUI。G1–G6 的迁移映射见[开发记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)：本轮未执行替代验证，保留未替代覆盖。专用环境可交互登录 JetBrains Account，具体命令与同产物报告见[本机入口](../ide-plugin-compatibility-automation/local-integration.md)。日常用户 IDE 安装仍需 manual-only 工作流授权。
 
 ## 1. 固定测试原则
 

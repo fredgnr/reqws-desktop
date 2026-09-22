@@ -24,6 +24,8 @@
 
 插件保持[语言解耦契约](../ide-plugin-language-decoupling/README.md)与[IDE 插件开发测试规范](../../standards/ide-plugin-development-testing.md)的边界。现有 [macOS 自更新](../macos-self-update/README.md)签名身份、审批和资产验证不被替换。
 
+兼容范围与签名后同产物验证见[兼容开发记录](../ide-plugin-compatibility-automation/implementation-2026-09-21.md)。CI 保留平台/API 等自动检查，完整 IDE 集成仅本机；本机报告须绑定最终签名 ZIP，CI 绿色不算 UI 通过。本轮未验证，不能沿用 PR #16 的单目标报告证明新范围通过。
+
 ## 凭据保存约定
 
 全部密钥、公钥、证书链及关联密码、发布 Token 统一在私有仓库 [fredgnr/reqws-secret](https://github.com/fredgnr/reqws-secret) 持久备份，不做本地备份。GitHub Environment Secrets 是受保护的运行时副本；源码中的公开证书仅是验签消费副本，其原件也保存在私库。本地仅允许操作期间的受限临时材料，完成或失败退出时清理，不保留私库 clone 或固定凭据目录。具体备份、读回恢复验证及清理顺序见[配置方案](bootstrap-and-operations.md#33-远端备份读回验证与本地清理)。

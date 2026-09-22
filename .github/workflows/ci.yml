@@ -26,7 +26,48 @@ defaults:
     shell: bash
 
 jobs:
+  impact:
+    name: Classify change impact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      docsOnly: ${{ steps.impact.outputs.docsOnly }}
+      plugin: ${{ steps.impact.outputs.plugin }}
+      localIntegrationRecommended: ${{ steps.impact.outputs.localIntegrationRecommended }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: impact
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/ide_ci.py --base "$BASE" --output impact.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-impact
+          path: impact.json
+          retention-days: 14
+
+  docs:
+    name: Documentation checks
+    needs: impact
+    if: ${{ needs.impact.outputs.docsOnly == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: npm run docs:check
+
   project-checks:
+    needs: impact
+    if: ${{ needs.impact.outputs.docsOnly != 'true' }}
     name: Project and workflow checks
     runs-on: macos-15
     timeout-minutes: 45
@@ -72,6 +113,8 @@ jobs:
         run: npm run check
 
   macos-package:
+    needs: impact
+    if: ${{ needs.impact.outputs.docsOnly != 'true' }}
     name: macOS package smoke
     runs-on: macos-15
     timeout-minutes: 45
@@ -101,7 +144,7 @@ jobs:
   checks:
     name: Checks and macOS package smoke
     if: ${{ always() }}
-    needs: [project-checks, macos-package]
+    needs: [impact, docs, project-checks, macos-package]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -129,47 +172,126 @@ jobs:
 
       - name: Require both Desktop gates
         env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          DOCS_ONLY: ${{ needs.impact.outputs.docsOnly }}
+          DOCS_RESULT: ${{ needs.docs.result }}
           CHECK_RESULT: ${{ needs.project-checks.result }}
           PACKAGE_RESULT: ${{ needs.macos-package.result }}
         run: |
-          test "$CHECK_RESULT" = success
-          test "$PACKAGE_RESULT" = success
+          test "$IMPACT_RESULT" = success
+          if [[ "$DOCS_ONLY" == true ]]; then
+            test "$DOCS_RESULT" = success
+            test "$CHECK_RESULT" = skipped
+            test "$PACKAGE_RESULT" = skipped
+          else
+            test "$CHECK_RESULT" = success
+            test "$PACKAGE_RESULT" = success
+          fi
 
-  goland-plugin:
-    name: GoLand plugin checks
+  plugin-targets:
+    name: Freeze official GoLand targets
+    needs: impact
+    if: ${{ needs.impact.outputs.plugin == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: targets
+        # Until first 262 acceptance is recorded, scan the full stable set on every PR.
+        run: python3 scripts/ide_compatibility.py resolve --mode full --output targets/targets.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-ide-targets
+          path: targets/targets.json
+          if-no-files-found: error
+          retention-days: 14
+
+  plugin-build:
+    name: Baseline GoLand tests and candidate
+    needs: impact
+    if: ${{ needs.impact.outputs.plugin == 'true' }}
     runs-on: macos-15
     timeout-minutes: 120
     env:
       CI: 'true'
-
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up GoLand build
-        uses: ./.github/actions/setup-goland
+      - uses: ./.github/actions/setup-goland
         with:
           cache-write: 'true'
-
-      # Exercise the same version override and ZIP staging as a tag build, without publishing.
       - name: Read plugin candidate version
         id: version
         run: |
           version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-
-      - name: Test, verify, and package the plugin
-        working-directory: integrations/goland
+      - name: Retain baseline tests and structural gates; build once
         env:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
-        run: ./gradlew test verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
-
-      - name: Verify plugin release ZIP and version
-        env:
-          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
-        run: python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
-
-      - name: Verify the versioned GoLand download cache paths
+        run: |
+          ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
+            verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+          python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
+          python3 scripts/stage_ide_candidate.py --input "dist/release/ReqWS-${PLUGIN_VERSION}-goland-plugin.zip" --version "$PLUGIN_VERSION"
+      - name: Verify versioned download cache paths
         run: python3 scripts/ci-cache-config.py goland-downloads
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-ide-candidate
+          path: candidate
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve baseline reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-ide-baseline
+          path: |
+            integrations/goland/build/test-results
+            integrations/goland/build/reports
+            !integrations/goland/build/reports/pluginVerifier/verifier-home/**
+          if-no-files-found: error
+          retention-days: 14
+
+  plugin-verification:
+    needs: [impact, plugin-targets, plugin-build]
+    if: ${{ needs.impact.outputs.plugin == 'true' }}
+    uses: ./.github/workflows/goland-verification.yml
+    with:
+      candidate-artifact: ci-ide-candidate
+      targets-artifact: ci-ide-targets
+      matrix: ${{ needs.plugin-targets.outputs.matrix }}
+      evidence-artifact: ci-ide-evidence
+
+  goland-plugin:
+    name: GoLand plugin checks
+    if: ${{ always() }}
+    needs: [impact, plugin-targets, plugin-build, plugin-verification]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require all applicable automatic CI GoLand gates
+        env:
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          PLUGIN_REQUIRED: ${{ needs.impact.outputs.plugin }}
+          TARGETS_RESULT: ${{ needs.plugin-targets.result }}
+          BUILD_RESULT: ${{ needs.plugin-build.result }}
+          VERIFICATION_RESULT: ${{ needs.plugin-verification.result }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from ide_ci import aggregate
+          print(aggregate({'plugin': os.environ['PLUGIN_REQUIRED'] == 'true', 'reason': 'Impact classifier found no plugin changes'},
+            {key: os.environ[name] for key, name in [('impact', 'IMPACT_RESULT'), ('targets', 'TARGETS_RESULT'),
+              ('build', 'BUILD_RESULT'), ('verification', 'VERIFICATION_RESULT')]}))
+          PYTHON
+          echo "Local IDE integration: not run by CI; see the separate candidate-bound local report." >> "$GITHUB_STEP_SUMMARY"

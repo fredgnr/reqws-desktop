@@ -32,6 +32,20 @@ class ReqwsProjectLoadEngineTest {
   }
 
   @Test
+  fun `revokes live proof while retaining the applied digest after trust is lost`() {
+    val root = createWorkspace("revoked", listOf("api"))
+    val trusted = ReqwsProjectLoadEngine(ManifestReader(), ReqwsTrustGate { true })
+      .load(root, ReqwsProjectState.INACTIVE).afterSuccessfulProjection("a".repeat(64))
+
+    val blocked = ReqwsProjectLoadEngine(ManifestReader(), ReqwsTrustGate { false }).load(root, trusted)
+
+    assertEquals(ReqwsLifecycleState.SAFE_MODE_BLOCKED, blocked.lifecycle)
+    assertEquals(trusted.lastAppliedDigest, blocked.lastAppliedDigest)
+    assertNotNull(blocked.snapshot)
+    assertNull(blocked.validatedProjectionDigest)
+  }
+
+  @Test
   fun `marks missing repositories degraded without creating them`() {
     val root = createWorkspace("missing", listOf("missing-repository"), createRepositories = false)
     val engine = ReqwsProjectLoadEngine(ManifestReader(), ReqwsTrustGate { true })

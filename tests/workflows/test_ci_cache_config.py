@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
 SPEC = importlib.util.spec_from_file_location('ci_cache_config', ROOT / 'scripts/ci-cache-config.py')
 CACHE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CACHE)
@@ -29,7 +30,9 @@ class CacheConfigTests(unittest.TestCase):
         self.write_lock()
         self.gradle = self.root / 'integrations/goland/build.gradle.kts'
         self.gradle.parent.mkdir(parents=True)
-        self.gradle.write_text('goland("2026.2.1.1")\ncreate(IntelliJPlatformType.GoLand, "2026.2.1.1")\n')
+        self.gradle.write_text('// Gradle consumes compatibility.properties\n')
+        self.policy = self.gradle.with_name('compatibility.properties')
+        self.policy.write_text((ROOT / 'integrations/goland/compatibility.properties').read_text())
 
     def write_lock(self):
         (self.root / 'package-lock.json').write_text(json.dumps(self.lock))
@@ -114,27 +117,30 @@ class CacheConfigTests(unittest.TestCase):
             stream.write('\ntasks.named("test") { maxParallelForks = 2 }\n// goland("2025.1")\n')
         self.assertEqual(before, CACHE.goland_keys(self.root))
 
-    def test_matching_ide_upgrade_changes_download_key(self):
-        self.gradle.write_text(self.gradle.read_text().replace('2026.2.1.1', '2026.2.2'))
-        self.assertEqual(CACHE.goland_keys(self.root), {'goland-version': '2026.2.2'})
+    def test_compile_upgrade_changes_only_compile_download_key(self):
+        self.policy.write_text(self.policy.read_text().replace('compileIdeVersion=2026.2', 'compileIdeVersion=2026.2.2'))
+        self.assertEqual(CACHE.goland_keys(self.root)['goland-version'], '2026.2.2')
+        self.assertEqual(CACHE.goland_keys(self.root)['goland-ui-version'], '2026.2.1.1')
 
-    def test_mismatching_build_and_verifier_fail_closed(self):
-        self.gradle.write_text(self.gradle.read_text().replace('2026.2.1.1', '2026.2.2', 1))
-        with self.assertRaises(ValueError): CACHE.goland_keys(self.root)
+    def test_ui_and_regression_targets_do_not_change_compile_key(self):
+        before = CACHE.goland_keys(self.root)['goland-version']
+        self.policy.write_text(self.policy.read_text().replace('uiTestIdeVersion=2026.2.1.1', 'uiTestIdeVersion=2026.2.2')
+                               .replace('regressionVersions=', 'regressionVersions=GO:2026.2.0.1'))
+        self.assertEqual(CACHE.goland_keys(self.root)['goland-version'], before)
 
-    def test_dynamic_or_multiple_ide_declarations_require_reader_update(self):
-        original = self.gradle.read_text()
-        for source in [original.replace('goland("2026.2.1.1")', 'goland(versionProvider)'),
-                       original + '\ngoland("2026.2.1.1")', '']:
-            self.gradle.write_text(source)
+    def test_duplicate_dynamic_or_wrong_product_policy_fails_closed(self):
+        original = self.policy.read_text()
+        for value in [original + 'compileIdeVersion=2026.2\n', original.replace('GO', 'IU'),
+                      original.replace('compileIdeVersion=2026.2', 'compileIdeVersion=latest')]:
+            self.policy.write_text(value)
             with self.assertRaises(ValueError): CACHE.goland_keys(self.root)
 
-    def test_whitespace_and_block_comments_do_not_change_ide_version(self):
-        self.gradle.write_text('/* goland("2025.1") */\ngoland( "2026.2.1.1" )\ncreate(\n IntelliJPlatformType.GoLand,\n "2026.2.1.1" )')
-        self.assertEqual(CACHE.goland_keys(self.root)['goland-version'], '2026.2.1.1')
+    def test_comments_do_not_change_ide_version(self):
+        self.policy.write_text(self.policy.read_text() + '# compileIdeVersion=2025.1\n')
+        self.assertEqual(CACHE.goland_keys(self.root)['goland-version'], '2026.2')
 
     def test_cache_path_audit_rejects_metadata_without_installer(self):
-        directory = self.root / '.gradle/caches/modules-2/files-2.1/go/goland/2026.2.1.1/hash'
+        directory = self.root / '.gradle/caches/modules-2/files-2.1/go/goland/2026.2/hash'
         directory.mkdir(parents=True)
         (directory / 'goland.pom').write_text('fixture')
         with self.assertRaises(ValueError): CACHE.goland_downloads(self.root, self.root)
@@ -148,7 +154,7 @@ class CacheConfigTests(unittest.TestCase):
         directory.mkdir(parents=True)
         (directory / 'goland.zip').write_bytes(b'old fixture')
         with self.assertRaises(ValueError): CACHE.goland_downloads(self.root, self.root)
-        directory = base / '2026.2.1.1/hash'
+        directory = base / '2026.2/hash'
         directory.mkdir(parents=True)
         archive = directory / 'goland.zip'
         archive.write_bytes(b'current fixture')
@@ -229,11 +235,11 @@ class CacheWorkflowTests(unittest.TestCase):
         gate = ci['jobs']['checks']
         self.assertEqual(gate['name'], 'Checks and macOS package smoke')
         self.assertEqual(gate['if'], '${{ always() }}')
-        self.assertEqual(set(gate['needs']), {'project-checks', 'macos-package'})
+        self.assertEqual(set(gate['needs']), {'impact', 'docs', 'project-checks', 'macos-package'})
         run = gate['steps'][-1]['run']
         for left in ['success', 'failure', 'cancelled', 'skipped']:
             for right in ['success', 'failure', 'cancelled', 'skipped']:
-                result = subprocess.run(['bash', '-e', '-c', run], env={**os.environ, 'CHECK_RESULT': left, 'PACKAGE_RESULT': right})
+                result = subprocess.run(['bash', '-e', '-c', run], env={**os.environ, 'CHECK_RESULT': left, 'PACKAGE_RESULT': right, 'IMPACT_RESULT': 'success', 'DOCS_ONLY': 'false', 'DOCS_RESULT': 'skipped'})
                 self.assertEqual(result.returncode == 0, left == right == 'success')
         self.assertNotIn('secrets.', json.dumps(ci))
 
@@ -259,8 +265,8 @@ class CacheWorkflowTests(unittest.TestCase):
                     if name.endswith('cache-write'):
                         self.assertEqual(value, 'false')
         for workflow in ['ci.yml', 'release.yml']:
-            job = load_yaml('.github/workflows/' + workflow)['jobs']['goland-plugin']
-            command = next(s['run'] for s in job['steps'] if './gradlew test ' in s.get('run', ''))
+            job = load_yaml('.github/workflows/' + workflow)['jobs']['plugin-build' if workflow == 'ci.yml' else 'goland-plugin']
+            command = next(s['run'] for s in job['steps'] if 'verifyPluginProjectConfiguration' in s.get('run', ''))
             self.assertNotIn('--no-build-cache', command)
             self.assertIn('verifyPlugin', command)
 

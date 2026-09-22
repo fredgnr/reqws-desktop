@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-20
+updated: 2026-09-22
 ---
 
 # ReqWS 开发指南
@@ -272,7 +272,7 @@ npm run package:macos -- --skip-ci --skip-check
 
 GitHub Actions 的 branch/PR 检查和 tag Release 契约见 [CI 与 Release 需求包](../changes/github-actions-ci-release/README.md)。发布只接受默认分支上与 `package.json`、`package-lock.json` 一致的 `vMAJOR.MINOR.PATCH`。历史 ad-hoc 资产保持不变；后续工作流采用[个人自签名方案](../changes/macos-self-update/technical-design.md)，带 Hardened Runtime，但没有 Developer ID 或 Apple 公证。首个可更新版本需要手动 bootstrap。
 
-CI 保留只读权限的 `goland-plugin` job，在 macOS + JDK 25 上执行全部既有插件检查及单目标 GO-262.9437.286 Verifier，并校验候选 ZIP 的 ID/版本。后续 Release 在 tag 校验后并行执行完整 Desktop 检查、arm64 app 打包和完整插件检查/打包，全部成功后才发布 `ReqWS-<version>-macos-arm64.zip`、`ReqWS-<version>-goland-plugin.zip`、`latest-mac.yml` 与覆盖前三个资产的 `SHA256SUMS`；不再构建 x64 app。插件作为独立作者签名附件，不嵌入 app 或自动安装；Marketplace 后置提交由 bootstrap/automatic/paused 模式控制，审核状态单独记录。
+CI 保留 `GoLand plugin checks` 汇总名称，在 macOS + JDK 25 上执行最低 GO 2026.2 的编译、全部单元与 Light/Heavy 平台测试、禁用 API、结构/产物策略和冻结 API 矩阵；`HeavyPlatformTestCase` 不迁出。`npm run check:goland` 保留这组自动入口。完整 GoLand 的 Starter/Driver 只在本机固定 2026.2.1.1 运行，通过 `prepare:goland:authorization` 在专用环境交互准备账号授权，再由 `check:goland:integration -- --profile ... --archive ... --version ...` 自动消费已有 ZIP、不重建生产插件，详见[本机入口](../changes/ide-plugin-compatibility-automation/local-integration.md)。CI/PR/Release/定期任务不启动完整 IDE、不配置 License Server 或 IDE 凭据；本机授权可用 JetBrains Account，License Server 可选。Release 在 tag、Desktop 检查、arm64 打包、插件平台检查及最终签名 ZIP 的完整 API 证据通过后发布原约定资产，保留签名/Marketplace 边界。本机 UI 状态另报，不能由 CI 绿色推断；正式签名 ZIP 不能借用签名前结果。实际检查与未完成项见[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)，本机完整 IDE 与远端工作流执行不能由本地检查推断。
 
 Desktop package job 使用受保护的 `macos-release` Environment，私钥只传给 `with-macos-signing.mjs` 的单一步骤。其子命令 `build-macos-release.mts VERSION` 在临时信任有效期间完成签名、ZIP 解压复验和元数据生成，随后把本轮证书的管理员 Code Signing 信任改为明确拒绝并读回验证，再删除钥匙串及 P12。拒绝记录保留到一次性 runner 回收，避免删除最后一条管理员信任记录时等待交互授权；不修改系统授权规则，不适用于维护者本机的身份清理。publish job 校验精确资产集，并下载 draft 校验实际字节后才公开；不能只依据非零大小。正式 CER 与 Secrets 配置见[技术方案 §4](../changes/macos-self-update/technical-design.md#4-一次性生成密钥与证书)。
 

@@ -1,7 +1,7 @@
 {
   "name": "reqws-desktop",
   "productName": "ReqWS",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "A local macOS feature workspace manager for physically isolated multi-repository Git work.",
   "main": ".vite/build/main.js",
   "private": true,
@@ -22,7 +22,9 @@
     "i18n:check": "node scripts/check-i18n.mjs",
     "docs:check": "node scripts/check-docs.mjs",
     "check": "npm run typecheck && npm run lint && npm run i18n:check && npm run docs:check && npm test",
-    "check:goland": "./integrations/goland/gradlew -p integrations/goland test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin",
+    "check:goland": "python3 scripts/check_goland.py",
+    "check:goland:integration": "python3 scripts/run_local_ide.py run",
+    "prepare:goland:authorization": "python3 scripts/run_local_ide.py prepare",
     "package:goland": "./integrations/goland/gradlew -p integrations/goland verifyForbiddenProductionSymbols buildPlugin",
     "package:macos": "node scripts/run-install-macos.mjs --package-only",
     "install:macos": "node scripts/run-install-macos.mjs"

@@ -2,7 +2,7 @@
 title: GoLand 插件 Marketplace 发布技术方案
 type: technical-design
 status: active
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # GoLand 插件 Marketplace 发布技术方案
@@ -49,7 +49,7 @@ updated: 2026-09-20
 
 新增 `integrations/goland/CHANGELOG.md` 作为插件专属变更来源。S0 冻结简单的按 `## X.Y.Z` 分节约定，发布提取且转义该版本内容，缺失/空白/占位内容失败；不直接把包含 Desktop 内容的自动 GitHub notes 写入插件。Markdown 说明不自动触发 UI catalog 翻译工作流。
 
-实现基线已更新为 PR #16 的 `1f55654ef4b8f57cb72989a12edcee7037329ac1`，沿用已合入的唯一 GoLand 2026.2.1.1 / GO-262.9437.286：sinceBuild 与 untilBuild 均为 `262.9437.286`，Verifier 仅使用这一目标。不恢复 261 适配，也不扩展到未经验证的 262 构建。
+PR #16 的实现基线 `1f55654ef4b8f57cb72989a12edcee7037329ac1` 当时使用精确 GO-262.9437.286 范围，历史证据保持原义。后续按[兼容方案](../ide-plugin-compatibility-automation/README.md)改为 `since-build="262"`、无普通或 strict 上限；发布先形成最终签名 ZIP，再由 CI 的完整正式 API 集合验证并在公开前核对字节绑定。完整 IDE 集成仅本机固定环境运行，单独出报告，不能借用签名前 ZIP 的 UI 证据。发布工作流不启动完整 IDE、不接收 IDE 授权凭据，CI 通过也不代表本机 UI 通过。2026-09-21 开发轮次未测试，不宣称新范围已验收；不自动修改 Marketplace 远端人工兼容限制或发布授权。
 
 ## 4. 签名、产物选择与校验
 

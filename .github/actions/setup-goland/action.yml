@@ -47,5 +47,5 @@ runs:
         path: |
           ~/.gradle/caches/modules-2/files-2.1/go/goland/${{ steps.versions.outputs.goland-version }}
           ~/.gradle/caches/modules-2/files-2.1/com.jetbrains.intellij.goland/goland/${{ steps.versions.outputs.goland-version }}
-        key: goland-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.goland-version }}
+        key: goland-downloads-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.goland-product }}-${{ steps.versions.outputs.goland-version }}
         write: ${{ inputs.cache-write }}

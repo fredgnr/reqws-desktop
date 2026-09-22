@@ -2,7 +2,7 @@
 title: IDE 插件开发与测试规范
 type: governance
 status: active
-updated: 2026-09-19
+updated: 2026-09-22
 ---
 
 # IDE 插件开发与测试规范
@@ -37,7 +37,7 @@ manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检
 
 通过公开受支持的平台 API 正确提交目录模型变更，并保留必要的正常事件。删除“Go registry 不一致 → 额外 roots event → 轮询 → 报错”专属反馈链；不得为补偿它而改成每次刷新无条件额外通知。任何保留的额外通知都必须有独立、可复现的语言无关需求、调用点和最小测试，不能仅凭旧类名中有 `ProjectRoots` 就保留。
 
-只使用项目声明的公开平台 API 基线；禁止 JetBrains `@Internal`、`@Experimental`、反射或私有 API。当前唯一目标为 GO-262.9437.286，编译、descriptor 和 Verifier 使用同一目标，不保留历史版本矩阵。插件身份、GoLand 产品限制和发布流程不变。围绕真实 shell capability 变化调用公开 `ProjectRootManagerEx.makeRootsChange(Runnable, RootsChangeRescanningInfo)` 的决策见[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)，不能无条件重复广播。
+只使用项目声明的公开平台 API 基线；禁止生产代码使用 JetBrains `@Internal`、`@Experimental`、反射或私有 API。[兼容与自动化方案](../changes/ide-plugin-compatibility-automation/README.md)规定最低整个 262 系列、没有普通或 strict 上限；编译使用 GO 2026.2，固定集成使用 GO 2026.2.1.1，高版本仅增加自动 API 目标。每次插件相关迭代记录最低版本影响；提高下限必须有证据和用户明确批准。插件身份、GoLand 产品限制和发布授权边界不变。围绕真实 shell capability 变化调用公开 `ProjectRootManagerEx.makeRootsChange(Runnable, RootsChangeRescanningInfo)` 的决策见[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)，不能无条件重复广播。
 
 ## 4. 成功与失败语义
 
@@ -54,11 +54,15 @@ Git mapping 仅对加载且存在的仓库检查缺失/冲突；未加载成员�
 | 层级 | 必须验证 | 不扩大到 |
 |---|---|---|
 | Desktop | 本次确实涉及的 Git 封装、workspace 事务、启动和共享契约。 | 重新运行与插件文档或内部解耦无关的全部业务场景。 |
-| 插件单元/平台 | manifest、同步协调、受管范围、错误和恢复、只读 VCS 分类、状态展示、用户配置保护。 | 证明 GoLand 原生 Git、Go Modules 或语言工具链整体正确。 |
-| 必要 GUI 集成 | 真实 IDE 中插件加载、仓库增删重加、自动刷新和状态/范围一致。 | 每个动作之后重复引用查找、补全、go test、运行和调试。 |
-| 构建与兼容 | 插件自身 Kotlin/Gradle 测试、结构/配置验证及单一目标 Plugin Verifier。 | 把 IDE 兼容性等同于用户 Go 项目测试成功。 |
+| CI 插件单元/平台 | manifest、同步协调、受管范围、错误和恢复、只读 VCS 分类、状态展示、用户配置保护；Light/Heavy 全部保留。 | 证明 GoLand 原生 Git、Go Modules 或语言工具链整体正确；不能按 Heavy 名称迁出 CI。 |
+| 仅本机完整 IDE 自动集成 | 固定 GO 2026.2.1.1 的 Starter/Driver 加载、Project 树、自动刷新及完整进程冷启动，仍由自动用例执行。 | CI 启动完整 IDE、高版本 GUI 矩阵、每步引用查找、补全、go test、运行和调试。 |
+| 构建与兼容 | 最低 SDK Kotlin/Gradle 测试、结构/产物策略及冻结目标集合的 Plugin Verifier。 | 把 IDE 兼容性等同于用户 Go 项目测试成功。 |
 
 基础 fixture 使用本地 Git 仓库与普通文本文件，不需要 Go SDK、Go Modules、外部依赖下载或账号。可增加一个小型对照回归，证明改变 `go.mod` 不改变插件判定；不得因此建立多语言编译矩阵。
+
+自动化替代的开发落点和一次性迁移映射见[开发记录](../changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md)。后续实际执行与环境阻塞见[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)，不能预先删除未获真实证据的旧覆盖；也不要求最高版本真机或 computer use。用户明确要求只开发时，报告未运行项，保留正常 CI/发布门禁。无人值守 IDE 自身仍需合法授权和图形环境，不能复制个人 license。
+
+PR、Release、定期工作流不启动 Starter/Driver、不配置 License Server 或 IDE 凭据；`HeavyPlatformTestCase` 仍属于 CI 平台测试。本机使用[专用入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，可交互登录 JetBrains Account，License Server 可选，专用授权 config 与每轮业务状态分开。CI 的 API/平台结果与本机 UI 报告分别记录，`skipped`/未运行/CI 绿色都不是 UI 通过；最终签名 ZIP 不能借用签名前报告。
 
 每个新增用例应能回答：覆盖哪个 ReqWS 自有契约、什么变化会让它失败、应在哪一层测试。同一风险优先由最低有效层的自动化回归覆盖，GUI 只补平台测试不能证明的集成环节。已有安全/并发缺陷回归不能因为旧 fixture 使用 Go 文件而整批删除；改成普通文件和语言无关失败注入。
 

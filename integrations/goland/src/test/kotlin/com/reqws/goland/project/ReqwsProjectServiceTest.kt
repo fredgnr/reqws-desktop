@@ -306,6 +306,84 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
   fun testAutomaticTrustedRefreshBeforePollStillForcesSameDigestProjectModelReplay() =
     verifyAutomaticTrustedRefreshBeforePollStillForcesSameDigestProjectModelReplay()
 
+  fun testTrustRevocationWithoutFileEventsBlocksAndRestoresSameDigest() =
+    verifyTrustRevocationWithoutFileEventsBlocksAndRestoresSameDigest()
+
+  private fun verifyTrustRevocationWithoutFileEventsBlocksAndRestoresSameDigest() {
+    writeValidManifest()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val trusted = AtomicBoolean(true)
+    val revocationPolls = Channel<Unit>(Channel.UNLIMITED)
+    val restorationPolls = Channel<Unit>(Channel.UNLIMITED)
+    val firstRevocationWait = CountDownLatch(1)
+    val restoredRevocationWait = CountDownLatch(1)
+    val disposedRevocationWait = CountDownLatch(1)
+    val restorationWait = CountDownLatch(1)
+    val revocationWaits = AtomicInteger(0)
+    val appliedDigests = CopyOnWriteArrayList<String>()
+    val service = ReqwsProjectService.createForTest(
+      project = project,
+      coroutineScope = scope,
+      runtimeOverrides = ReqwsProjectServiceRuntimeOverrides(
+        projectRoot = testShell(),
+        trustGate = ReqwsTrustGate(trusted::get),
+        candidateApplier = SyncCandidateApplier { appliedDigests += it.digestSha256 },
+        trustPollWaiter = TrustPollWaiter {
+          restorationWait.countDown()
+          restorationPolls.receive()
+        },
+        trustRevocationPollWaiter = TrustPollWaiter {
+          val iteration = revocationWaits.incrementAndGet()
+          if (iteration == 1) firstRevocationWait.countDown()
+          if (iteration == 2) restoredRevocationWait.countDown()
+          try {
+            revocationPolls.receive()
+          } finally {
+            if (iteration == 2) disposedRevocationWait.countDown()
+          }
+        },
+        vcsChangeRegistrar = ReqwsVcsChangeRegistrar { AutoCloseable {} },
+        vcsInspector = ReqwsVcsInspector { VcsRootInspection(emptyList(), emptyList()) },
+      ),
+    )
+    try {
+      awaitSuccessfulCompletion(requireNotNull(service.refreshAutomatically()), "initial trusted read")
+      awaitCondition("initial trusted apply") {
+        appliedDigests.size == 1 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      val digest = appliedDigests.single()
+      assertTrue(firstRevocationWait.await(5, TimeUnit.SECONDS))
+
+      // Only the public trust probe changes: no file event or direct refresh wakes the service.
+      trusted.set(false)
+      revocationPolls.trySend(Unit).getOrThrow()
+      awaitCondition("revocation enters Safe Mode") { service.state.lifecycle == ReqwsLifecycleState.SAFE_MODE_BLOCKED }
+      assertNull(service.state.validatedProjectionDigest)
+      assertEquals(listOf(digest), appliedDigests.toList())
+      assertTrue(restorationWait.await(5, TimeUnit.SECONDS))
+
+      trusted.set(true)
+      restorationPolls.trySend(Unit).getOrThrow()
+      awaitCondition("trust restoration replays unchanged digest") {
+        appliedDigests.size == 2 && service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED
+      }
+      assertEquals(listOf(digest, digest), appliedDigests.toList())
+      assertTrue(restoredRevocationWait.await(5, TimeUnit.SECONDS))
+
+      service.dispose()
+      assertTrue("dispose must cancel the rearmed trust probe", disposedRevocationWait.await(5, TimeUnit.SECONDS))
+      trusted.set(false)
+      revocationPolls.trySend(Unit).getOrThrow()
+      assertEquals(ReqwsLifecycleState.DISPOSED, service.state.lifecycle)
+      assertEquals(listOf(digest, digest), appliedDigests.toList())
+    } finally {
+      service.dispose()
+      scope.cancel()
+      revocationPolls.close()
+      restorationPolls.close()
+    }
+  }
+
   fun testInitialSafeModeSnapshotStillStartsDelayedVcsMonitoring() =
     verifyInitialSafeModeSnapshotStillStartsDelayedVcsMonitoring()
 
