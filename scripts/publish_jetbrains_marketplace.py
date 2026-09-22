@@ -238,6 +238,44 @@ def trusted_receipt(github, artifact):
     return receipt
 
 
+def skipped_submission(github, prior, attempt, candidate):
+    """Prove that this exact attempt never started its only Marketplace POST job."""
+    submit_names = {
+        '.github/workflows/release.yml': 'Submit signed plugin to Marketplace / submit',
+        '.github/workflows/marketplace-publish.yml': 'submit',
+    }
+    expected_name = submit_names.get(prior.get('path'))
+    repository = prior.get('repository')
+    head_repository = prior.get('head_repository')
+    if (expected_name is None or not positive_id(prior.get('id'))
+            or not positive_id(prior.get('run_attempt')) or not positive_id(attempt)
+            or attempt > prior['run_attempt']
+            or prior.get('event') not in {'push', 'workflow_dispatch'}
+            or not isinstance(repository, dict) or repository.get('full_name') != REPOSITORY
+            or not isinstance(head_repository, dict) or head_repository.get('full_name') != REPOSITORY
+            or prior.get('head_sha') != candidate['commit']
+            or prior.get('head_branch') != candidate['tag']):
+        return False
+    try:
+        # Never use the latest-attempt endpoint: a later skip cannot clear an earlier POST.
+        jobs = github.pages(
+            f'repos/{REPOSITORY}/actions/runs/{prior["id"]}/attempts/{attempt}/jobs', 'jobs')
+        if not isinstance(jobs, list) or any(not isinstance(job, dict) for job in jobs):
+            return False
+        matches = [job for job in jobs if job.get('name') == expected_name]
+        if len(matches) != 1:
+            return False
+        job = matches[0]
+        return (positive_id(job.get('id'))
+                and type(job.get('run_id')) is int and job['run_id'] == prior['id']
+                and type(job.get('run_attempt')) is int and job['run_attempt'] == attempt
+                and job.get('head_sha') == candidate['commit']
+                and job.get('status') == 'completed' and job.get('conclusion') == 'skipped'
+                and job.get('steps') == [])
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
+        raise UnknownSubmission('Could not verify whether a prior submission was skipped') from error
+
+
 def history_decision(github, candidate):
     artifacts = github.pages(f'repos/{REPOSITORY}/actions/artifacts', 'artifacts')
     receipts = []
@@ -287,7 +325,11 @@ def history_decision(github, candidate):
                 if key == (candidate['runId'], candidate['runAttempt']):
                     continue
                 if key not in attempts:
-                    raise UnknownSubmission('Prior run has no retained submission evidence')
+                    # bootstrap/paused skip the whole job and intentionally create no receipt.
+                    # Missing receipts alone are still not permission to repeat a possible POST.
+                    if not skipped_submission(github, prior, attempt, candidate):
+                        raise UnknownSubmission('Prior run has no retained submission evidence')
+                    print(f'Marketplace history: run {prior["id"]} attempt {attempt}: submit skipped; no POST.')
     return 'already-submitted' if submitted else 'upload'
 
 
