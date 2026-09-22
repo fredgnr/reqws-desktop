@@ -30,6 +30,10 @@ class UnknownSubmission(ValueError):
     pass
 
 
+class PublishingError(ValueError):
+    """A fixed local diagnostic, never response text, command output or credentials."""
+
+
 def strict_json(data):
     def pairs(items):
         result = {}
@@ -65,13 +69,20 @@ def run(args, limit=2_000_000):
 
 
 class GitHub:
-    def api(self, path, *, binary=False, limit=2_000_000):
+    def api(self, path, *, binary=False, limit=2_000_000, accept='application/vnd.github+json'):
         if not path.startswith(f'repos/{REPOSITORY}/'):
             raise ValueError('Unexpected GitHub API destination')
-        args = ['gh', 'api', path]
-        if binary:
-            args += ['--header', 'Accept: application/octet-stream']
-        payload = run(args, limit)
+        # Artifact ZIPs use the JSON API media type; binary only controls decoding.
+        args = ['gh', 'api', path, '--header', 'Accept: ' + accept]
+        try:
+            payload = run(args, limit)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            operation = 'request'
+            if re.fullmatch(f'repos/{REPOSITORY}/actions/artifacts/[0-9]+/zip', path):
+                operation = 'artifact download'
+            elif re.fullmatch(f'repos/{REPOSITORY}/releases/assets/[0-9]+', path):
+                operation = 'Release asset download'
+            raise PublishingError('GitHub API ' + operation + ' failed') from error
         return payload if binary else strict_json(payload)
 
     def pages(self, path, field):
@@ -345,7 +356,8 @@ def prepare(github, marketplace, directory, signer, certificate):
     assets = release_assets(release, candidate['tag'])
     archive = directory / assets[0]['name']
     for asset, limit in zip(assets, [MAX_ARCHIVE_BYTES, 16_384]):
-        data = github.api(f'repos/{REPOSITORY}/releases/assets/{asset["id"]}', binary=True, limit=limit)
+        data = github.api(f'repos/{REPOSITORY}/releases/assets/{asset["id"]}', binary=True, limit=limit,
+                          accept='application/octet-stream')
         if len(data) != asset['size']:
             raise ValueError('Downloaded Release asset size changed')
         with (directory / asset['name']).open('xb') as target:
@@ -422,7 +434,7 @@ def submit(github, marketplace, directory, signer, certificate, intent_id):
     marketplace.reject_newer(candidate['pluginId'], candidate['version'])
     token = os.environ.get('JETBRAINS_MARKETPLACE_TOKEN', '')
     if not token:
-        raise ValueError('Marketplace token is missing')
+        raise PublishingError('JETBRAINS_MARKETPLACE_TOKEN is missing in the jetbrains-marketplace job')
     candidate.update(postAttempted=True, outcome='submission-unknown')
     save(directory / 'result/receipt.json', candidate)
     try:
@@ -478,7 +490,8 @@ def main():
                     outcome = 'submission-unknown'
             except Exception:
                 outcome = 'submission-unknown'
-        print('Marketplace outcome: ' + outcome + '. Review the original run before retrying.', file=sys.stderr)
+        detail = ' ' + str(error) + '.' if isinstance(error, PublishingError) else ''
+        print('Marketplace outcome: ' + outcome + '.' + detail + ' Review the original run before retrying.', file=sys.stderr)
         # Keep an existing post-attempt receipt intact. Without enough context, do not manufacture evidence.
         return 1
 

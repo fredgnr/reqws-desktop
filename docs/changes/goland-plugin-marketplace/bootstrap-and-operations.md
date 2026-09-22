@@ -2,7 +2,7 @@
 title: GoLand 插件首次上架与凭据配置方案
 type: technical-design
 status: active
-updated: 2026-09-20
+updated: 2026-09-22
 ---
 
 # GoLand 插件首次上架与凭据配置方案
@@ -132,7 +132,7 @@ gh variable set REQWS_MARKETPLACE_MODE \
 
 ## 6. 独立重试与恢复
 
-未来工作流落地后，重试使用已包含该工作流且已发布的 tag：
+重试使用已包含该工作流且已发布的 tag：
 
 ```bash
 gh workflow run marketplace-publish.yml \
@@ -150,6 +150,18 @@ gh workflow run marketplace-publish.yml \
 | 已提交并有可靠匹配收据 | 不重发，等待审核 |
 | 收据过期/缺失 | 人工对账，不凭公开列表为空判定未提交 |
 | 紧急暂停 | 授权设 paused；必要时撤销 Token；不自动删除已公开版本 |
+
+若在“Read back intent and submit once”步骤失败，先检查该 run 的 `marketplace-result-…` 和 `marketplace-intent-…` 收据。intent 中 `postAttempted=true` 是发送前的持久化保护标记；同一次尝试的 result 为 `submission-failed` 且 `postAttempted=false` 才证明流程在 POST 前停止。只有 intent 或结果不明时仍须人工对账。
+
+[v0.1.7 的失败任务](https://github.com/fredgnr/reqws-desktop/actions/runs/35738602054/job/106789963193)属于 POST 前失败：下载 intent Artifact 时误用 `Accept: application/octet-stream`，GitHub 返回 HTTP 415；已保存的 result 为 `postAttempted=false`。修复将 Artifact 的 JSON API 请求头与 ZIP 响应读取分离，Release asset 继续使用 octet-stream。固定诊断 `GitHub API artifact download failed` 表示凭据下载调用失败，具体原因仍需结合该 run 核对，不能据此判定 Marketplace Token 失效。
+
+该任务的原始日志还显示上传步骤的 `JETBRAINS_MARKETPLACE_TOKEN` 为空；只读回查可确认 `jetbrains-marketplace` Environment 中存在同名 Secret，但名称存在不能证明运行时取得有效值。脚本对缺失值输出固定诊断 `JETBRAINS_MARKETPLACE_TOKEN is missing in the jetbrains-marketplace job` 并在 POST 前停止。恢复时核对该 Environment 的 Secret 和注入状态；凭据恢复仍遵守 §3.3 的指定私库备份及授权边界，不用 `secrets: inherit` 扩散其他秘密。
+
+2026-09-22 经所有者明确批准，从 reqws-secret 提交 `092354ec9f82d27b7be579c2f85356b2fc5ba046` 的原备份恢复同一 Token，回查 Secret 更新时间为 `2026-09-22T15:07:51Z`，Environment 仍仅允许 `v*` tags。未轮换 Token、未触发工作流或上传；该配置恢复不等同于已经证明下一次任务能取得 Token，真实提交仍待包含代码修复的受保护发布流程验证。
+
+脚本来自所选 tag：修复合入默认分支不会改变旧 tag 的工作流；直接重跑 v0.1.7 仍使用原脚本。该版本的失败证据须保留，常规恢复是在包含修复的更高正式版本发布后自动提交。若必须补交旧版，应另行确认受控恢复方案；不移动旧 tag、不替换公开资产，也不绕过收据校验。
+
+本次 v0.1.7 故障恢复另获所有者明确授权：先合入修复，再删除原 GitHub Release 与 tag，并从最新 main commit 重建同名 tag 以重新执行完整发布链。这是针对本次未发送 Marketplace POST 的例外操作，保留旧 run/收据证据，继续执行全部发布和去重校验；不将旧候选的检查结果视作重建候选已通过，也不删除任何 Marketplace 版本。
 
 签名密钥泄露与 Token 泄露分开处理。轮换/续签的新材料仍须先保存到 reqws-secret 并完成读回验证，再更新运行时副本；泄露时优先停止受影响发布或撤销失效凭据，私库历史中的旧凭据也按泄露处理。Token 轮换不改变插件签名身份；证书到期前至少 30 天提醒维护者，可用同一私钥续签证书并按评审更新公开链，但不假设磁盘安装的自签名信任自动迁移。密钥泄露时停止正式签名并安排明确身份迁移，不默默再生成。
 
