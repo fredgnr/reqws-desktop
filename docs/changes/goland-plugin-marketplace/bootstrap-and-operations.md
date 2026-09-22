@@ -163,6 +163,8 @@ gh workflow run marketplace-publish.yml \
 
 本次 v0.1.7 故障恢复另获所有者明确授权：先合入修复，再删除原 GitHub Release 与 tag，并从最新 main commit 重建同名 tag 以重新执行完整发布链。这是针对本次未发送 Marketplace POST 的例外操作，保留旧 run/收据证据，继续执行全部发布和去重校验；不将旧候选的检查结果视作重建候选已通过，也不删除任何 Marketplace 版本。
 
+第一次重建的 [run 35747472429](https://github.com/fredgnr/reqws-desktop/actions/runs/35747472429)已通过签名、完整 API 矩阵和 GitHub Release 发布，证明 Artifact 回读修复生效，但上传步骤仍收到空 Token，result 再次确认 `postAttempted=false`。恢复同一 Secret 本身不足以修复复用调用：还需在调用方显式绑定同名 Secret，并在被调用工作流声明它。该修复保留唯一具名映射、Environment 保护和仅上传步骤消费 Token 的边界；静态测试与 CI 检查不能替代后续真实上传验证。
+
 签名密钥泄露与 Token 泄露分开处理。轮换/续签的新材料仍须先保存到 reqws-secret 并完成读回验证，再更新运行时副本；泄露时优先停止受影响发布或撤销失效凭据，私库历史中的旧凭据也按泄露处理。Token 轮换不改变插件签名身份；证书到期前至少 30 天提醒维护者，可用同一私钥续签证书并按评审更新公开链，但不假设磁盘安装的自签名信任自动迁移。密钥泄露时停止正式签名并安排明确身份迁移，不默默再生成。
 
 ## 7. 记录与剩余条件

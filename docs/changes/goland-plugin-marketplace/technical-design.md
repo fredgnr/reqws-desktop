@@ -100,6 +100,8 @@ Marketplace 还会执行自身签名，市场下载包不要求与上传前全�
 
 GitHub Environment 是 job 级保护，签名和上传 job 分开；复用工作流的 Environment 声明放在被调用的实际 job。仅给步骤 env 传秘密，不用 `secrets: inherit` 扩散全部秘密。Actions 继续固定完整 commit SHA，checkout 禁止持久化凭据，PR 事件不进入生产工作流。[Environment 行为](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)。
 
+复用调用必须显式声明唯一 Secret `on.workflow_call.secrets.JETBRAINS_MARKETPLACE_TOKEN`，并由 release.yml 的调用 job 以同名 `secrets` 映射绑定。该具名契约允许被调用 job 解析其 Environment Secret；调用方本身没有 Environment 时，其表达式为空不代表可以省略映射。Secret 的实际消费仍限于 `jetbrains-marketplace` 的上传步骤，不增加仓库级 Token 副本。接口标记 `required: false` 以保留 bootstrap/paused 的无 Token 路径，automatic 则由上传前检查拒绝空值。依据见[复用工作流 Secret 声明](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#using-inputs-and-secrets-in-a-reusable-workflow)及 [GitHub 支持答复记录](https://github.com/orgs/community/discussions/25238)。
+
 普通 CI、签名和上传 job 不直接 clone `reqws-secret`，也不获得私库访问 Token；由获授权的配置/维护操作从明确私库 commit 同步必要消费副本。这样备份位置统一不会扩大发布 job 的跨仓库权限。
 
 bootstrap/paused 的状态 job 不需要上传 Token；automatic 的上传 job 使用 Environment。模式既在主发布预检验证，也在独立入口复核，防止绕过主流程。任何模式下正式 GitHub ZIP 均必须已签名。

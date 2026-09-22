@@ -475,3 +475,5 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/marketplace-publish.yml
+    secrets:
+      JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
