@@ -172,12 +172,12 @@ class ImpactTests(unittest.TestCase):
         self.assertTrue(aggregate({'plugin': False, 'reason': 'docs'}, {
             'impact': 'success', 'targets': 'skipped', 'build': 'skipped', 'verification': 'skipped'}).startswith('not-applicable'))
 
-    def test_workflows_use_same_candidate_and_max_two_api_tasks(self):
+    def test_workflows_use_same_candidate_without_api_parallel_cap(self):
         ci = load_yaml('.github/workflows/ci.yml')['jobs']
         self.assertEqual(ci['goland-plugin']['name'], 'GoLand plugin checks')
         self.assertEqual(ci['goland-plugin']['if'], '${{ always() }}')
         reusable = load_yaml('.github/workflows/goland-verification.yml')
-        self.assertEqual(reusable['jobs']['api']['strategy']['max-parallel'], 2)
+        self.assertNotIn('max-parallel', reusable['jobs']['api']['strategy'])
         self.assertFalse(reusable['jobs']['api']['strategy']['fail-fast'])
         self.assertNotIn('secrets.', json.dumps(reusable))
         self.assertNotIn('buildPlugin', json.dumps(reusable))

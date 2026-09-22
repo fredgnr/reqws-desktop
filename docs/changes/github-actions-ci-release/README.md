@@ -10,7 +10,7 @@
 | 文档 | 类型 | 状态 | 说明 |
 |---|---|---|---|
 | [需求说明](requirements.md) | requirements | active | 定义完整 Desktop/GoLand 门禁、版本 tag、arm64 app 与独立插件 ZIP 的产物契约。 |
-| [技术方案](technical-design.md) | technical-design | active | 说明依赖缓存、并行 Release DAG、API 分片实时日志/静默诊断和事务化发布。 |
+| [技术方案](technical-design.md) | technical-design | active | 说明依赖缓存、并行 Release DAG、API 矩阵调度与日志诊断和事务化发布。 |
 | [测试方案与证据](testing/README.md) | testing | active | 规定新资产和缓存验证方法，保留 v0.1.1 双架构发布的历史证据。 |
 | [Release 交付说明](delivery.md) | delivery | active | 说明 arm64 app、GoLand 插件 ZIP 的获取、校验、安装和分发限制。 |
 
