@@ -117,7 +117,7 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
 group = "com.reqws.goland"
 // CI and tag builds verify the same explicit version; local builds retain their default.
-version = providers.gradleProperty("releaseVersion").orElse("0.1.5").get()
+version = providers.gradleProperty("releaseVersion").orElse("0.1.6").get()
 
 val compatibilityPolicy = Properties().apply {
   layout.projectDirectory.file("compatibility.properties").asFile.inputStream().use(::load)

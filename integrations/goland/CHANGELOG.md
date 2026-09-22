@@ -1,5 +1,9 @@
 # ReqWS GoLand plugin changes
 
+## 0.1.6
+
+- Bump the plugin version to 0.1.6.
+
 ## 0.1.5
 
 - First signed distribution prepared for JetBrains Marketplace.

@@ -1,7 +1,7 @@
 {
   "name": "reqws-desktop",
   "productName": "ReqWS",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "A local macOS feature workspace manager for physically isolated multi-repository Git work.",
   "main": ".vite/build/main.js",
   "private": true,
