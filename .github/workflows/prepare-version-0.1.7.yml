@@ -1,0 +1,109 @@
+name: Prepare isolated 0.1.7 version metadata
+
+on:
+  push:
+    branches: [chore/prepare-version-0.1.7]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.repository == 'fredgnr/reqws-desktop' && github.ref == 'refs/heads/chore/prepare-version-0.1.7'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact reviewed base without this temporary workflow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 137a28fde56cea704c4cdb8331b2d68c3273fef5
+          persist-credentials: false
+      - name: Prepare and verify only the four version files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import copy
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          repo = 'fredgnr/reqws-desktop'
+          base = '137a28fde56cea704c4cdb8331b2d68c3273fef5'
+          base_tree = '0489a794202468e20d999416bd24089e9b41b9c4'
+          old, new = '0.1.6', '0.1.7'
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+
+          require(git('rev-parse', 'HEAD') == base, 'Unexpected base commit')
+          require(git('rev-parse', 'HEAD^{tree}') == base_tree, 'Unexpected base tree')
+          require(not git('status', '--porcelain'), 'Checkout is not clean')
+
+          package_path = Path('package.json')
+          package_text = package_path.read_text()
+          package = json.loads(package_text)
+          require(package['version'] == old, 'Unexpected App version')
+          package_expected = copy.deepcopy(package)
+          package_expected['version'] = new
+          package_updated = package_text.replace(f'"version": "{old}"', f'"version": "{new}"', 1)
+          require(json.loads(package_updated) == package_expected, 'App metadata changed outside version')
+          package_path.write_text(package_updated)
+
+          lock_path = Path('package-lock.json')
+          lock_text = lock_path.read_text()
+          lock = json.loads(lock_text)
+          require(lock['version'] == old and lock['packages']['']['version'] == old, 'Unexpected lockfile versions')
+          lock_expected = copy.deepcopy(lock)
+          lock_expected['version'] = new
+          lock_expected['packages']['']['version'] = new
+          lock_updated = lock_text.replace(f'"version": "{old}"', f'"version": "{new}"', 2)
+          require(json.loads(lock_updated) == lock_expected, 'Lockfile dependencies changed')
+          lock_path.write_text(lock_updated)
+
+          gradle_path = Path('integrations/goland/build.gradle.kts')
+          gradle_text = gradle_path.read_text()
+          old_line = f'version = providers.gradleProperty("releaseVersion").orElse("{old}").get()'
+          new_line = f'version = providers.gradleProperty("releaseVersion").orElse("{new}").get()'
+          require(gradle_text.count(old_line) == 1, 'Unexpected plugin version declaration')
+          gradle_path.write_text(gradle_text.replace(old_line, new_line))
+
+          changelog_path = Path('integrations/goland/CHANGELOG.md')
+          changelog_text = changelog_path.read_text()
+          prefix = '# ReqWS GoLand plugin changes\n\n'
+          require(changelog_text.startswith(prefix), 'Unexpected changelog heading')
+          require(not re.search(r'(?m)^## 0\.1\.7\s*$', changelog_text), 'Version already has change notes')
+          notes = '## 0.1.7\n\n- Bump the plugin version to 0.1.7.\n\n'
+          changelog_path.write_text(prefix + notes + changelog_text[len(prefix):])
+
+          paths = ['package.json', 'package-lock.json', 'integrations/goland/build.gradle.kts', 'integrations/goland/CHANGELOG.md']
+          require(sorted(git('diff', '--name-only').splitlines()) == sorted(paths), 'Unexpected modified files')
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'diff', '--stat'], check=True)
+          subprocess.run(['git', 'diff', '--', *paths], check=True)
+          subprocess.run(['git', 'add', '--', *paths], check=True)
+          expected_tree = git('write-tree')
+          payload = {'base_tree': base_tree, 'tree': [
+              {'path': path, 'mode': '100644', 'type': 'blob', 'content': Path(path).read_text()}
+              for path in paths
+          ]}
+          result = subprocess.run(
+              ['gh', 'api', '--method', 'POST', f'repos/{repo}/git/trees', '--input', '-'],
+              input=json.dumps(payload), text=True, capture_output=True, check=True, timeout=90,
+          )
+          tree = json.loads(result.stdout)['sha']
+          require(tree == expected_tree, 'Remote tree differs from verified local bytes')
+          print(f'VERSION_TREE_SHA={tree}')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('App, lockfile root and GoLand plugin: **0.1.7**.\n\n')
+              summary.write('Exactly four version files changed; dependency metadata and IDE compatibility are unchanged.\n\n')
+              summary.write(f'Base: `{base}`\n\nVerified tree: `{tree}`\n\n')
+              summary.write('Only Git objects were prepared. No branch, tag, release, publishing configuration or secret was changed by this job. The temporary workflow is absent from the prepared tree.\n')
+          PY
