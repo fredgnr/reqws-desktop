@@ -9,6 +9,8 @@ import stat
 import subprocess
 import time
 import uuid
+from urllib.parse import unquote
+import xml.etree.ElementTree as ET
 
 from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read_json, validate_report
 
@@ -181,7 +183,106 @@ def validate_projection_evidence(run_root, process_ids):
             if name != 'trust' and (modules.get('user') != [str(root / 'user-content')]
                     or not any('user-content' in entry and entry[-1] == 'keep.txt' for entry in normalized)):
                 raise ValueError('User-owned model/tree content was not preserved')
+        validate_saved_projection(run_root, snapshots[name, steps[-1]['revision']])
     return len(proofs)
+
+
+def native_directory_key(path):
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or path.resolve() != path:
+        raise ValueError('Unsafe native model directory identity')
+    # The local representative is macOS; Java's UnixFileKey uses hex device + decimal inode.
+    return f'(dev={metadata.st_dev:x},ino={metadata.st_ino})'
+
+
+def validate_saved_projection(run_root, snapshot):
+    """A cache-backed cold process is not proof that native JPS roots were saved."""
+    root = Path(snapshot['root'])
+    shell = Path(snapshot['shell'])
+    if (not root.is_absolute() or not root.is_relative_to(run_root) or root.resolve() != root
+            or shell != root / '.reqws/ide/goland'):
+        raise ValueError('Saved model belongs outside the private Desktop fixture')
+    module_name = 'ReqWS-' + snapshot['bindingId']
+    module_file = shell / '.idea/reqws' / (module_name + '.iml')
+
+    def regular(path):
+        if (not path.is_relative_to(run_root) or path.resolve() != path
+                or not path.is_file() or path.is_symlink()):
+            raise ValueError('Saved IDE model escaped its private fixture or is missing')
+        return path
+
+    def xml(path):
+        descriptor = os.open(regular(path), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError('Saved IDE model is not a regular file')
+            data = stream.read(1048577)
+        text = data.decode('utf-8')
+        if len(data) > 1048576 or '\x00' in text or '<!DOCTYPE' in text.upper() or '<!ENTITY' in text.upper():
+            raise ValueError('Unsafe saved IDE XML')
+        return ET.fromstring(text)
+
+    def native_path(value, url=False, module_dir=module_file.parent):
+        if not isinstance(value, str) or url and not value.startswith('file://'):
+            raise ValueError('Missing native IDE file path')
+        value = unquote(value[7:] if url else value)
+        value = value.replace('$MODULE_DIR$', str(module_dir)).replace('$PROJECT_DIR$', str(shell))
+        path = Path(os.path.normpath(value))
+        if '$' in value or '\x00' in value or not path.is_absolute() or not path.is_relative_to(root):
+            raise ValueError('Saved IDE path escaped the fixture')
+        return path
+
+    journal = read_message(regular(shell / '.idea/reqws-loaded-roots.json'))
+    expected_identity = {'formatVersion': 1, 'workspaceId': snapshot['workspaceId'],
+                         'bindingId': snapshot['bindingId'], 'workspaceRoot': str(root),
+                         'shell': str(shell), 'moduleName': module_name, 'moduleFile': str(module_file),
+                         'shellKey': native_directory_key(shell), 'ideaKey': native_directory_key(shell / '.idea')}
+    if (set(journal) != set(expected_identity) | {'claims', 'pendingAdds', 'pendingRemoves'}
+            or type(journal.get('formatVersion')) is not int
+            or any(journal.get(key) != value for key, value in expected_identity.items())):
+        raise ValueError('Saved ownership journal belongs to another Desktop binding')
+    claims = journal.get('claims', [])
+    expected = {repo['name']: repo['id'] for repo in snapshot['repositories'] if repo['name'] in snapshot['selected']}
+    claim_fields = {'relativePath', 'repositoryId', 'nonce', 'rootKey', 'gitKey'}
+    for key in ['claims', 'pendingAdds', 'pendingRemoves']:
+        entries = journal[key]
+        if (not isinstance(entries, list) or len(entries) > len(snapshot['repositories'])
+                or any(not isinstance(claim, dict) or set(claim) != claim_fields
+                       or any(not isinstance(value, str) or not 0 < len(value) <= 16384 for value in claim.values())
+                       or not re.fullmatch('[a-f0-9]{32}', claim['nonce']) for claim in entries)):
+            raise ValueError('Invalid saved ownership claim schema')
+        if len({claim['relativePath'] for claim in entries}) != len(entries) or len({claim['nonce'] for claim in entries}) != len(entries):
+            raise ValueError('Duplicate saved ownership claim')
+    if (len(claims) != len(expected) or {claim['relativePath']: claim['repositoryId'] for claim in claims} != expected
+            or journal['pendingRemoves'] or any(claim not in claims for claim in journal['pendingAdds'])):
+        raise ValueError('Saved ownership claims differ from the final Desktop selection')
+    for claim in claims:
+        directory = root / claim['relativePath']
+        if claim['rootKey'] != native_directory_key(directory) or claim['gitKey'] != native_directory_key(directory / '.git'):
+            raise ValueError('Saved ownership directory identity changed')
+        namespace = directory / '.reqws-goland-ownership'
+        if namespace.exists() or namespace.is_symlink():
+            raise ValueError('The virtual ownership namespace exists on disk')
+    modules = xml(shell / '.idea/modules.xml').findall('./component[@name="ProjectModuleManager"]/modules/module')
+    registrations = [(native_path(module.get('filepath')), native_path(module.get('fileurl'), url=True)) for module in modules]
+    if ([entry for entry in registrations if module_file in entry] != [(module_file, module_file)]):
+        raise ValueError('The managed module was not registered in native project storage')
+    if snapshot['name'] != 'trust':
+        user_file = shell / '.idea/user.iml'
+        if [entry for entry in registrations if user_file in entry] != [(user_file, user_file)]:
+            raise ValueError('The user module registration was not preserved on disk')
+        user_roots = xml(user_file).findall('./component[@name="NewModuleRootManager"]/content')
+        if [native_path(content.get('url'), url=True, module_dir=user_file.parent) for content in user_roots] != [root / 'user-content']:
+            raise ValueError('The user content root was not preserved on disk')
+    contents = xml(module_file).findall('./component[@name="NewModuleRootManager"]/content')
+    paths = [native_path(content.get('url'), url=True) for content in contents]
+    if len(paths) != len(expected) or set(paths) != {root / name for name in expected}:
+        raise ValueError('Native .iml roots were not saved; IDE cache alone cannot certify cold recovery')
+    for claim in claims:
+        content = contents[paths.index(root / claim['relativePath'])]
+        markers = [native_path(child.get('url'), url=True) for child in content.findall('excludeFolder')]
+        if markers != [root / claim['relativePath'] / '.reqws-goland-ownership' / claim['nonce']]:
+            raise ValueError('Native .iml ownership marker does not match the saved journal')
 
 
 def stop_child(process):

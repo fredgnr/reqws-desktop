@@ -72,6 +72,8 @@ Driver 通过本轮 UUID 和递增序号请求 Desktop 创建四个普通文本 
 
 临时通信不暴露在产品中，也不接收任意路径或命令。任一端失败、取消、超时、skip、缺证据或异常退出都阻止通过。Desktop 项目保留在私有运行目录，不在 IDE 退出状态未确认时删除；两端退出确认不足则保留 active-session 标记。报告的 `suite=desktop` 与原 `suite=legacy` 区分，Desktop 源码身份与插件 ZIP 身份分别记录。只跑 Desktop 协议检查、编译或旧三组套件都不代表联动通过。
 
+退出后还须有四个工作区的原生模型落盘证明。门禁只读核对 `modules.xml`、精确 `.iml` 根与 journal 的 companion marker，拒绝仅 IDE 缓存成功而磁盘未保存的结果。`savedProjectionProofs=4` 是新增报告的必需证据，旧报告不可复用。
+
 ## 4. 授权复用与业务状态隔离
 
 用户态配置仅复用专用授权 config。授权准备不注入“已接受协议”标志，首次协议由用户在专用环境自行处理。有效试用可作为当次运行的实际授权状态，但不能证明 JetBrains Account 登录或后续授权复用。

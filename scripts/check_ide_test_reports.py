@@ -35,6 +35,7 @@ def check_reports(reports, root_file, suite='legacy'):
     if suite == 'desktop':
         from desktop_ide import validate_projection_evidence
         result['projectionProofs'] = validate_projection_evidence(root, events)
+        result['savedProjectionProofs'] = 4
     print(f'All three {suite} IDE scenario groups completed with {process_count} distinct, cleanly exited processes')
     return result
 

@@ -7,10 +7,11 @@ import sys
 import tempfile
 import unittest
 import uuid
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from desktop_ide import initialize_link, publish, read_message, validate_transcript, validate_projection_evidence
+from desktop_ide import initialize_link, publish, read_message, validate_transcript, validate_projection_evidence, validate_saved_projection, native_directory_key
 from check_ide_test_reports import check_reports, DESKTOP_SCENARIOS, SCENARIOS
 from run_local_ide import verify_report, session_closed
 from ide_compatibility import digest, read_policy
@@ -41,10 +42,88 @@ class DesktopIdeTests(unittest.TestCase):
                             'selected': selected, 'repositories': [{'id': 'a', 'name': 'repo-a'}, {'id': 'b', 'name': 'repo-b'}]}
                 publish(self.directory / f'request-{sequence}.json', request)
                 publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed', 'snapshot': snapshot})
+            self.write_saved_model(snapshot)
         sequence += 1
         envelope = {'schemaVersion': 1, 'sessionId': self.session, 'sequence': sequence}
         publish(self.directory / f'request-{sequence}.json', {**envelope, 'operation': 'finish'})
         publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed'})
+
+    def write_saved_model(self, snapshot):
+        shell = Path(snapshot['shell'])
+        module_name = 'ReqWS-' + snapshot['bindingId']
+        module_file = shell / '.idea/reqws' / (module_name + '.iml')
+        module_file.parent.mkdir(parents=True)
+        for repo in snapshot['repositories']:
+            (Path(snapshot['root']) / repo['name'] / '.git').mkdir(parents=True)
+        claims = [{'relativePath': repo['name'], 'repositoryId': repo['id'], 'nonce': uuid.uuid4().hex,
+                   'rootKey': native_directory_key(Path(snapshot['root']) / repo['name']),
+                   'gitKey': native_directory_key(Path(snapshot['root']) / repo['name'] / '.git')}
+                  for repo in snapshot['repositories'] if repo['name'] in snapshot['selected']]
+        journal = {'formatVersion': 1, 'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId'],
+                   'workspaceRoot': snapshot['root'], 'shell': str(shell), 'moduleName': module_name,
+                   'moduleFile': str(module_file), 'claims': claims, 'pendingAdds': claims.copy(), 'pendingRemoves': [],
+                   'shellKey': native_directory_key(shell), 'ideaKey': native_directory_key(shell / '.idea')}
+        (shell / '.idea/reqws-loaded-roots.json').write_text(json.dumps(journal))
+        model = ET.Element('module')
+        component = ET.SubElement(model, 'component', name='NewModuleRootManager')
+        for claim in claims:
+            url = 'file://$MODULE_DIR$/../../../../../' + claim['relativePath']
+            content = ET.SubElement(component, 'content', url=url)
+            ET.SubElement(content, 'excludeFolder', url=url + '/.reqws-goland-ownership/' + claim['nonce'])
+        module_file.write_bytes(ET.tostring(model))
+        project = ET.Element('project')
+        modules = ET.SubElement(ET.SubElement(project, 'component', name='ProjectModuleManager'), 'modules')
+        path = '$PROJECT_DIR$/.idea/reqws/' + module_file.name
+        ET.SubElement(modules, 'module', filepath=path, fileurl='file://' + path)
+        if snapshot['name'] != 'trust':
+            path = '$PROJECT_DIR$/.idea/user.iml'
+            ET.SubElement(modules, 'module', filepath=path, fileurl='file://' + path)
+            user = ET.Element('module')
+            component = ET.SubElement(user, 'component', name='NewModuleRootManager')
+            ET.SubElement(component, 'content', url='file://$MODULE_DIR$/../../../../user-content')
+            (shell / '.idea/user.iml').write_bytes(ET.tostring(user))
+        (shell / '.idea/modules.xml').write_bytes(ET.tostring(project))
+
+    def test_saved_model_rejects_cache_only_roots_markers_registration_and_foreign_binding(self):
+        self.transcript()
+        snapshot = read_message(self.directory / 'response-6.json')['snapshot']
+        shell = Path(snapshot['shell'])
+        module = next((shell / '.idea/reqws').glob('*.iml'))
+        modules = shell / '.idea/modules.xml'
+        journal = shell / '.idea/reqws-loaded-roots.json'
+        validate_saved_projection(self.root, snapshot)
+        variants = [(module, b'<module><component name="NewModuleRootManager"/></module>'),
+                    (module, module.read_bytes().replace(b'excludeFolder', b'sourceFolder')),
+                    (module, module.read_bytes().replace(b'.reqws-goland-ownership/', b'.reqws-goland-ownership/foreign')),
+                    (modules, b'<project/>'),
+                    (modules, modules.read_bytes().replace(b'file://$PROJECT_DIR$', b'file://$PROJECT_DIR$/foreign')),
+                    (journal, journal.read_bytes().replace(snapshot['bindingId'].encode(), b'foreign')),
+                    (module, b'<!DOCTYPE module><module/>'),
+                    (module, '<!DOCTYPE module><module/>'.encode('utf-16')),
+                    (shell / '.idea/user.iml', b'<module/>'),
+                    (modules, modules.read_bytes().replace(b'user.iml', b'foreign.iml'))]
+        baseline = json.loads(journal.read_text())
+        for field in ['shellKey', 'ideaKey', 'pendingAdds', 'pendingRemoves']:
+            changed = copy.deepcopy(baseline); del changed[field]
+            variants.append((journal, json.dumps(changed).encode()))
+        for field in ['rootKey', 'gitKey', 'nonce']:
+            changed = copy.deepcopy(baseline); changed['claims'][0][field] = 'foreign'
+            variants.append((journal, json.dumps(changed).encode()))
+        changed = copy.deepcopy(baseline); changed['pendingRemoves'] = changed['claims'][:1]
+        variants.append((journal, json.dumps(changed).encode()))
+        for path, data in variants:
+            with self.subTest(path=path.name, data=data[:60]):
+                original = path.read_bytes()
+                try:
+                    path.write_bytes(data)
+                    with self.assertRaises(ValueError): validate_saved_projection(self.root, snapshot)
+                finally:
+                    path.write_bytes(original)
+        original = module.read_bytes()
+        module.unlink()
+        module.symlink_to(journal)
+        with self.assertRaises(ValueError): validate_saved_projection(self.root, snapshot)
+        module.unlink(); module.write_bytes(original)
 
     def test_complete_exchange_requires_live_and_cold_selections(self):
         self.transcript()
@@ -166,7 +245,7 @@ class DesktopIdeTests(unittest.TestCase):
         report['suite'] = 'desktop'; path.write_text(json.dumps(report))
         with self.assertRaises(ValueError): verify_report(path, archive, '0.1.7', 'desktop')
         source = {'testedCommit': 'a' * 40, 'dirty': False}
-        report.update(desktop={'tests': {'passed': 1}, 'identity': source}, results={'suite': 'desktop'})
+        report.update(desktop={'tests': {'passed': 1}, 'identity': source}, results={'suite': 'desktop', 'savedProjectionProofs': 4})
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
@@ -174,6 +253,10 @@ class DesktopIdeTests(unittest.TestCase):
             with patch('desktop_ide.subprocess.check_output', side_effect=outputs), self.assertRaises(ValueError):
                 verify_report(path, archive, '0.1.7', 'desktop')
         report['desktop']['identity'] = None; path.write_text(json.dumps(report))
+        with self.assertRaises(ValueError): verify_report(path, archive, '0.1.7', 'desktop')
+        report['desktop']['identity'] = source
+        del report['results']['savedProjectionProofs']
+        path.write_text(json.dumps(report))
         with self.assertRaises(ValueError): verify_report(path, archive, '0.1.7', 'desktop')
 
     def test_profile_is_not_released_until_both_desktop_and_ide_cleanup_are_confirmed(self):

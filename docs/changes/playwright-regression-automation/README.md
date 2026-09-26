@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 已实现本机 Desktop→Driver 联动入口，获准完整 IDE 首轮失败，冷启动竞态与宿主修正仍待验证，见 [S4 记录](implementation-s4-2026-09-26.md)；V 未实施，不撤销现有验收门槛。
+2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 已实现本机 Desktop→Driver 联动入口，获准完整 IDE 首轮失败，宿主修正已重验，冷启动与原生落盘缺陷仍阻塞验收，见 [S4 记录](implementation-s4-2026-09-26.md)；V 未实施，不撤销现有验收门槛。
 
 方案入库基于 main `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`（0.1.6），已对齐 PR #21 合入后的插件规则，不沿用早期调研中的旧 build 上下限或 CI 完整 IDE 建议。
 

@@ -37,11 +37,12 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 | `compileIntegrationTestKotlin` | 通过；Java 25，仅编译，无 IDE 启动。 |
 | `npm run check` | 518 通过、1 项原有 hosted-only 系统信任检查跳过，共 50 个测试文件；类型、lint、i18n 和当时文档检查通过。跳过不计作通过。 |
 | 新增 TS 协议安全检查 | 6 项，涵盖不可覆盖、会话/序号、symlink/大小、受限命令、abort/超时和私有进程 registry。 |
-| Python 本机协议/报告检查 | 首轮 7 项；宿主修正后 8 项，覆盖丢失/错误证据、实时与冷启动步骤、旧 suite、同 ZIP 不同 Desktop 源码、两端清理、profile 保留及非法输入的受保护 PFI。 |
+| Python 本机协议/报告检查 | 首轮 7 项；宿主及落盘门禁修正后 9 项，覆盖丢失/错误证据、实时与冷启动步骤、旧 suite、同 ZIP 不同 Desktop 源码、两端清理、profile 保留、非法输入的受保护 PFI、原生落盘根/marker/模块登记和旧报告拒绝。 |
 | Desktop 协议单独试跑 | 实际 UI 完成 9 个创建/保存请求及 1 个结束请求；Playwright 1/1，通过，零重试。仅验证 Desktop 端，无 IDE 启动，`scope=desktop-link-protocol-only`。 |
 | `npm run test:e2e` | 18/18 通过，零跳过/重试；覆盖本次修改涉及的共享 fixture、进程登记与退出。 |
 | `npm run test:e2e:negative` | 两项预定真实启动故障均准确失败并留下完整新鲜证据，严格外层门禁通过；无吞掉或改标 expected-failure。 |
 | Python workflows | 184/184 通过；使用已有 OpenSSL 3 与 Java 25。首次受限网络下载失败、第二轮系统 LibreSSL 参数不兼容；修正执行环境后完整重跑，不修改或跳过测试。 |
+| S4 修正后的 Python workflows | 186/186 通过；重复下载签名器的首轮被明确中止，随后用已有固定 0.1.43 ZIP Signer 缓存、OpenSSL 3 与 Java 25 完整重跑，无跳过。 |
 | 插件 baseline | 366 执行，零跳过、零失败；保留生产/测试/宿主编译、Light/Heavy、禁用 API 与结构门禁。 |
 | `npm run docs:check` | 通过，26 个索引、111 个文档。 |
 
@@ -61,12 +62,28 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 - Trust 场景的真实 Safe Mode 与信任后投影均有证据，但固定 IDE 随附的可选 `com.ypwang.plugin.go-linter` 在未信任状态启动时报错，严格 IDE 错误门禁使该项失败。宿主修正只为 Trust context 使用公开 Starter 配置生成本轮临时 disabled-plugins 文件，并回查该插件未加载；不改持久 profile 的插件设置、候选 ZIP 或错误门禁。该环境限定必须随 Trust 结果记录，不能宣称默认全部 bundled plugins 下通过。
 - 非法 binding 场景错误地要求 shell PFI 不变。既有契约要求撤销非法绑定的临时 shell 排除/树过滤，同时保留模型和用户内容。修正后严格比较根、模块和非 shell PFI，另要求原生 shell 恢复可见；证据保存实际错误态而非错误前快照。Python 负向用例继续拒绝仓库 PFI 被改变或 shell 隐藏未撤销。
 
-两项宿主修正的 `compileIntegrationTestKotlin` 与八项 Python 协议/报告检查通过；完整 IDE 重验仍未完成。兼容基线和生产插件代码未改变。
+两项宿主修正冻结为 `b6fd9df`，`compileIntegrationTestKotlin` 与当时八项 Python 协议/报告检查通过，独立只读审查未发现明确问题。随后使用相同 CI ZIP 重跑，私有目录标识 `reqws-local-ide-36cso1z_`：三项 JUnit、六个独立正常退出进程、二十条实时投影、Desktop 1/1 均通过；Trust 与非法输入两项修正得到实际验证。
+
+**该轮不能作为 S4 GO。** 退出后的独立磁盘复核发现 selection 的 `.iml` 仍没有任何 content root，而 journal claims 已有两个根；两个冷进程仅从 IDE 缓存恢复。先前报告门禁缺少原生落盘验证，产生了不足以证明冷恢复的通过报告。保留原始报告以追溯，不篡改其内容，也不重试取绿掩盖首轮失败。
+
+因此补充退出后四个工作区的只读落盘门禁：核对 Desktop binding/journal 身份、`modules.xml` 精确登记、原生 `.iml` 最终根集合及每个 nonce 对应 marker；拒绝链接、越界路径、不完整模块、危险或超大 XML。新增 `savedProjectionProofs=4` 为报告复用必需字段，旧通过报告不再可用。九项 Python 检查通过；将新 validator 只读应用于第二轮真实产物，准确拒绝 selection，另外三组持久化检查通过。这是对既有产物的诊断，不是新一轮 GUI 执行或新候选 GO。
+
+独立审查进一步要求完整 journal schema/目录身份、UTF-8 限定与用户模块落盘保留；已补齐对应拒绝用例，复核无剩余明确问题。完整报告门禁与 `verify-report` 均已只读拒绝第二轮不足的旧证据。审查不代替 GUI 执行。
+
+对固定 262 SDK 的只读 API 调查排除了普通 startup 完成信号、后台 `ProjectActivity` 扩展顺序、legacy 可写模型和 `Project.save()`/`scheduleSave()`：这些都不能保证初始 JPS 同步已完成；JPS serializers 尚未建立时保存甚至直接跳过。已找到的精确等待接口 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 及旧 JPS loaded 通知均标为 `@Internal`，按现行规范不能加入生产实现。没有调用这些接口、放宽所有权或引入语言服务等待。兼容基线和生产插件代码未改变。
 
 ## 5. 待执行与保留范围
 
-冷启动问题解决前不能给出 S4 GO；宿主修正也须实际重验。全部结果以同一精确 ZIP、冻结 Desktop commit、独立完整进程与新鲜报告为准；遇需用户协助事项停止等待回复。
+冷启动问题解决前不能给出 S4 GO；宿主两项修正已有实际重验，新的落盘门禁已用真实失败产物核对，完整修复候选仍待后续运行。全部结果以同一精确 ZIP、冻结 Desktop commit、独立完整进程与新鲜报告为准；遇需用户协助事项停止等待回复。
 
-原三组 `legacy` 宿主在本次抽取公共 host 后仅完成编译，不能借用 2026-09-22 结果声称新宿主 UI 已通过。V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Excluded Files 两态、late-shell、额外 repo3 用户覆盖、完整负向破坏实验及成本/稳定性口径；本轮不撤销其要求。
+原三组 `legacy` 宿主也已获准执行，私有目录标识 `reqws-local-ide-j3gxzzqk`：`atomicSelectionAutomaticallyRefreshes` 通过；`loadingAndProjectTree` 因宿主下载 TLS 握手失败而失败；`emptyAndNonemptySurviveColdProcesses` 因固定 IDE 的 Marketplace 插件列表缓存 JSON 被截断而失败。合计三项执行、一项通过、两项失败，八个已启动 IDE 进程全部退出，专用 profile 已释放；未达到九进程门槛。保留严格 IDE 错误门禁，未屏蔽网络/缓存异常，不能借用 2026-09-22 结果声称新宿主通过。
+
+V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Excluded Files 两态、late-shell、额外 repo3 用户覆盖、完整负向破坏实验及成本/稳定性口径；本轮不撤销其要求。
 
 执行参数、私有报告与 `verify-report --suite desktop` 的使用见[本机入口](../ide-plugin-compatibility-automation/local-integration.md#desktop-真实-ui-联动)。
+
+## 6. 待决 API 边界
+
+现行 [AGENTS.md](../../../AGENTS.md) 和[插件标准](../../standards/ide-plugin-development-testing.md#3-插件实现约束)禁止生产使用 JetBrains `@Internal`。当前未实施的修复方向是在任何 journal/model 写入前等待 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel`，返回后重新核对 generation、trust 和 binding，并保留取消及所有权检查。它不等待语言服务、不提高最低 262、不允许其他内部 API。
+
+该方向需要用户明确决定是否给予这个接口的单独例外；当前停止于现有规则。即使获准，仍须先验证整个 262 基线/API 矩阵上的接口与取消行为，再实现并测试新候选；不能把本次 ZIP 的 CI 或局部 GUI 证据移用于生产修复后的 ZIP。

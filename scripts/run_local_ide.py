@@ -170,7 +170,8 @@ def verify_report(path, archive, version, suite='legacy'):
     if (report.get('scope') != 'local-ide-integration' or report.get('status') != 'passed'
             or report.get('suite', 'legacy') != suite
             or suite == 'desktop' and (report.get('desktop', {}).get('tests', {}).get('passed') != 1
-                                      or report.get('results', {}).get('suite') != 'desktop')
+                                      or report.get('results', {}).get('suite') != 'desktop'
+                                      or report.get('results', {}).get('savedProjectionProofs') != 4)
             or report.get('candidate', {}).get('sha256') != digest(archive)
             or report['candidate'].get('version') != version
             or report.get('actualIde') != report.get('ide')

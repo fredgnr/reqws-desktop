@@ -165,6 +165,8 @@ D06 和 D07 必须区分：现有仓库已经明确“发布前清理临时 stag
 
 S4 实施契约：在现有入口增加显式 `--suite desktop`，默认保留原三组宿主场景。专用 profile 锁覆盖 Playwright 和 Driver 的完整会话；一次性运行目录内的 UUID 会话与递增序号绑定请求/响应，只允许创建固定场景工作区、保存两仓库加载选择和结束 Desktop 会话。Desktop 通过真实 UI 创建 Git 工作区及入口，Driver 只读回查实际 workspace/binding/revision，再观察树与模型。通信不接收任意路径或命令，不进入产品代码。两端超时、异常、跳过、证据缺失或进程异常退出均不能生成通过报告；Desktop fixture 保留在私有运行目录，避免 IDE 尚未退出时删除项目。原宿主与新增联动报告按 suite 区分，旧报告不能代替新联动证据。
 
+完整进程退出后，还须逐个工作区独立读取原生 `modules.xml`、受管 `.iml` 和 journal，核对精确模块登记、最终选择的根及相同所有权 marker；仅从 IDE 缓存恢复的实时模型不能证明持久化成功。报告缺少四组落盘证明时不得复用。
+
 完整场景：
 
 1. Playwright 通过真实 Desktop UI 创建包含 repo1、repo2 的工作区。
