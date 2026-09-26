@@ -103,3 +103,7 @@ Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-o
 `16ffce1` 的[完整 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36243622124)已全部通过，包括七个 API 目标；已下载原始 ZIP/报告并严格核对同一候选。其 ZIP 与本机重建 ZIP 字节不同，因此 GUI 选择已核验的 CI 原始 ZIP，本机慢速下载中的矩阵仍独立记录。为避免共享 Gradle 输出，在同一提交的隔离 checkout 编译宿主和运行 Electron，仍独占同一专用 IDE profile。
 
 隔离首轮 `reqws-local-ide-futqtkvq` 在任何 IDE 启动前失败：Starter ZIP reader 尝试可写打开只读输入，解包失败清理又删除了本轮下载的临时 CI ZIP。Desktop 已退出、profile 已释放；未触碰用户原有产物。随后修正本机入口：原 ZIP 保持只读，先创建本轮私有可写的精确字节副本再交给 Starter；每 context 安装前后、成功前都校验候选，报告记录原件和副本。新增测试模拟安装器删除副本，确认只读原件完整保留，并拒绝错摘要、链接和已存在的 staging 目录。恢复的 CI ZIP 必须重新核对原 CI 证据，不能将该失败轮记作通过。
+
+副本修正 `e3e1211` 的二百一十项 Python workflows 通过。使用恢复并重新核验的同一 CI ZIP 运行 `reqws-local-ide-lc0x7t04`：选择/冷启动场景通过三个独立完整进程，八条实时投影及退出后原生 `.iml` 两根/marker、journal、用户模块的只读复核通过。Trust 和非法输入场景在 IDE 启动前被发布目录 TLS 握手失败阻断，整套仍失败。原只读 ZIP 保留完整，所有已启动进程退出、profile 已释放；局部冷启动成功不能代替 S4 GO。
+
+随后宿主通过公开 `IdeInstaller` 和 `DefaultIdeDistributionFactory` 复用已校验的固定 SDK，避免每个 context 重复联网解析。仅缓存确实缺失才走官方安装器；已存在但身份、路径不符的缓存直接失败。进入工厂前拒绝 JBR override/backup，防止工厂替换运行时；每 context 创建独立描述并再次核对身份。没有新增受限 API，最低 262 与原始候选 ZIP 不变；完整重跑结果待记录。

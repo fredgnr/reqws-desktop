@@ -82,6 +82,8 @@ Starter 的 ZIP reader 需要可写句柄，解包失败时还可能删除输入
 
 profile 下另缓存固定版本的官方 installer/SDK 与测试依赖，使专用 IDE 的二进制路径稳定，便于准备 macOS 权限；该缓存不含业务 fixture 或项目/system 状态，也不引用日常 IDE 安装。每轮创建新的 `reqws-local-ide-*` 私有目录，fixture、`.idea`、system、实际安装的 plugins、日志、XML 全部隔离，不能恢复上轮 sandbox。通过 IDE 运行时属性核对实际 config/system/plugins 位置。
 
+每个 Starter context 优先通过公开安装器接口复用专用缓存中精确的 `GO-262.9437.286`，核对 ProductInfo、build.txt、路径与工厂返回身份，重新创建独立的运行描述。仅缓存路径确实不存在时才下载；现有缓存损坏、链接或身份不符直接失败，不替换缓存。拒绝 JBR override 和工厂可能自动恢复的 JBR backup，避免复用时改写测试运行时。该路径不需要每个场景重复查询在线发布目录，不改变最低 262 或完整 IDE 的执行边界。
+
 Starter 宿主 JVM 的 `user.home` 指向本轮独立 `host-home`，启动时核对路径，防止第三方库访问日常 IDE 的 macOS saved-state。宿主不加载带通用进程扫描/清理逻辑的 `ide-starter-junit5` 扩展；仍使用 JUnit 5 执行用例，由本轮进程句柄负责退出及异常清理。
 
 profile 独占锁覆盖整个准备/集成会话。启动前将专用 config 的 `workspace`、IDE 自动生成的 `projects`、`recentProjects.xml`、`recentProjectDirectories.xml`、`trusted-paths.xml` 移到该轮 `private-previous-project-state`，并设置不自动重开上轮项目；这些都是专用测试配置中的项目记录，不读取、移动或清理授权文件。冷启动只在同一轮保留对应 fixture 的模型状态。
