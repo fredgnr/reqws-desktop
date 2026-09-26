@@ -1,17 +1,13 @@
 import { execFileSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 /** Register only a process just created by this host, never discover by name. */
 export function registerOwnedProcess(child: ChildProcess, scope?: string): void {
   const filename = process.env.REQWS_E2E_PROCESS_REGISTRY;
   if (!filename || !child.pid) return;
-  const reports = path.join(process.cwd(), 'test-results');
-  if (path.dirname(filename) !== reports || realpathSync(reports) !== reports
-      || !/^(source|smoke|negative|packaged)-processes\.jsonl$/u.test(path.basename(filename))) {
-    throw new Error('Refusing a process registry outside the test reports directory.');
-  }
+  assertProcessRegistryPath(filename);
   let signature: string;
   try {
     // PID, owned process-group ID, and kernel creation time survive exec.
@@ -30,6 +26,28 @@ export function registerOwnedProcess(child: ChildProcess, scope?: string): void 
   const entry = { id: randomUUID(), pid: child.pid, signature, parent: process.pid, scope };
   appendFileSync(filename, `${JSON.stringify({ event: 'start', ...entry })}\n`, { mode: 0o600 });
   child.once('close', () => appendFileSync(filename, `${JSON.stringify({ event: 'close', ...entry })}\n`));
+}
+
+/** The linked suite retains its registry alongside the independently locked IDE run. */
+export function assertProcessRegistryPath(filename: string): void {
+  const reports = path.join(process.cwd(), 'test-results');
+  const run = process.env.REQWS_LOCAL_IDE_RUN_ROOT;
+  const sessionId = process.env.REQWS_DESKTOP_IDE_SESSION;
+  if (run && sessionId && path.isAbsolute(run) && filename === path.join(run, 'desktop-processes.jsonl')) {
+    const sessionFile = path.join(run, 'desktop-link/session.json');
+    if (realpathSync(run) !== run || realpathSync(sessionFile) !== sessionFile || lstatSync(filename).isSymbolicLink()
+        || !lstatSync(filename).isFile()) throw new Error('Unsafe linked process registry path.');
+    const session = JSON.parse(readFileSync(sessionFile, 'utf8')) as Record<string, unknown>;
+    if (session.schemaVersion !== 1 || session.purpose !== 'reqws-desktop-ide-link' || session.sessionId !== sessionId) {
+      throw new Error('Linked process registry belongs to another session.');
+    }
+    return;
+  }
+  if (path.dirname(filename) !== reports || realpathSync(reports) !== reports
+      || !/^(source|smoke|negative|packaged)-processes\.jsonl$/u.test(path.basename(filename))
+      || lstatSync(filename).isSymbolicLink()) {
+    throw new Error('Refusing a process registry outside the test reports directory.');
+  }
 }
 
 /** Preserve a fixture while any registered Git group can still use its files. */

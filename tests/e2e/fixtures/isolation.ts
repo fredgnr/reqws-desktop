@@ -28,8 +28,8 @@ export interface Isolation {
   dispose(): Promise<void>;
 }
 
-export async function createIsolation(): Promise<Isolation> {
-  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'reqws-e2e-')));
+export async function createIsolation(parent = tmpdir()): Promise<Isolation> {
+  const root = await realpath(await mkdtemp(path.join(parent, 'reqws-e2e-')));
   const identity = await lstat(root);
   const owner = randomUUID();
   const ownerPath = path.join(root, OWNER_FILE);

@@ -457,6 +457,12 @@ val integrationTest by tasks.registering(Test::class) {
   testClassesDirs = integrationTestSourceSet.output.classesDirs
   classpath = integrationTestSourceSet.runtimeClasspath
   useJUnitPlatform()
+  val localSuite = providers.gradleProperty("reqwsLocalIdeSuite").getOrElse("legacy")
+  require(localSuite in setOf("legacy", "desktop")) { "Unknown local IDE suite" }
+  filter {
+    includeTestsMatching(if (localSuite == "desktop") "com.reqws.goland.DesktopWorkspaceIntegrationTest"
+      else "com.reqws.goland.WorkspaceIntegrationTest")
+  }
   maxParallelForks = 1
   failOnNoDiscoveredTests = true
   outputs.upToDateWhen { false }
@@ -481,6 +487,9 @@ val integrationTest by tasks.registering(Test::class) {
     systemProperty("reqws.integration.root", runRoot.absolutePath)
     systemProperty("reqws.local.profile", profile.absolutePath)
     systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+    if (localSuite == "desktop") {
+      systemProperty("reqws.desktop.session", providers.gradleProperty("reqwsDesktopSession").get())
+    }
   }
 }
 
@@ -505,7 +514,8 @@ val verifyIdeIntegrationReports by tasks.registering(Exec::class) {
   doFirst {
     val (runRoot, _) = requireLocalIdeLauncher()
     commandLine("python3", "../../scripts/check_ide_test_reports.py",
-      runRoot.resolve("junit"), runRoot.resolve("run-root.txt"))
+      runRoot.resolve("junit"), runRoot.resolve("run-root.txt"),
+      providers.gradleProperty("reqwsLocalIdeSuite").getOrElse("legacy"))
   }
 }
 integrationTest.configure { finalizedBy(verifyIdeIntegrationReports) }

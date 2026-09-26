@@ -15,6 +15,12 @@ interface ReqwsRemoteState {
   fun getSnapshot(): ReqwsRemoteSnapshot?
   fun getValidatedProjectionDigest(): String?
   fun getLastAppliedDigest(): String?
+  fun getLastError(): ReqwsRemoteError?
+}
+
+@Remote("com.reqws.goland.project.ReqwsProjectError", plugin = "com.reqws.workspace")
+interface ReqwsRemoteError {
+  fun getCode(): String
 }
 
 @Remote("com.reqws.goland.project.ReqwsLifecycleState", plugin = "com.reqws.workspace")
@@ -31,11 +37,20 @@ interface ReqwsRemoteSnapshot {
 interface ReqwsRemoteLoading {
   fun getProject(): ReqwsRemoteProject
   fun getDigest(): String
+  fun getLoadedIds(): Set<String>
 }
 
 @Remote("com.reqws.goland.loading.contract.GoLandProject", plugin = "com.reqws.workspace")
 interface ReqwsRemoteProject {
   fun getRevision(): Long
+  fun getWorkspaceId(): String
+  fun getBindingId(): String
+}
+
+// Only this public read API is used. Trust is changed by real dialog clicks.
+@Remote("com.intellij.ide.trustedProjects.TrustedProjects")
+interface RemoteTrustedProjects {
+  fun isProjectTrusted(project: com.intellij.driver.sdk.Project): Boolean
 }
 
 @Remote("com.intellij.openapi.roots.ProjectFileIndex")

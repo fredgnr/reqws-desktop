@@ -2,7 +2,7 @@
 title: 本机完整 IDE 自动集成入口
 type: guide
 status: active
-updated: 2026-09-22
+updated: 2026-09-26
 ---
 
 # 本机完整 IDE 自动集成入口
@@ -51,6 +51,27 @@ npm run check:goland:integration -- \
 2. 测试宿主原子写入选择，自动完成 `2 → 1 → 0 → 2`；等待本次 revision、live digest、模型/PFI、树和数量，不直接 refresh。
 3. 完整退出并以新 PID 冷启动，检查空/非空恢复和用户 root；冷启动组重复两次。完整套件要求九个不同进程正常退出。
 
+### Desktop 真实 UI 联动
+
+S4 增加独立套件，沿用同一 profile 锁、候选校验和退出保护：
+
+```bash
+npm run check:goland:desktop -- \
+  --profile "$HOME/.reqws-ide-tests/goland-2026.2.1.1" \
+  --archive /absolute/path/to/candidate.zip \
+  --version 0.1.7
+```
+
+等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。该入口尚须以获准本机运行验证，实施和实际结果见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md)。
+
+Driver 通过本轮 UUID 和递增序号请求 Desktop 创建四个普通文本 Git 工作区及保存加载选择。Desktop UI 是成功路径上 manifest/binding 的唯一 writer，Driver 独立回读文件并观察普通 Project 树、模块根、ProjectFileIndex、加载数量和 live digest。三个场景组要求六个独立、正常退出的 IDE 进程和二十条逐步投影证据：
+
+- `desktopSelectionAndColdProcesses`：保持 IDE 打开执行 `2→1→0→2`，再验证空集合及非空集合的完整进程冷启动，保留用户 root 和磁盘文件。
+- `desktopTrustTransitionUsesRealUi`：实际选择 Safe Mode，确认 ReqWS 未写保护模型，再通过 IDE 信任对话框恢复；不全局自动信任，不调用信任 setter 或同步函数。
+- `desktopInvalidInputsPreserveUserModel`：在本轮自建 fixture 对 binding 和 manifest 分别注入损坏 JSON/身份不匹配，检查真实 watcher 报错、模型保留和恢复。故障文件写入不计作 Desktop 成功链路。
+
+临时通信不暴露在产品中，也不接收任意路径或命令。任一端失败、取消、超时、skip、缺证据或异常退出都阻止通过。Desktop 项目保留在私有运行目录，不在 IDE 退出状态未确认时删除；两端退出确认不足则保留 active-session 标记。报告的 `suite=desktop` 与原 `suite=legacy` 区分，Desktop 源码身份与插件 ZIP 身份分别记录。只跑 Desktop 协议检查、编译或旧三组套件都不代表联动通过。
+
 ## 4. 授权复用与业务状态隔离
 
 用户态配置仅复用专用授权 config。授权准备不注入“已接受协议”标志，首次协议由用户在专用环境自行处理。有效试用可作为当次运行的实际授权状态，但不能证明 JetBrains Account 登录或后续授权复用。
@@ -83,5 +104,7 @@ python3 scripts/run_local_ide.py verify-report \
   --archive /absolute/path/to/final-signed-plugin.zip \
   --version 0.1.5
 ```
+
+核对 S4 联动结果时增加 `--suite desktop`，并处于报告对应的干净 Desktop commit；相同 ZIP 但 Desktop 源码变化也会被拒绝。未指定时只验证原 `legacy` 套件，旧报告不能用于证明新增联动。
 
 CI artifact 标记 `scope=ci-api`，本机报告标记 `scope=local-ide-integration`。CI 的 `localIntegration.status=not-run` 只表示 CI 未运行该层，不读取或覆盖用户的本机结果。Release 继续校验最终签名 ZIP 的 API 证据；CI 绿色、UI job 不存在或旧 skipped 都不能被表述为本机 UI 已通过。

@@ -8,10 +8,11 @@
 | [子代理实施分工](subagent-plan.md) | draft | 定义各阶段的委派、文件/资源所有权、交接和集成约束，引用统一编码模型政策。 |
 | [旧验收步骤与替代登记](manual-inventory.md) | draft | 追溯旧断言、已实现 D01–D12 选择器及 S4/V 前仍保留的范围。 |
 | [S0–S3 实施与验证记录](implementation-2026-09-26.md) | active | 记录 S0–S3 的最终代码候选、真实 CI、稳定性和保留的手工边界。 |
+| [S4 本机联动实施记录](implementation-s4-2026-09-26.md) | active | 记录真实 Desktop 驱动的本机联动实现、已执行检查及完整 IDE 待验范围。 |
 
 ## 当前状态
 
-2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 联动和 V 手工替代仍未实施，不撤销现有验收门槛。
+2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 已实现本机 Desktop→Driver 联动入口，完整 IDE 执行尚待授权与验证，见 [S4 记录](implementation-s4-2026-09-26.md)；V 未实施，不撤销现有验收门槛。
 
 方案入库基于 main `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`（0.1.6），已对齐 PR #21 合入后的插件规则，不沿用早期调研中的旧 build 上下限或 CI 完整 IDE 建议。
 

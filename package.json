@@ -24,6 +24,7 @@
     "check": "npm run typecheck && npm run lint && npm run i18n:check && npm run docs:check && npm test",
     "check:goland": "python3 scripts/check_goland.py",
     "check:goland:integration": "python3 scripts/run_local_ide.py run",
+    "check:goland:desktop": "python3 scripts/run_local_ide.py run --suite desktop",
     "prepare:goland:authorization": "python3 scripts/run_local_ide.py prepare",
     "package:goland": "./integrations/goland/gradlew -p integrations/goland verifyForbiddenProductionSymbols buildPlugin",
     "package:macos": "node scripts/run-install-macos.mjs --package-only",

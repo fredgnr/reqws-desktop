@@ -93,7 +93,7 @@ internal class LocalIdeEnvironment {
     }))
   }
 
-  fun configure(context: IDETestContext, project: Path? = null): IDETestContext = context.apply {
+  fun configure(context: IDETestContext, project: Path? = null, preTrustProject: Boolean = true): IDETestContext = context.apply {
     check(paths.configDir.startsWith(root) && paths.systemDir.startsWith(root) && paths.pluginsDir.startsWith(root))
     val sdk = ide.installationPath
     check(sdk.toRealPath().startsWith(profile.resolve("dependencies").toRealPath())) { "SDK escaped the dedicated local download cache" }
@@ -109,7 +109,7 @@ internal class LocalIdeEnvironment {
     json.writeValue(root.resolve("actual-ide.json").toFile(), actual)
     if (project != null) {
       check(project.toRealPath().startsWith(root))
-      addProjectToTrustedLocations(project, configPath = config)
+      if (preTrustProject) addProjectToTrustedLocations(project, configPath = config)
     }
     // Reuse the dedicated config in place. Never copy licenses, account data or user settings.
     // Starter's system/plugins/log locations and all .idea state stay under the fresh run root.
@@ -135,13 +135,20 @@ internal class LocalIdeEnvironment {
     }
   }
 
-  fun configureRun(context: IDERunContext) {
+  fun configureRun(context: IDERunContext, requireTrustUi: Boolean = false) {
     context.artifactsPublishingEnabled = false
     context.addVMOptionsPatch {
       // Apply after Starter's defaults: the dedicated profile must retain the user's
       // actual consent state, without test flags claiming agreements were accepted.
       listOf("jb.consents.confirmation.enabled", "jb.privacy.policy.text", "jb.privacy.policy.ai.assistant.text",
         "marketplace.eula.reviewed.and.accepted", "writerside.eula.reviewed.and.accepted").forEach(::clearSystemProperty)
+      if (requireTrustUi) {
+        // The real safe-mode dialog and transition are the subject of this scenario.
+        // Do not allow a Starter/default VM flag to make all projects trusted.
+        addSystemProperty("idea.trust.all.projects", false)
+        addSystemProperty("idea.trust.disabled", false)
+        addSystemProperty("idea.trust.headless.disabled", false)
+      }
     }
   }
 

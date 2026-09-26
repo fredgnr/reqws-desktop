@@ -161,7 +161,7 @@ def all_tests(suites):
         yield from all_tests(suite.get('suites', []))
 
 
-def validate_report(report, returncode, mode):
+def validate_report(report, returncode, mode, *, expected_config=None):
     if report.get('errors'):
         raise ValueError('Playwright reported a runner/global-setup error')
     config = report.get('config', {})
@@ -169,7 +169,7 @@ def validate_report(report, returncode, mode):
     if (config.get('workers') != 1 or config.get('forbidOnly') is not True or not projects
             or any(project.get('retries') != 0 for project in projects)):
         raise ValueError('Playwright must retain one worker, forbidOnly and zero retries')
-    if Path(config.get('configFile', '')).name != MODES[mode][0]:
+    if Path(config.get('configFile', '')).name != (expected_config or MODES[mode][0]):
         raise ValueError('Unexpected Playwright configuration')
     tests = list(all_tests(report.get('suites', [])))
     if not tests:

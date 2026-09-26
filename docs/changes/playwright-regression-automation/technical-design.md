@@ -10,7 +10,7 @@ updated: 2026-09-26
 本方案补齐 Electron 真实操作链路，并与现有本机 GoLand 自动化对接，逐项替代重复的 Computer Use 回归。
 
 - 调研日期：2026-09-22。
-- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据及待验项见[实施记录](implementation-2026-09-26.md)。S4 跨进程联动和 V 替代验收仍为后续目标。
+- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据见[实施记录](implementation-2026-09-26.md)。S4 跨进程入口已实现、完整 IDE 待验，见 [S4 记录](implementation-s4-2026-09-26.md)；V 替代验收仍为后续目标。
 - 入库基线：`fredgnr/reqws-desktop`，`main` 提交 `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`，应用版本 `0.1.6`。初次方案审阅基于 `7f9dc8b3a17d11339cfed5d7d770f90df659fe3b`；本次已核对两提交差异并同步新的插件与 CI 边界。
 - 关联工作：PR #20 是早期设计来源；插件兼容性与本机自动化已随 PR #21 合入上述 main。现行执行边界以[插件需求包](../ide-plugin-compatibility-automation/README.md)和[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)为准，完整 V 验收仍未完成。
 - 初次入库仅包含方案与索引；2026-09-26 的 S0–S3 实现单独以分支 diff 和执行报告定位，不改兼容性下限或发布配置，不将本机源码测试当作 CI/精确包证据。
@@ -162,6 +162,8 @@ D06 和 D07 必须区分：现有仓库已经明确“发布前清理临时 stag
 已有本机用例由测试宿主原子写入选择；本方案新增的是改由真实 Desktop UI 写入，验证两产品进程之间的连接。现有 Project 树、监听与冷启动场景及其报告不需要重新创建，但不能直接当作新增 Playwright 联动通过证据。
 
 建议在本机用测试编排器协调 Playwright 与现有 Driver 宿主，通过临时文件／测试进程通信共享路径和步骤状态，不给产品新增远程控制服务。复用 `scripts/run_local_ide.py` 的授权、profile 锁、候选校验及进程清理，不通过裸 Gradle 命令绕过这些保护。该联动不放入 CI，也不新增工作流授权 Secrets。
+
+S4 实施契约：在现有入口增加显式 `--suite desktop`，默认保留原三组宿主场景。专用 profile 锁覆盖 Playwright 和 Driver 的完整会话；一次性运行目录内的 UUID 会话与递增序号绑定请求/响应，只允许创建固定场景工作区、保存两仓库加载选择和结束 Desktop 会话。Desktop 通过真实 UI 创建 Git 工作区及入口，Driver 只读回查实际 workspace/binding/revision，再观察树与模型。通信不接收任意路径或命令，不进入产品代码。两端超时、异常、跳过、证据缺失或进程异常退出均不能生成通过报告；Desktop fixture 保留在私有运行目录，避免 IDE 尚未退出时删除项目。原宿主与新增联动报告按 suite 区分，旧报告不能代替新联动证据。
 
 完整场景：
 

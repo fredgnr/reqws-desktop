@@ -57,6 +57,10 @@ export class Desktop {
           ...this.isolation.env,
           REQWS_E2E_CONFIG: configPath,
           ...(registry ? { REQWS_E2E_PROCESS_REGISTRY: registry } : {}),
+          ...(process.env.REQWS_DESKTOP_IDE_SESSION && process.env.REQWS_LOCAL_IDE_RUN_ROOT ? {
+            REQWS_DESKTOP_IDE_SESSION: process.env.REQWS_DESKTOP_IDE_SESSION,
+            REQWS_LOCAL_IDE_RUN_ROOT: process.env.REQWS_LOCAL_IDE_RUN_ROOT,
+          } : {}),
         },
         chromiumSandbox: true,
         timeout: 20_000,
@@ -184,7 +188,7 @@ export class Desktop {
     await writeFile(this.info.outputPath(this.label === 'primary' ? 'disk.json' : `${this.label}-disk.json`), JSON.stringify({ state, files }, null, 2));
   }
 
-  async finish(): Promise<void> {
+  async finish(options: { preserveFixture?: boolean } = {}): Promise<void> {
     const failures: unknown[] = [];
     let serverClosed = true;
     const attempt = async (action: () => Promise<unknown>): Promise<void> => {
@@ -201,7 +205,7 @@ export class Desktop {
     await attempt(() => writeFile(this.info.outputPath(`${this.label}-renderer-console.json`), JSON.stringify(this.console)));
     await attempt(() => writeFile(this.info.outputPath(this.label === 'primary' ? 'renderer-errors.json' : `${this.label}-renderer-errors.json`), JSON.stringify(this.errors)));
     // Preserve diagnostics and the fixture if a process could still be alive.
-    if (stopped && serverClosed) await attempt(() => this.isolation.dispose());
+    if (stopped && serverClosed && !options.preserveFixture) await attempt(() => this.isolation.dispose());
     if (failures.length) throw new AggregateError(failures, `E2E cleanup or evidence failed: ${this.isolation.root}`);
   }
 }

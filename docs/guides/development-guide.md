@@ -91,6 +91,8 @@ npm run package:goland
 
 `test:e2e:packaged -- --app out/ReqWS-darwin-arm64/ReqWS.app` 仅允许真实 GitHub-hosted 一次性 macOS runner，消费同次构建的 ad-hoc 包，不重建或替换 Main，也不改变 fuse/签名。本机账户和已有 ReqWS 数据会被拒绝，禁止伪造 CI 环境绕过。source E2E、CI ad-hoc 包、personal-release 签名包及真实更新证据分别报告；S4/V 和旧手工门槛见[迁移需求包](../changes/playwright-regression-automation/README.md)。
 
+`check:goland:desktop -- --profile ... --archive ... --version ...` 是 S4 本机 Desktop→GoLand 联动入口，复用专用授权 profile 和显式 ZIP；只在获准本机环境执行，不进入 CI。它与原 `check:goland:integration` 分别记录 suite；启动、私有报告及当前待验项见[本机入口](../changes/ide-plugin-compatibility-automation/local-integration.md#desktop-真实-ui-联动)。
+
 ## 3. 代码结构与进程边界
 
 ```text
