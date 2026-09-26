@@ -7,7 +7,7 @@ updated: 2026-09-26
 
 # Compose 重构 Subagent 协作方案
 
-本规范用于后续实施中的有界委派和独立审查；编写本需求包不代表已经启动 subagent 或验证了某个模型配置。
+本规范用于后续实施中的有界委派和独立审查；编写本需求包不代表已经启动 subagent 或验证了某个模型配置。本文 Main 始终指当前用户任务的顶层 Main/Integrator，不指实现 Worker 或嵌套委派者。
 
 ## 1. 角色和使用条件
 
@@ -85,6 +85,6 @@ Reviewer 的任务单另外固定“审查 commit、允许读取范围、问题�
 
 ## 6. 翻译和最终集成
 
-默认复用既有文案，不启动翻译。出现 delta 时由 Main 提取 key/原文/占位符与上下文；Translator 返回候选 JSON，Main 验证完整性、占位符、旧 key 文案变化与语气后写入，并运行现有 i18n 检查。UI Worker 的代码写权限不包含 catalog 或翻译基线。
+默认复用既有文案，不启动翻译。出现 delta 时，Main 先合入源文案并收回对应文件写入权，再提取 key/原文/占位符与上下文；Translator 返回候选 JSON，Main 验证完整性、占位符、旧 key 文案变化与语气后写入，并运行现有 i18n 检查。源文案再次变化时重新进入翻译审查，不能复用 Worker 旧 checkout 的结果。UI Worker 的代码写权限不包含 catalog 或翻译基线；Main 串行编码回退也不授权其自行翻译。
 
 Main 最终核对同一 head 的检查、阶段状态、剩余风险及远端授权。PR/commit 由 Main 统一提交；本计划允许后续在一个实现 PR 中保留阶段性 commit，不要求每个任务单独开 PR。没有用户额外授权，不 merge、tag、Release 或发布 Marketplace。
