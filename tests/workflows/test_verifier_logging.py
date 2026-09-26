@@ -135,6 +135,7 @@ sys.exit(7)
                               ('cancelled', InterruptedError('cancelled by SIGTERM')),
                               ('keyboard', KeyboardInterrupt())]:
             with self.subTest(name=name), patch.object(runner, 'validate_plugin', return_value={'sha256': digest(archive)}), \
+                    patch.object(runner, 'audit_archive', return_value={'present': False}), \
                     patch.object(runner, 'run_logged_process', side_effect=failure), redirect_stdout(io.StringIO()):
                 result = runner.run_target(snapshot, target, archive, '1.2.3', self.root / name)
             self.assertEqual(result['status'], 'infrastructure-blocked')

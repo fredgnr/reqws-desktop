@@ -55,12 +55,26 @@ jobs:
         run: |
           version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
-            verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$version"
+            verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$version"
+          python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
+            --version "$version" --output integrations/goland/build/reports/api-baseline
           python3 scripts/stage_ide_candidate.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$version"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: weekly-main-candidate
           path: candidate
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve baseline reports and original API failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: weekly-main-baseline
+          path: |
+            integrations/goland/build/test-results
+            integrations/goland/build/reports
+            !integrations/goland/build/reports/pluginVerifier/verifier-home/**
           if-no-files-found: error
           retention-days: 14
 

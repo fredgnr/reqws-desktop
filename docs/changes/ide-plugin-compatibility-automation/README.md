@@ -13,6 +13,8 @@
 
 ## 当前状态
 
+2026-09-26 用户为 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 批准单独的受控 API 例外，范围与软超时限制见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md#6-已授权-api-例外)。原始 Verifier 失败级别全部保留，由统一入口对精确调用点、字节码和原始报告裁决；最低/固定两目标和后续完整 API 矩阵均继续执行，不扩大到其他内部或实验 API。
+
 2026-09-22 已移除 API 矩阵的 `max-parallel` 限制，工作流测试要求不再设置该字段；并发由 GitHub 的可用 runner 和账户配额决定。每周两组候选仍按阶段验证，全部必需目标和同一 ZIP 的汇总校验继续保留。此前开发记录中的双并发描述仅代表当时实现。
 
 2026-09-21 已加入统一策略、产物检查、API 目标解析/汇总、固定环境 Starter/Driver 场景及 CI/Release/每周工作流。前两轮按用户要求仅开发；用户随后授权测试、回归和推送，实际结果见[验证记录](verification-2026-09-21.md)。随后用户授权继续 IDE 回归，固定代表环境正向集成及宿主修复见[本机回归记录](local-verification-2026-09-22.md)。完整 V 验收仍未完成，不能宣称自动化替代已全部生效。

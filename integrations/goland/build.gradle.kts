@@ -13,6 +13,8 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.BuildPluginTask
@@ -47,6 +49,13 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
   @get:Input
   abstract val forbiddenSymbols: ListProperty<String>
+
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val apiExceptionPolicy: RegularFileProperty
+
+  @get:Inject
+  abstract val execOperations: ExecOperations
 
   @TaskAction
   fun verifySymbols() {
@@ -107,6 +116,13 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
           findings.forEach { appendLine("- $it") }
         }.trimEnd(),
       )
+    }
+
+    // The sole approved restricted API is checked by instruction, caller and
+    // descriptor in the composed bytes; no whole class/package is exempted.
+    execOperations.exec {
+      commandLine("python3", apiExceptionPolicy.get().asFile.absolutePath,
+        "--jar", composedJarFile.absolutePath, "--sources", sourceRootDirectory.absolutePath)
     }
 
     logger.lifecycle(
@@ -329,6 +345,7 @@ val verifyForbiddenProductionSymbols by tasks.registering(VerifyForbiddenProduct
   sourceRoot.set(layout.projectDirectory.dir("src/main"))
   composedJar.set(composedJarTask.flatMap { it.archiveFile })
   forbiddenSymbols.set(forbiddenProductionSymbols)
+  apiExceptionPolicy.set(layout.projectDirectory.file("../../scripts/ide_api_exception.py"))
 }
 
 tasks.named("check") {

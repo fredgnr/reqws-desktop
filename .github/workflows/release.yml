@@ -212,8 +212,23 @@ jobs:
         uses: ./.github/actions/setup-goland
 
       - name: Test, verify, and package the plugin
-        working-directory: integrations/goland
-        run: ./gradlew compileIntegrationTestKotlin test verifyBaselineTestReports verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin buildPlugin --no-daemon -PreleaseVersion="$VERSION"
+        run: |
+          ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports \
+            verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$VERSION"
+          python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
+            --version "$VERSION" --output integrations/goland/build/reports/api-baseline
+
+      - name: Preserve baseline reports and original API failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-goland-baseline
+          path: |
+            integrations/goland/build/test-results
+            integrations/goland/build/reports
+            !integrations/goland/build/reports/pluginVerifier/verifier-home/**
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Set up OpenSSL for plugin signing
         env:

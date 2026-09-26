@@ -271,7 +271,9 @@ class CacheWorkflowTests(unittest.TestCase):
             job = load_yaml('.github/workflows/' + workflow)['jobs']['plugin-build' if workflow == 'ci.yml' else 'goland-plugin']
             command = next(s['run'] for s in job['steps'] if 'verifyPluginProjectConfiguration' in s.get('run', ''))
             self.assertNotIn('--no-build-cache', command)
-            self.assertIn('verifyPlugin', command)
+            self.assertNotRegex(command, r'\bverifyPlugin\b')
+            self.assertIn('run_ide_verifier.py --baseline', command)
+            self.assertIn('exportPluginArchivePath', command)
 
 
 if __name__ == '__main__':

@@ -204,7 +204,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | Integration | 真实临时 Git、分支语义、workspace 生命周期、回滚和安装脚本 | 修改 Git、文件系统、状态或安装行为时运行。 |
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
-| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选运行单一 GoLand GO-262.9437.286 目标；中间子任务按影响验证装配，不重复完整矩阵。 |
+| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选保留最低/固定代表目标，并冻结完整正式 API 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -216,16 +216,16 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 Gradle 按 Wrapper 的明确版本和官方 HTTPS `distributionUrl` 管理，当前仍为 9.3.0；不设置 `distributionSha256Sum`，不增加替代 checksum 文件或预期值。保留 URL 校验、超时、缓存及既有 Wrapper JAR 验证；这不等于验证下载 ZIP 的预期字节。升级只维护明确版本，不改为动态版本或个人二进制。
 
-当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.2.1.1 target 与 Java/JVM 25；plugin ID 是 `com.reqws.workspace`，`since-build` 与 `until-build` 均为 `262.9437.286`。直接命令：
+当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、Java/JVM 25；最低编译 SDK 为 GO 2026.2，固定本机 GUI 代表为 GO 2026.2.1.1。plugin ID 是 `com.reqws.workspace`，`since-build="262"`，无普通或 strict 上限。在仓库根目录执行：
 
 ```bash
-cd integrations/goland
-./gradlew test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
-./gradlew verifyForbiddenProductionSymbols buildPlugin
-./gradlew runIde
+npm run check:goland
+npm run package:goland
 ```
 
-`verifyPlugin` 对 GoLand GO-262.9437.286 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
+`check:goland` 保留全部平台测试、源码/产物门禁和最低/固定目标，再对同一 ZIP 执行完整 API 矩阵。受控初始 JPS 接口例外只由 `scripts/run_ide_verifier.py` 结合精确报告与字节码裁决；原始 Gradle `verifyPlugin` 保留全部 failure levels，遇该授权使用仍返回非零，不能将原始失败当作脚本可以忽略任意错误的依据。`--baseline` 模式仅对应最低与固定代表两个目标，不代替完整矩阵。详见[插件 README](../../integrations/goland/README.md#build-and-verify)。
+
+`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`，消费者读取 `build/release/plugin-archive.txt` 的精确产物路径；Gradle cache、sandbox 和 build output 均不可提交。完整 IDE 使用[本机独占入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，不绕过 profile 与授权保护直接运行。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
 ### 插件开发与验收边界
 

@@ -295,7 +295,9 @@ jobs:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: |
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
-            verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+            verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+          python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
+            --version "$PLUGIN_VERSION" --output integrations/goland/build/reports/api-baseline
           python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
           python3 scripts/stage_ide_candidate.py --input "dist/release/ReqWS-${PLUGIN_VERSION}-goland-plugin.zip" --version "$PLUGIN_VERSION"
       - name: Verify versioned download cache paths

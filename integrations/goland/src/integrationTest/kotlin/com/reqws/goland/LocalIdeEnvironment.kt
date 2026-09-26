@@ -86,7 +86,7 @@ internal class LocalIdeEnvironment {
   }
 
   fun <T : ProjectInfoSpec> testCase(project: T): TestCase<T> {
-    val testCase = TestCase(IdeInfo.GoLand, project).withVersion(requireNotNull(expected["version"]))
+    val testCase = TestCase(IdeInfo.GoLand, project).useRelease(requireNotNull(expected["version"]))
     val installers = Files.createDirectories(profile.resolve("installers"))
     return testCase.onIDE(testCase.ideInfo.copy(getInstaller = {
       StandardInstaller(PublicIdeDownloader(), customInstallersDownloadDirectory = installers)

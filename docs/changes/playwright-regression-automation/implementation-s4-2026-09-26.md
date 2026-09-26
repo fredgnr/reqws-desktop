@@ -11,7 +11,7 @@ updated: 2026-09-26
 
 ## 1. 范围与当前结论
 
-基于 `feat/playwright-automation` 的 `4f5ff89` 扩展 S4；原 S0–S3 证据仍见[既有记录](implementation-2026-09-26.md)。本次不改生产 Desktop/插件行为、manifest schema、SDK、发布配置或兼容性下限：仍支持整个 `262` 系列，无上限；完整 GUI 代表仍为 GO 2026.2.1.1 / 262.9437.286。
+基于 `feat/playwright-automation` 的 `4f5ff89` 扩展 S4；原 S0–S3 证据仍见[既有记录](implementation-2026-09-26.md)。初始 S4 宿主实现不改生产行为；实跑后另获准修复插件初始 JPS 同步，并调整精确 API 例外的验证入口。manifest schema、SDK、签名/发布授权与兼容性下限不变：仍支持整个 `262` 系列，无上限；完整 GUI 代表仍为 GO 2026.2.1.1 / 262.9437.286。
 
 **S4 已获准实跑，但首轮三项测试失败，尚未通过验收。** 使用 `42d23dd` 的 CI 原始 ZIP、固定代表 IDE 和专用测试 profile；不涉及日常 IDE 或真实用户工作区。首轮暴露冷启动时延迟 JPS 覆盖，以及两项宿主问题，详见第 4 节。V 和旧手工门槛保持原状；不把编译、Electron 协议验证、CI 或旧 ZIP 的本机结果作为本轮联动通过证据。
 
@@ -82,8 +82,20 @@ V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Exc
 
 执行参数、私有报告与 `verify-report --suite desktop` 的使用见[本机入口](../ide-plugin-compatibility-automation/local-integration.md#desktop-真实-ui-联动)。
 
-## 6. 待决 API 边界
+## 6. 已授权 API 例外
 
-现行 [AGENTS.md](../../../AGENTS.md) 和[插件标准](../../standards/ide-plugin-development-testing.md#3-插件实现约束)禁止生产使用 JetBrains `@Internal`。当前未实施的修复方向是在任何 journal/model 写入前等待 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel`，返回后重新核对 generation、trust 和 binding，并保留取消及所有权检查。它不等待语言服务、不提高最低 262、不允许其他内部 API。
+用户于 2026-09-26 明确批准仅为 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 引入受控 `@Internal` 例外，并确认目前没有公开 API 或组合提供同等能力。[AGENTS.md](../../../AGENTS.md) 和[插件标准](../../standards/ide-plugin-development-testing.md#3-插件实现约束)同步记录该单独例外。修复方向是在任何 journal/model 写入前可取消地等待初始 JPS 同步，返回后重新核对 generation、trust 和 binding，并保留所有权检查。它不等待语言服务、不提高最低 262、不允许其他内部 API。
 
-该方向需要用户明确决定是否给予这个接口的单独例外；当前停止于现有规则。即使获准，仍须先验证整个 262 基线/API 矩阵上的接口与取消行为，再实现并测试新候选；不能把本次 ZIP 的 CI 或局部 GUI 证据移用于生产修复后的 ZIP。
+源码/JAR 与 Verifier 必须将例外限制在单一包装器及精确成员，保留其余阻断级别和原始报告。后续先验证整个 262 基线/API 矩阵上的接口与取消行为，再对新候选执行 S4、legacy 及原生落盘检查；不能把此前 ZIP 的 CI 或局部 GUI 证据移用于生产修复后的 ZIP。
+
+已读取缓存的最低 262.8665.270、262.8665.336、262.9437.195、固定 262.9437.286 和 262.10315.135 SDK：方法签名一致，类型有 Internal 注解，点名方法另有 Experimental 注解。两类注解的例外都只覆盖这一个使用点；源码读取不等于候选 API 矩阵通过。
+
+平台方法有一分钟软超时：它可能正常返回并留下共享超时状态，调用方取消也不会取消平台计时器。因此包装器采用项目生命周期内一次共享等待、30 秒硬超时、失败记忆且不重试；单个候选取消只取消自己的等待，不能反复启动平台计时器。超时继续阻止 ReqWS 写入。其他平台调用者此前留下的共享软超时状态无法通过获准 API 读取，该限制仍存在；不得宣称该方法在任意历史平台状态下提供绝对加载完成保证。S4 同时保留真实树/PFI和退出后原生落盘门禁。
+
+### 实现与当步检查
+
+`InitialJpsSynchronization` 是唯一受限 API 包装器；`ManagedRootsAdapter` 在目录/模型锁和 journal 之前等待，等待前后检查取消和候选有效性；`LoadedProjectionService` 在根应用成功后才发布 shell 隐藏。新增三项共享等待/取消/失败记忆测试及五项 adapter 安全测试。直接受影响的三十三项测试通过，随后完整插件 baseline 三百七十四项通过，零跳过、零失败。初轮一项测试把异常对象身份当作断言，受协程栈恢复复制影响；修正为核对异常类型、消息、调用次数和 scope 存活后重跑通过。
+
+`scripts/ide_api_exception.py` 同时核对实际 ZIP/JAR 指令和原始 Verifier 报告，只允许固定私有 `awaitPlatform(Project, Continuation)` 内一次精确 cast 与接口调用。所有 Gradle failure levels 保留，原始任务仍如实非零退出；统一 runner 仅接受两行 Internal、一行 Experimental 和唯一可解释的 `verifyPlugin` 失败，其余内容或失败仍阻断。最低/固定目标统一走 `--baseline`，CI、weekly、release 和本机原有完整矩阵继续保留；签名后仍按最终 ZIP 重新核验。二十项新门禁检查及整合后的二百零八项 Python workflows 通过。独立只读审查未发现生产修复或例外门禁的剩余明确问题，审查不计作测试执行。
+
+Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-only 跳过，类型/lint/i18n/文档检查通过；首轮沙箱阻断 loopback 与一次性 macOS fixture，未改标跳过。Starter 改用公开 `useRelease(version)` 避免无关 EAP/preview 查询，保留固定 SDK 的 ProductInfo 强核对；坏 Marketplace JSON 仅位于旧 run root，新轮自然使用新目录，未修改 profile 的账号或许可文件。完整 API 矩阵和新 ZIP 的 S4/legacy 执行结果仍待本轮集成，不提前记为通过。
