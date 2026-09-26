@@ -62,7 +62,7 @@ npm run check:goland:desktop -- \
   --version 0.1.7
 ```
 
-等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。该入口已获准实跑，首轮失败与修正状态见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md)。
+等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。该入口已通过同候选完整实跑；历史失败、修复和验证边界见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md)。
 
 Driver 通过本轮 UUID 和递增序号请求 Desktop 创建四个普通文本 Git 工作区及保存加载选择。Desktop UI 是成功路径上 manifest/binding 的唯一 writer，Driver 独立回读文件并观察普通 Project 树、模块根、ProjectFileIndex、加载数量和 live digest。三个场景组要求六个独立、正常退出的 IDE 进程和二十条逐步投影证据：
 

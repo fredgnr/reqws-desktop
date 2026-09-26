@@ -13,7 +13,7 @@ updated: 2026-09-26
 
 基于 `feat/playwright-automation` 的 `4f5ff89` 扩展 S4；原 S0–S3 证据仍见[既有记录](implementation-2026-09-26.md)。初始 S4 宿主实现不改生产行为；实跑后另获准修复插件初始 JPS 同步，并调整精确 API 例外的验证入口。manifest schema、SDK、签名/发布授权与兼容性下限不变：仍支持整个 `262` 系列，无上限；完整 GUI 代表仍为 GO 2026.2.1.1 / 262.9437.286。
 
-**S4 已获准实跑，但首轮三项测试失败，尚未通过验收。** 使用 `42d23dd` 的 CI 原始 ZIP、固定代表 IDE 和专用测试 profile；不涉及日常 IDE 或真实用户工作区。首轮暴露冷启动时延迟 JPS 覆盖，以及两项宿主问题，详见第 4 节。V 和旧手工门槛保持原状；不把编译、Electron 协议验证、CI 或旧 ZIP 的本机结果作为本轮联动通过证据。
+**S4 联动已通过同候选完整实跑。** 插件使用 `16ffce1` 的 CI 原始 ZIP，Desktop/宿主冻结为 `1652c8f`，固定代表 IDE 和专用 profile 不变；三项测试、六个独立完整进程、二十条投影及四个工作区原生落盘证明通过，见第 7 节。首轮失败和修复过程保留在第 4–6 节。V 和旧手工门槛保持原状，不涉及日常 IDE 或真实用户工作区。
 
 ## 2. 实现与真实性
 
@@ -58,7 +58,7 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 
 实际运行目录标识为 `reqws-local-ide-2g688u0l`：三项 JUnit 均失败，记录五个已退出 IDE 进程、十条局部投影证据，Desktop 会话退出已确认，profile 锁和 active-session 已释放。局部成功步骤不计作整个套件通过。
 
-- 选择场景的第一进程完成全部实时选择，第二进程完成冷启动空集合及切回两仓库；随后 IDE 延迟执行旧 `.iml` 的 JPS 加载，覆盖刚提交的两个根。第三进程遇到缺少根/marker 的所有权冲突。日志显示覆盖发生在第二进程退出前；不能归结为单纯退出未保存，也不能用路径清单重新认领、固定等待或测试自动保存掩盖。生产修复尚未完成。
+- 选择场景的第一进程完成全部实时选择，第二进程完成冷启动空集合及切回两仓库；随后 IDE 延迟执行旧 `.iml` 的 JPS 加载，覆盖刚提交的两个根。第三进程遇到缺少根/marker 的所有权冲突。日志显示覆盖发生在第二进程退出前；不能归结为单纯退出未保存，也不能用路径清单重新认领、固定等待或测试自动保存掩盖。该首轮执行时生产修复尚未完成。
 - Trust 场景的真实 Safe Mode 与信任后投影均有证据，但固定 IDE 随附的可选 `com.ypwang.plugin.go-linter` 在未信任状态启动时报错，严格 IDE 错误门禁使该项失败。宿主修正只为 Trust context 使用公开 Starter 配置生成本轮临时 disabled-plugins 文件，并回查该插件未加载；不改持久 profile 的插件设置、候选 ZIP 或错误门禁。该环境限定必须随 Trust 结果记录，不能宣称默认全部 bundled plugins 下通过。
 - 非法 binding 场景错误地要求 shell PFI 不变。既有契约要求撤销非法绑定的临时 shell 排除/树过滤，同时保留模型和用户内容。修正后严格比较根、模块和非 shell PFI，另要求原生 shell 恢复可见；证据保存实际错误态而非错误前快照。Python 负向用例继续拒绝仓库 PFI 被改变或 shell 隐藏未撤销。
 
@@ -74,7 +74,7 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 
 ## 5. 待执行与保留范围
 
-冷启动问题解决前不能给出 S4 GO；宿主两项修正已有实际重验，新的落盘门禁已用真实失败产物核对，完整修复候选仍待后续运行。全部结果以同一精确 ZIP、冻结 Desktop commit、独立完整进程与新鲜报告为准；遇需用户协助事项停止等待回复。
+冷启动修复及 S4 落盘门禁已在第 7 节候选上完成；保留以下历史失败以说明覆盖缺口和修复依据。全部结果以同一精确 ZIP、冻结 Desktop commit、独立完整进程与新鲜报告为准；遇需用户协助事项停止等待回复。
 
 原三组 `legacy` 宿主也已获准执行，私有目录标识 `reqws-local-ide-j3gxzzqk`：`atomicSelectionAutomaticallyRefreshes` 通过；`loadingAndProjectTree` 因宿主下载 TLS 握手失败而失败；`emptyAndNonemptySurviveColdProcesses` 因固定 IDE 的 Marketplace 插件列表缓存 JSON 被截断而失败。合计三项执行、一项通过、两项失败，八个已启动 IDE 进程全部退出，专用 profile 已释放；未达到九进程门槛。保留严格 IDE 错误门禁，未屏蔽网络/缓存异常，不能借用 2026-09-22 结果声称新宿主通过。
 
@@ -98,7 +98,7 @@ V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Exc
 
 `scripts/ide_api_exception.py` 同时核对实际 ZIP/JAR 指令和原始 Verifier 报告，只允许固定私有 `awaitPlatform(Project, Continuation)` 内一次精确 cast 与接口调用。所有 Gradle failure levels 保留，原始任务仍如实非零退出；统一 runner 仅接受两行 Internal、一行 Experimental 和唯一可解释的 `verifyPlugin` 失败，其余内容或失败仍阻断。最低/固定目标统一走 `--baseline`，CI、weekly、release 和本机原有完整矩阵继续保留；签名后仍按最终 ZIP 重新核验。二十项新门禁检查及整合后的二百零八项 Python workflows 通过。独立只读审查未发现生产修复或例外门禁的剩余明确问题，审查不计作测试执行。
 
-Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-only 跳过，类型/lint/i18n/文档检查通过；首轮沙箱阻断 loopback 与一次性 macOS fixture，未改标跳过。Starter 改用公开 `useRelease(version)` 避免无关 EAP/preview 查询，保留固定 SDK 的 ProductInfo 强核对；坏 Marketplace JSON 仅位于旧 run root，新轮自然使用新目录，未修改 profile 的账号或许可文件。完整 API 矩阵和新 ZIP 的 S4/legacy 执行结果仍待本轮集成，不提前记为通过。
+Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-only 跳过，类型/lint/i18n/文档检查通过；首轮沙箱阻断 loopback 与一次性 macOS fixture，未改标跳过。Starter 改用公开 `useRelease(version)` 避免无关 EAP/preview 查询，保留固定 SDK 的 ProductInfo 强核对；坏 Marketplace JSON 仅位于旧 run root，新轮自然使用新目录，未修改 profile 的账号或许可文件。该检查点尚未完成的完整 API 矩阵和新 ZIP 的 S4/legacy 实跑，后续结果独立记于下文。
 
 `16ffce1` 的[完整 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36243622124)已全部通过，包括七个 API 目标；已下载原始 ZIP/报告并严格核对同一候选。其 ZIP 与本机重建 ZIP 字节不同，因此 GUI 选择已核验的 CI 原始 ZIP，本机慢速下载中的矩阵仍独立记录。为避免共享 Gradle 输出，在同一提交的隔离 checkout 编译宿主和运行 Electron，仍独占同一专用 IDE profile。
 
@@ -106,4 +106,22 @@ Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-o
 
 副本修正 `e3e1211` 的二百一十项 Python workflows 通过。使用恢复并重新核验的同一 CI ZIP 运行 `reqws-local-ide-lc0x7t04`：选择/冷启动场景通过三个独立完整进程，八条实时投影及退出后原生 `.iml` 两根/marker、journal、用户模块的只读复核通过。Trust 和非法输入场景在 IDE 启动前被发布目录 TLS 握手失败阻断，整套仍失败。原只读 ZIP 保留完整，所有已启动进程退出、profile 已释放；局部冷启动成功不能代替 S4 GO。
 
-随后宿主通过公开 `IdeInstaller` 和 `DefaultIdeDistributionFactory` 复用已校验的固定 SDK，避免每个 context 重复联网解析。仅缓存确实缺失才走官方安装器；已存在但身份、路径不符的缓存直接失败。进入工厂前拒绝 JBR override/backup，防止工厂替换运行时；每 context 创建独立描述并再次核对身份。没有新增受限 API，最低 262 与原始候选 ZIP 不变；完整重跑结果待记录。
+随后宿主通过公开 `IdeInstaller` 和 `DefaultIdeDistributionFactory` 复用已校验的固定 SDK，避免每个 context 重复联网解析。仅缓存确实缺失才走官方安装器；已存在但身份、路径不符的缓存直接失败。进入工厂前拒绝 JBR override/backup，防止工厂替换运行时；每 context 创建独立描述并再次核对身份。没有新增受限 API，最低 262 与原始候选 ZIP 不变；完整重跑结果见第 7 节。
+
+## 7. 修复后的同候选验证
+
+插件候选是 `16ffce1` 的 CI 原始 `0.1.7` ZIP，该次完整 CI 与七目标 API 汇总均通过。Desktop/宿主冻结在干净提交 `1652c8f`，其后生产插件没有变化；不重建、重签或用另一份本机 ZIP 替代。固定 SDK 复用的宿主编译通过；独立只读审查发现并修正 plist 启动文件与解析歧义，复核无剩余明确问题。仅测试宿主使用公开 Starter API，最低 262 不受影响。
+
+S4 私有运行目录标识 `reqws-local-ide-0n2gb5n4`，2026-09-26 13:35–13:38 UTC：
+
+- 三个必需 JUnit selector 全部执行并通过，零跳过、零失败；六个不同 IDE PID 均通过并正常退出。
+- 二十条逐步投影证据通过；退出后的四个工作区均通过原生 `modules.xml`、`.iml`、根/marker、journal 和用户模块保留门禁，`savedProjectionProofs=4`。
+- Desktop Playwright 1/1 通过，零跳过、零 flaky；十个请求创建四个工作区并完成全部选择转换，Desktop 正常退出。
+- 只读 `verify-report --suite desktop` 在同一干净宿主提交核验通过；原始 ZIP 与安装副本保持一致。专用 profile 已释放后才开始后续 legacy 回归。
+- Trust 结果保留第 4 节的限定：仅该 context 禁用固定 IDE 自带的可选 Go Linter；实际 Safe Mode/Trust Project 流程与所有 IDE 错误门禁均保留。
+
+随后同一宿主、profile 和精确 ZIP 执行 legacy，私有目录标识 `reqws-local-ide-4ye6c5zo`，13:38–13:41 UTC：`loadingAndProjectTree`、`atomicSelectionAutomaticallyRefreshes`、`emptyAndNonemptySurviveColdProcesses` 三项全部通过，零跳过、零失败，九个独立 IDE 进程正常退出；`verify-report --suite legacy` 通过。两套共十五个 IDE 进程全部收尾，专用 profile 无遗留 active-session。
+
+本机另建 ZIP 的 `npm run check:goland` 完成三百七十四项 baseline、最低/固定两个 API 目标，以及完整矩阵前四项；第五项 GO-262.10315.135 下载官方 PythonCore 依赖约三十三分钟后遇到 HTTP/2 `RST_STREAM`。已按核实的父子进程关系停止该份独立检查，保留私有日志；该命令整体记为未完整完成，绝不转记为七目标通过。最终 GUI 所选的是上述已有完整 CI/API 证据的原始 CI ZIP，两份产物身份不混用。最终文档提交只记录结果，不变更已冻结实跑宿主或生产代码。
+
+该结果完成 S4 的本机联动验收，不代表最终 V、默认全部 bundled plugins 下的 Trust、签名后另一 ZIP、其他 IDE 的 GUI 或发布授权。

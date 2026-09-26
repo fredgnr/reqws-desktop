@@ -26,7 +26,7 @@ S0–S3 已有下表源码入口；本机候选的实际执行数、失败实验
 
 启动故障由独立 `npm run test:e2e:negative` 执行[断 preload](../../../tests/e2e/probes/disconnected-preload.spec.ts)和[早期 renderer 错误](../../../tests/e2e/probes/startup-error.spec.ts)；外层 runner 必须验证准确的失败原因和完整新鲜证据才成功。这些探针不作为普通套件的 expected-failure 注解。
 
-S4 已加入 [Desktop 联动 spec](../../../tests/e2e/local-ide/desktop-link.spec.ts)与 [Driver 场景](../../../integrations/goland/src/integrationTest/kotlin/com/reqws/goland/DesktopWorkspaceIntegrationTest.kt)，入口为 `check:goland:desktop`。三个选择器是 `desktopSelectionAndColdProcesses`、`desktopTrustTransitionUsesRealUi`、`desktopInvalidInputsPreserveUserModel`；实现及尚未运行的完整 IDE 结果见 [S4 记录](implementation-s4-2026-09-26.md)。其核心链路不自动涵盖 G3 的 Excluded Files 两态/late-shell、G5 的额外 repo3 用户覆盖或全部旧 GUI 断言，本表仍逐项等待 V。
+S4 已加入 [Desktop 联动 spec](../../../tests/e2e/local-ide/desktop-link.spec.ts)与 [Driver 场景](../../../integrations/goland/src/integrationTest/kotlin/com/reqws/goland/DesktopWorkspaceIntegrationTest.kt)，入口为 `check:goland:desktop`。三个选择器是 `desktopSelectionAndColdProcesses`、`desktopTrustTransitionUsesRealUi`、`desktopInvalidInputsPreserveUserModel`；同候选完整 IDE 与原生落盘通过结果、Trust 环境限定见 [S4 记录](implementation-s4-2026-09-26.md#7-修复后的同候选验证)。其核心链路不自动涵盖 G3 的 Excluded Files 两态/late-shell、G5 的额外 repo3 用户覆盖或全部旧 GUI 断言，本表仍逐项等待 V。
 
 以下各行的**统一当前决定为“保留；等待 V”**。行内“保留范围”说明即使自动化通过，仍需独立证明或继续保留的范围，不代表现在已撤销其余步骤。历史 MVP 报告为 archived，仅用于追溯旧步骤；执行以当前有效设计、标准和授权为准，不恢复已被语言解耦规范移除的 Go SDK、搜索或原生 Git 全套验收。
 
