@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { ReqwsError } from '../../shared/errors';
+import { isUsableRepositoryName } from '../../shared/repository-utils';
 import {
   workspaceManifestSchema,
   workspaceRepositorySchema,
@@ -88,6 +89,11 @@ export class WorkspaceFileWriter {
       targetPath = assertAbsolute(manifestPath, 'Manifest path');
       await assertCanonicalParentPath(targetPath, 'Manifest path');
       parsed = parseManifest(manifest);
+      for (const repository of parsed.repositories) {
+        if (!isUsableRepositoryName(repository.name) || !isUsableRepositoryName(repository.relativePath)) {
+          throw new Error('Repository path overlaps reserved workspace metadata.');
+        }
+      }
     } catch (error) {
       if (error instanceof ReqwsError && error.code === 'INVALID_INPUT') {
         throw new ReqwsError({

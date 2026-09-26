@@ -4,7 +4,7 @@
 
 | 需求 | 状态 | 说明 | 更新日期 |
 |---|---|---|---|
-| [Code Humanizer 深度代码审查](code-humanizer-review/README.md) | active | 记录固定基线的功能缺陷、重构债务、复现证据、豁免项及后续验证边界，不包含生产代码修复。 | 2026-09-21 |
+| [Code Humanizer 深度代码审查](code-humanizer-review/README.md) | active | 记录固定基线审查、R01–R06 与 C01/C02 整改契约及验证边界。 | 2026-09-26 |
 | [Cursor IDE 工作区启动](cursor-ide-launch/README.md) | active | 让 Cursor 从 Agents Window 状态也能在新的 IDE 窗口中加载受管 `.code-workspace`。 | 2026-08-14 |
 | [GitHub Actions CI 与 Release](github-actions-ci-release/README.md) | active | 定义 Desktop/GoLand 独立 CI 和版本 tag 发布流程，记录 v0.1.1 双架构正式发布与资产校验。 | 2026-09-13 |
 | [全局设置与界面国际化](global-settings/README.md) | active | 新增 Settings 页面、全局默认目录与中英文界面支持。 | 2026-09-26 |

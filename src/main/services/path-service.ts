@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { ReqwsError } from '../../shared/errors';
 import {
-  isValidRepositoryName,
+  isUsableRepositoryName,
   normalizeRepositoryName,
 } from '../../shared/repository-utils';
 
@@ -184,7 +184,7 @@ export async function repositoryPath(
   repositoryName: string,
 ): Promise<string> {
   const name = normalizeRepositoryName(repositoryName);
-  if (!isValidRepositoryName(name)) {
+  if (!isUsableRepositoryName(name)) {
     throw new ReqwsError({
       code: 'INVALID_REPOSITORY_NAME',
       message: 'Repository name is invalid.',

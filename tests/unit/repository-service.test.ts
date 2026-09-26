@@ -35,6 +35,18 @@ afterEach(async () => {
 });
 
 describe('RepositoryService', () => {
+  it.each(['.reqws', '.REQWS', ' .GiT '])('rejects reserved catalog name %s and preserves old state', async (name) => {
+    const { repositories, store } = await services();
+    const input = { name, url: 'https://example.test/repo.git', defaultBranch: 'main' };
+    await expect(repositories.create(input)).rejects.toMatchObject({ code: 'INVALID_REPOSITORY_NAME' });
+    const existing = await repositories.create({ ...input, name: 'safe' });
+    await expect(repositories.update({ ...input, id: existing.id })).rejects.toMatchObject({ code: 'INVALID_REPOSITORY_NAME' });
+    await store.update((state) => ({ ...state, repositories: [{ ...existing, name }] }));
+    expect((await repositories.list())[0]?.name).toBe(name.trim());
+    await repositories.update({ ...existing, name: 'recovered' });
+    expect((await store.read()).repositories[0]?.name).toBe('recovered');
+  });
+
   it('normalizes catalog input and enforces case-insensitive NFC name uniqueness', async () => {
     const { repositories } = await services();
     const created = await repositories.create({

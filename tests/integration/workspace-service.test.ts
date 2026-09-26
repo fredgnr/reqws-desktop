@@ -133,6 +133,25 @@ describe('WorkspaceService integration', () => {
     ]);
   });
 
+  it.each(['.reqws', '.REQWS', '.git', '.GIT'])('rejects reserved repository %s before cloning or writing', async (name) => {
+    const source = path.join(origin.seedPath, 'workspace.json');
+    await fs.writeFile(source, '{"userOwned":true}');
+    expect((await git.run(['add', 'workspace.json'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    expect((await git.run(['commit', '-m', 'user workspace file'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    expect((await git.run(['push'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    stateStore.state.repositories[0]!.name = name;
+    const clone = vi.spyOn(git, 'clone');
+    const write = vi.spyOn(files, 'writeManifest');
+    await expect(createWorkspace()).rejects.toMatchObject({ code: 'INVALID_REPOSITORY_NAME', stage: 'validating' });
+    expect(clone).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(await fs.readFile(source, 'utf8')).toBe('{"userOwned":true}');
+    expect((await git.run(['status', '--porcelain'], { cwd: origin.seedPath })).stdout).toBe('');
+    expect(await fs.readdir(path.join(root, 'features'))).toEqual([]);
+    expect(await fs.readdir(path.join(root, 'workspaces'))).toEqual([]);
+    expect(stateStore.state.workspaces).toEqual([]);
+  });
+
   async function createWorkspace() {
     return service.create({
       name: 'FEAT-123-refund',

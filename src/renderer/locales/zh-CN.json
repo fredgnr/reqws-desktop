@@ -315,7 +315,7 @@
       "GIT_PROCESS_FAILED": "Git 操作失败。",
       "GIT_PROCESS_TIMEOUT": "Git 操作超时。",
       "INVALID_INPUT": "输入内容无效。",
-      "INVALID_REPOSITORY_NAME": "仓库名称无效。",
+      "INVALID_REPOSITORY_NAME": "仓库名称无效，不能使用 .reqws、.git 等保留目录名。",
       "DUPLICATE_REPOSITORY_NAME": "仓库名称已存在。",
       "INVALID_BRANCH_NAME": "分支名称无效。",
       "REPOSITORY_UNREACHABLE": "无法连接到仓库。",

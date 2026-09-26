@@ -7,7 +7,7 @@ import {
   type ReqwsErrorPayload,
 } from '../../shared/errors';
 import {
-  isValidRepositoryName,
+  isUsableRepositoryName,
   repositoryNameKey,
 } from '../../shared/repository-utils';
 import type {
@@ -730,7 +730,7 @@ export class WorkspaceService {
       });
     }
     for (const repository of repositories) {
-      if (!repository || !isValidRepositoryName(repository.name)) {
+      if (!repository || !isUsableRepositoryName(repository.name)) {
         throw new ReqwsError({
           code: 'INVALID_REPOSITORY_NAME',
           message: 'Repository name is unsafe for a local directory.',
@@ -859,7 +859,7 @@ export class WorkspaceService {
     const seenCatalogIds = new Set<string>();
     for (const repository of manifest.repositories) {
       if (
-        !isValidRepositoryName(repository.name) ||
+        !isUsableRepositoryName(repository.name) ||
         repository.relativePath !== repository.name
       ) {
         throw new ReqwsError({

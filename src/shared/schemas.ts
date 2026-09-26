@@ -4,6 +4,7 @@ import {
   isLegacySafePersistedRepositoryUrl,
   isSafeRepositoryUrl,
   isValidRepositoryName,
+  isUsableRepositoryName,
   repositoryNameKey,
 } from './repository-utils';
 import {
@@ -152,7 +153,7 @@ export const createRepositoryInputSchema = repositorySchema.pick({
   name: true,
   url: true,
   defaultBranch: true,
-});
+}).extend({ name: repositoryName.refine(isUsableRepositoryName) });
 
 export const updateRepositoryInputSchema = createRepositoryInputSchema.extend({
   id,

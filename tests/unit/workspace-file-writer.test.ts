@@ -57,6 +57,17 @@ afterEach(async () => {
 });
 
 describe('WorkspaceFileWriter', () => {
+  it.each(['.reqws', '.REQWS', '.git', '.GIT'])('refuses to write a manifest over repository %s', async (name) => {
+    const { manifest } = await fixture();
+    manifest.repositories[0] = { ...manifest.repositories[0]!, name, relativePath: name };
+    const target = workspaceManifestPath(manifest.rootPath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, '{"userOwned":true}');
+    await expect(new WorkspaceFileWriter().writeManifest(target, manifest))
+      .rejects.toMatchObject({ code: 'MANIFEST_WRITE_FAILED' });
+    expect(await readFile(target, 'utf8')).toBe('{"userOwned":true}');
+  });
+
   it('round-trips a validated manifest through an atomic write', async () => {
     const { manifest } = await fixture();
     const writer = new WorkspaceFileWriter();
