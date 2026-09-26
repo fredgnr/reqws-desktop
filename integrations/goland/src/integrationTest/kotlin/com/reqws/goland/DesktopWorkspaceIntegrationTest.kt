@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.nio.file.Files
 import java.nio.file.LinkOption
-import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -230,12 +229,10 @@ class DesktopWorkspaceIntegrationTest {
     }
     // Preserve the user-visible error panel before the independent Project-tree
     // proof changes tool windows. No Sync Now, refresh or model mutation occurs.
-    val screenshot = Path.of(requireNotNull(takeScreenshot("reqws-error-${fixture.name}-$phase")))
-    check(screenshot.isAbsolute && screenshot.startsWith(host.root) && screenshot.toRealPath() == screenshot)
-    requireNotNull(javax.imageio.ImageIO.read(screenshot.toFile()))
+    val screenshot = host.captureIdeContent(this, "error-${fixture.name}-$phase")
     val evidence = mapOf("scenario" to fixture.name, "phase" to phase, "revision" to fixture.revision,
       "bindingId" to fixture.bindingId, "statusTexts" to statusTexts, "detailTexts" to detailTexts,
-      "screenshot" to screenshot.toString())
+      "screenshot" to screenshot)
     Files.writeString(host.root.resolve("desktop-error-ui.jsonl"), ObjectMapper().writeValueAsString(evidence) + "\n",
       StandardOpenOption.CREATE, StandardOpenOption.APPEND)
   }

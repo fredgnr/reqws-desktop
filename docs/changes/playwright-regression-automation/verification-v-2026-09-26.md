@@ -2,7 +2,7 @@
 title: Playwright V 替代验收记录
 type: test-report
 status: active
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # Playwright V 替代验收记录
@@ -11,7 +11,7 @@ updated: 2026-09-26
 
 ## 当前结论与候选
 
-V 正在验证，尚未撤销旧门槛。用户已授权测试、脚本和验收文档修改，必要本地提交，以及隔离 Electron、固定 GoLand 正负向验收；本轮不推送、不发布，不接触日常 IDE 或真实用户工作区。
+V 尚未完成，后续 GUI 等待用户确认固定 SDK 的失败诊断采集条件，旧门槛未撤销。用户已授权测试、脚本和验收文档修改，必要本地提交，以及隔离 Electron、固定 GoLand 正负向验收；本轮不推送、不发布，不接触日常 IDE 或真实用户工作区。
 
 正向插件沿用 `16ffce1` 的原始 CI `0.1.7` ZIP，来源为 [CI 36243622124](https://github.com/fredgnr/reqws-desktop/actions/runs/36243622124)。已重新读取七份原始 API 结果并执行严格汇总，确认属于同一 ZIP 和冻结矩阵。本机重建 ZIP 与它字节不同，不混用报告。最低仍为整个 `262` 系列、无上限；生产插件、SDK、API 例外和产品代码未因本轮测试扩展而改变。
 
@@ -22,10 +22,14 @@ V 正在验证，尚未撤销旧门槛。用户已授权测试、脚本和验收
 | 检查 | 真实结果和边界 |
 |---|---|
 | 新增 Desktop 验收 | [acceptance.spec.ts](../../../tests/e2e/desktop/acceptance.spec.ts) 首次 12/12 通过，零跳过、零重试，约 60 秒；涵盖预占冲突、缺默认分支、三类 Missing/Sync/遗忘、设置兼容/默认目录/错误恢复及独立权限检查。 |
-| 映射补漏 | English 再次冷启动、遗忘后删除 catalog 仍保留 clone，两项受影响用例 2/2 通过。 |
-| Desktop 全检 | `npm run check`：50 个文件、518 项通过、1 项既有 hosted-only 系统信任检查跳过；类型、lint、i18n 和当时文档检查通过。跳过不计入通过。 |
-| 完整 workflow 回归 | `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`：214/214 通过；复用已有 OpenSSL 3、Java 25 和固定 ZIP Signer 缓存，没有真实签名身份操作。 |
-| 宿主/协议 | 原三场景之外新增 `desktopUserCoverageAndUnboundShell`；初轮 Java 21 自动寻找 Java 25 遇 Foojay TLS 失败，后使用已有 Java 25 编译成功，没有修改 TLS 或安装系统工具。新增场景的真实 GUI 仍待下节验收。 |
+| 映射补漏 | English 再次冷启动、遗忘后删除 catalog 仍保留 clone，两项受影响用例 2/2 通过；D05 已补为真实 `2→3→2`，移除后独立核对 `.git`、HEAD 和用户文件。 |
+| Desktop 全检 | `npm run check`：50 个文件、519 项通过、1 项既有 hosted-only 系统信任检查跳过；类型、lint、i18n 和当时文档检查通过。跳过不计入通过。 |
+| 完整 workflow 回归 | `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`：223/223 通过；复用已有 OpenSSL 3、Java 25 和固定 ZIP Signer 缓存，没有真实签名身份操作。 |
+| 宿主/协议 | 原三场景之外新增 `desktopUserCoverageAndUnboundShell`；初轮 Java 21 自动寻找 Java 25 遇 Foojay TLS 失败，后使用已有 Java 25 编译成功，没有修改 TLS 或安装系统工具。G1/G6 的后续补证另通过 25 项 Python 检查及 Java 25 宿主编译，集成 Vitest 包含新增协议拒绝用例；真实 GUI 仍待下节验收。 |
+
+冻结 `4cd76ae` 的全套 source 30/30、两项精确负向启动门禁和核心 smoke 20 次共 80 项通过。D05 补齐后，干净 `c2013ad` 的全套 30 项各执行两次，共 60/60，零跳过、零重试、零 flaky，约 304 秒。G1/G6 补证宿主冻结为 `41b3db2`；其普通 Desktop 输入仅比 `c2013ad` 多一项 English 即时三页导航断言，该 D02 又独立重复 20 次，全部通过。其余差异限本机联动协议和宿主，不把早期报告改写成新提交的实跑。
+
+`npm run check:goland` 完整退出零：结构、产物和受控 API 例外门禁通过；374 项 baseline 的有效报告由 `UP-TO-DATE` 任务复用，不能写成 374 项本轮新执行。最低/固定两目标和完整七目标产生新报告并严格汇总通过，证据根标识 `reqws-api-_gzykk73`。这轮检查消费本机 build ZIP，与正向 GUI 所用原始 CI ZIP 分别核对，绝不混借。
 
 选择器以 Playwright 实际完整标题匹配，不在 `D01` 等表达式前加 `^`：完整测试名包含文件前缀。首个 manifest 实验因此匹配到零测试，被入口拒绝且未启动 Electron；保留失败后修正选择器，未把零测试作为通过。
 
@@ -37,6 +41,7 @@ V 正在验证，尚未撤销旧门槛。用户已授权测试、脚本和验收
 |---|---|
 | manifest 原子写失败 | 外置测试 Main 使用已有单次 OS 写失败边界；原 D04 因工作区未成功创建而失败。 |
 | 错误删除已发布工件 | 隔离副本临时改变失败清理分支；原 D07 的独立磁盘断言因 manifest 缺失而失败。 |
+| 逻辑移除错误删除仓库 | 隔离副本故意删除 D05 自有仓库，原测试在 `.git` 独立磁盘断言处因 `ENOENT` 失败。首次注入漏 `await`，只触发业务错误，保留且不计为目标检出；修正注入后准确检出，源码精确恢复，随后两轮完整正向均通过。 |
 | 禁用 watcher 同步投递 | 独立测试 ZIP 保留初始加载、截断真实文件事件到同步管线的投递。旧 S4 宿主中 revision 1/2 曾收敛，revision 3 空集合等待超时；非法输入恢复也超时，完整入口返回失败。不能假定断 watcher 后第一步必然失败。 |
 
 两项 Desktop 变异各执行一个原有测试，均准确失败；恢复原源码后同一 D04/D07 对照 2/2 通过。失败 trace 已读回真实 DOM/screenshot 事件，Electron 正常退出。watcher 实验三个 IDE 进程全部退出，Desktop 退出确认和 profile 释放均存在；它不是正向候选的通过报告。
@@ -47,7 +52,23 @@ V 正在验证，尚未撤销旧门槛。用户已授权测试、脚本和验收
 
 G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓，不能证明清空时保留该 root。因此新增“额外 root 已存在时，由 Desktop 执行 `2→0`”的过程证明；同 PID 重开后完整退出，新 PID 先只读恢复这个实际清空结果，再恢复两仓并再次冷启动，不用离线构造空输入代替保存链覆盖。
 
-新报告使用 `acceptanceVersion=2`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、33 张独立 IDE 截图、五个 Desktop 工作区和 15 个请求。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。独立只读审查和 23 项直接 Python 检查已通过；完整正向实跑、重复运行及最终复核尚待完成。
+当前新报告使用 `acceptanceVersion=4`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、37 张独立 IDE Swing 内容图、五个 Desktop 工作区和 15 个请求。五个工作区初建必须由真实 Desktop“保存并打开 GoLand”走 Main/EditorLauncher 到最终 OS spawn 边界，Starter 使用该次观测的合法 shell 参数；只有最后 OS spawn 由隔离 adapter 记录，不证明系统 LaunchServices。四次非法输入必须实际读取 ReqWS 面板中的 Error 和稳定码，并保存独立原始 UI 记录及截图，不能只检查服务状态。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。G1/G6 的独立只读审查和 25 项直接 Python 检查已通过；后续 v4 采集/清理修复的直接检查见下节。完整正向实跑、重复运行及最终复核尚待完成。
+
+### 首轮 GUI 证据拒绝
+
+`41b3db2` 的首轮增强运行 `reqws-local-ide-pzouh2_a` 在实际查看图像时发现，Driver `takeScreenshot` 保存的是整个显示器，图像不保证属于测试 IDE。已立即通过会话 abort 停止；该轮没有 V 正向结论，不把模型/树的局部成功补写成完整通过。原始资料仅保留在私有目录，不上传或作为 IDE 图像展示。
+
+外部 abort 还暴露 coordinator 的清理缺陷：finally 重复发布相同 abort 文件抛 `FileExistsError`，中断尾部清理确认。两个已启动 IDE PID 均已退出，Desktop 登记进程及带该 run root 的命令均不存在；主 Agent 复核原 registry、失败日志和精确 active marker 后释放专用 profile，另存操作收尾记录，原报告仍为 failed。后续须修正限定 IDE 内容的采集和取消清理，再用新宿主、新目录重新执行；不得复用该轮图像。
+
+### 可审查的采集/清理修复与运行条件
+
+组件采集仅使用公开 Driver 和标准 JDK API，在实际 IDE JVM 的 EDT 上将当前 `JFrame` 的真实 Swing root pane 通过 `printAll` 渲染为 PNG；不读取显示器、不裁剪全屏，也不根据状态重建界面。逐图侧车绑定采集方式、规范项目路径、frame 项目/标题、实际远程 JVM PID 和解码尺寸，v4 严格门禁继续校验完整 PNG 并拒绝旧 v3/无侧车证据。它不证明 macOS 窗口装饰、焦点或遮挡，组件实际渲染仍未执行验证。
+
+相同 session 的合法 abort 标记可幂等读取；标记写入失败仍逐个处理宿主/Desktop 子进程和原有 PID/签名登记，任何清理未确认都会保留失败，不发布成功。正常退出的 SDK 截图已通过公开 `takeScreenshot=false` 关闭，周期全屏抓图通过最终 VM patch 清除 `ide.performance.screenshot`。这不屏蔽 IDE 异常或超时门禁。
+
+固定 Starter/Driver `262.9437.185` 的缓存字节码已由独立只读调查确认两项剩余限制：`DriverWithDetailedLogging.withContext` 遇异常无条件生成 `driverError` 全屏图；`IDERunContext.captureDiagnosticOnKill` 在真实本机 GUI 模式下调用全屏 Robot helper，早于 `expectedKill`/`collectNativeThreads` 条件。公开入口没有找到可保留真实 GUI 且关闭这两种诊断的设置。不能宣称全部 SDK 截图已关闭，不能用 headless 或替换 SDK 来伪装该验收。
+
+修复已通过 22 项 Desktop workflow、10 项 launcher 回归、Java 25 宿主编译及独立只读复审；随后主 Agent 完整 workflow 回归 223/223 通过，文档检查通过。初轮编译的 Driver 调用签名错误保留在日志，修正后实际执行编译通过；未启动新 GUI、未修改生产插件或最低 262。后续 GUI 须在用户确认采集条件后，先核对首张实际组件图，再按预定两轮正向、legacy 和独立 watcher 负向重新执行；SDK 诊断全屏图不能用作 IDE 通过证据。
 
 ## 预先固定的成本样本
 
@@ -58,7 +79,7 @@ G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓
 | D04 双仓创建 | 19 个界面动作、13 次交互调用，约 90 秒；另外三次窗口发现/绑定调用单列，其中一次 bundle ID 歧义被拒绝后改用确切测试应用路径。保留原 D04 的独立 Git/磁盘断言并通过。 |
 | D08/G2 选择与树观察 | 7 个点击动作、9 次操作/观察调用，约 90 秒；另一次初始绑定单列。实际观察一仓、空集合和恢复两仓，未点 Refresh/Sync Now；原宿主三项/六进程完整通过。树展开由保留的 Driver 执行，因此本样本不测量人工展开树的成本。 |
 
-两项均无用户协助、无操作重试。选择样本的临时宿主冻结为 `cf099dd`，仅测试端等待实际 Computer Use 操作并保留原有模型/树/磁盘断言；其三项/六进程报告只作成本样本，不充当新的四项 V 验收。测量代码已恢复。当前样本不足以推导全套回归成本减少 80%、P95 或长期可靠性；自动流程的同口径计时和新冻结候选稳定性仍待补齐。
+两项均无用户协助、无操作重试。D04 自动 smoke 20 次的测试耗时中位数约 6.0 秒、最近秩 P95 约 7.0 秒；该时间包括自动独立结果断言，但不包含整轮构建，不能与一次手工样本推导长期 P95 改善。自动流程的界面操作不使用 Computer Use。选择样本的临时宿主冻结为 `cf099dd`，仅测试端等待实际 Computer Use 操作并保留原有模型/树/磁盘断言；其三项/六进程报告只作成本样本，不充当新的四项 V 验收。测量代码已恢复。当前样本不足以推导全套回归成本减少 80% 或长期可靠性；新宿主的 G2 自动计时和完整 IDE 重复运行仍待补齐。
 
 ## 证据与保留范围
 

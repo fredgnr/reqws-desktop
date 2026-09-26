@@ -234,6 +234,9 @@ internal class LocalIdeEnvironment {
   fun configureRun(context: IDERunContext, requireTrustUi: Boolean = false) {
     context.artifactsPublishingEnabled = false
     context.addVMOptionsPatch {
+      // Starter adds display-wide heartbeat screenshots before these patches.
+      // Acceptance evidence is captured explicitly from the test IDE Swing pane.
+      clearSystemProperty("ide.performance.screenshot")
       // Apply after Starter's defaults: the dedicated profile must retain the user's
       // actual consent state, without test flags claiming agreements were accepted.
       listOf("jb.consents.confirmation.enabled", "jb.privacy.policy.text", "jb.privacy.policy.ai.assistant.text",

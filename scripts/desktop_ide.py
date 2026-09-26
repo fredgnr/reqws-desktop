@@ -19,7 +19,8 @@ from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 3
+ACCEPTANCE_VERSION = 4
+CAPTURE_KIND = 'swing-root-pane-print-all'
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
 ERROR_UI_PROOFS = 4
@@ -151,7 +152,7 @@ def validate_projection_evidence(run_root, process_ids):
         raise ValueError('Missing per-step IDE model/Project-tree evidence')
     if ordinary['pid'] in {proof.get('pid') for proof in proofs}:
         raise ValueError('Unbound shell must use its own independent IDE process')
-    screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')] + validate_error_ui_evidence(run_root, proofs)
+    screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')] + validate_error_ui_evidence(run_root, proofs, snapshots)
     if any(not isinstance(path, str) for path in screenshots) or len(set(screenshots)) != len(screenshots):
         raise ValueError('Every IDE observation requires its own fresh screenshot')
     for name in NAMES:
@@ -194,7 +195,7 @@ def validate_projection_evidence(run_root, process_ids):
                     or step.get('lateFiles') is not (name == 'selection' and index >= 3)):
                 raise ValueError('The user-root/late-file/Project-view observation is incomplete')
             validate_vcs_observation(step.get('vcsMappings'))
-            validate_screenshot(run_root, step.get('screenshot'))
+            validate_screenshot(run_root, step.get('screenshot'), snapshot['shell'], step['pid'])
             if step['phase'] == 'safe-mode-blocked':
                 if (step.get('trusted') is not False or step.get('lifecycle') != 'SAFE_MODE_BLOCKED'
                         or step.get('lastAppliedDigest') is not None or step.get('validatedProjectionDigest') is not None
@@ -262,7 +263,7 @@ def validate_projection_evidence(run_root, process_ids):
     return len(proofs)
 
 
-def validate_error_ui_evidence(run_root, projections):
+def validate_error_ui_evidence(run_root, projections, snapshots):
     path = run_root / 'desktop-error-ui.jsonl'
     if not path.is_file() or path.is_symlink() or path.resolve() != path or path.stat().st_size > 64 * 1024:
         raise ValueError('User-visible ReqWS error evidence is missing or unsafe')
@@ -281,7 +282,8 @@ def validate_error_ui_evidence(run_root, projections):
                 or not isinstance(status, list) or 'Error' not in status
                 or not isinstance(details, list) or not any(isinstance(text, str) and (text == code or text.startswith(code + ' · ')) for text in details)):
             raise ValueError('The ReqWS Tool Window did not visibly report Error and the stable code')
-        validate_screenshot(run_root, observation.get('screenshot'))
+        snapshot = snapshots[proof['scenario'], proof['revision']]
+        validate_screenshot(run_root, observation.get('screenshot'), snapshot['shell'], proof['pid'])
         screenshots.append(observation['screenshot'])
     return screenshots
 
@@ -292,7 +294,7 @@ def validate_vcs_observation(mappings):
         raise ValueError('Read-only native VCS mapping observation is missing')
 
 
-def validate_screenshot(run_root, filename):
+def validate_screenshot(run_root, filename, project, pid):
     if not isinstance(filename, str):
         raise ValueError('Native Project-tree screenshot is missing')
     path = Path(filename)
@@ -310,7 +312,26 @@ def validate_screenshot(run_root, filename):
     if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
             or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)):
         raise ValueError('Native Project-tree screenshot changed during verification')
-    validate_png(data)
+    width, height = validate_png(data)
+    metadata_path = path.with_name(path.name + '.json')
+    if metadata_path.resolve() != metadata_path:
+        raise ValueError('IDE component capture metadata escaped its private location')
+    capture = read_message(metadata_path)
+    project_path = Path(project)
+    if (not isinstance(capture, dict)
+            or set(capture) != {'schemaVersion', 'captureKind', 'project', 'pid', 'frameProject', 'frameTitle', 'width', 'height'}
+            or type(capture.get('schemaVersion')) is not int or capture['schemaVersion'] != 1
+            or capture.get('captureKind') != CAPTURE_KIND
+            or type(pid) is not int or pid <= 0 or type(capture.get('pid')) is not int or capture['pid'] != pid
+            or not project_path.is_absolute() or not project_path.is_relative_to(run_root)
+            or not project_path.is_dir() or project_path.resolve() != project_path
+            or capture.get('project') != project or capture.get('frameProject') != project
+            or not isinstance(capture.get('frameTitle'), str) or not capture['frameTitle'].strip()
+            or len(capture['frameTitle']) > 4096
+            or type(capture.get('width')) is not int or type(capture.get('height')) is not int
+            or (capture['width'], capture['height']) != (width, height)
+            or width < 320 or height < 200 or width * height > 64 * 1024 * 1024):
+        raise ValueError('Screenshot does not identify the actual test IDE Swing content, project and process')
 
 
 def validate_png(data):
@@ -395,6 +416,7 @@ def validate_png(data):
         if any(pixels[offset + row * stride] > 4 for row in range(count)):
             raise ValueError('Invalid PNG scanline filter')
         offset += stride * count
+    return width, height
 
 
 def validate_ordinary_evidence(run_root):
@@ -412,7 +434,7 @@ def validate_ordinary_evidence(run_root):
             or shell.joinpath('shell-probe.txt').read_text() != 'unbound same-name shell\n'):
         raise ValueError('Missing real unbound same-name shell visibility proof')
     validate_vcs_observation(value.get('vcsMappings'))
-    validate_screenshot(run_root, value.get('screenshot'))
+    validate_screenshot(run_root, value.get('screenshot'), str(project), value['pid'])
     return value
 
 
@@ -546,6 +568,54 @@ def stop_child(process):
         pass
 
 
+def publish_once_or_verify(path, value):
+    """A coordinator may repeat an identical terminal marker, never replace it."""
+    try:
+        publish(path, value)
+    except FileExistsError:
+        existing = read_message(path)
+        if (existing != value or any(type(existing[key]) is not type(expected) for key, expected in value.items())):
+            raise ValueError('Existing terminal marker belongs to a different session or status')
+
+
+def close_linked_session(run_root, session_id, registry, children, passed):
+    failures = []
+    if not passed:
+        try:
+            publish_once_or_verify(run_root / 'desktop-link/abort.json',
+                                   {'schemaVersion': 1, 'sessionId': session_id, 'status': 'failed'})
+        except Exception as error:
+            failures.append('Abort publication failed: ' + str(error))
+    # Even an invalid/unwritable abort marker must not skip owned child cleanup.
+    children_stopped = True
+    for process in children:
+        try:
+            if process is not None and process.poll() is None:
+                try: process.wait(timeout=25)
+                except subprocess.TimeoutExpired: stop_child(process)
+            if process is not None and process.poll() is None:
+                raise ValueError('An owned child remains alive')
+        except Exception as error:
+            children_stopped = False
+            failures.append('Child cleanup failed: ' + str(error))
+    registry_checked = False
+    try:
+        killed = cleanup_owned_processes(registry)
+        registry_checked = True
+        if passed and killed:
+            failures.append('Desktop left a live owned process after completion')
+    except Exception as error:
+        failures.append('Registry cleanup failed: ' + str(error))
+    if children_stopped and registry_checked:
+        try:
+            publish_once_or_verify(run_root / 'desktop-session-closed.json',
+                {'schemaVersion': 1, 'sessionId': session_id, 'processesStopped': True, 'ownedRegistryChecked': True})
+        except Exception as error:
+            failures.append('Session closure publication failed: ' + str(error))
+    if failures:
+        raise ValueError('Linked session finalization failed: ' + '; '.join(failures))
+
+
 def execute_linked(command, run_root, timeout, environment):
     directory = run_root / 'desktop-link'
     session_id = read_message(directory / 'session.json')['sessionId']
@@ -598,23 +668,4 @@ def execute_linked(command, run_root, timeout, environment):
             passed = True
             return {'identity': source, 'tests': tests, 'exchange': exchange, 'exitCode': code}
         finally:
-            if not passed:
-                publish(directory / 'abort.json', {'schemaVersion': 1, 'sessionId': session_id, 'status': 'failed'})
-                # Let the Driver and Playwright unwind their own handles first.
-                failures = []
-                for process in (host, desktop):
-                    if process is not None and process.poll() is None:
-                        try:
-                            try: process.wait(timeout=25)
-                            except subprocess.TimeoutExpired: stop_child(process)
-                        except (OSError, subprocess.SubprocessError) as error:
-                            failures.append(str(error))
-                try:
-                    if registry.stat().st_size: cleanup_owned_processes(registry)
-                except (OSError, ValueError, subprocess.SubprocessError) as error:
-                    failures.append(str(error))
-                if failures:
-                    raise ValueError('Linked process cleanup is unconfirmed: ' + '; '.join(failures))
-            if all(process is None or process.poll() is not None for process in (desktop, host)):
-                publish(run_root / 'desktop-session-closed.json', {'schemaVersion': 1, 'sessionId': session_id,
-                        'processesStopped': True, 'ownedRegistryChecked': True})
+            close_linked_session(run_root, session_id, registry, (host, desktop), passed)

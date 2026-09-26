@@ -2,6 +2,7 @@ package com.reqws.goland
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.intellij.driver.client.Driver
+import com.intellij.driver.client.Remote
 import com.intellij.driver.client.utility
 import com.intellij.driver.client.service
 import com.intellij.driver.sdk.ProjectRootManager
@@ -19,6 +20,8 @@ import com.intellij.driver.sdk.ui.components.common.toolwindows.projectView
 import com.intellij.driver.sdk.waitFor
 import com.intellij.driver.sdk.isProjectOpened
 import com.intellij.driver.sdk.ui.components.common.dialogs.licenseDialog
+import com.intellij.driver.model.OnDispatcher
+import com.intellij.driver.model.LockSemantics
 import com.intellij.ide.starter.driver.engine.runIdeWithDriver
 import com.intellij.ide.starter.ide.IDETestContext
 import com.intellij.ide.starter.project.LocalProjectInfo
@@ -29,6 +32,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.UUID
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -76,7 +80,7 @@ internal class IdeScenarioHost {
         environment.reportPermissionBlock(failure)
         environment.block("IDE_DRIVER_UNAVAILABLE", "The isolated IDE/Driver could not establish a verified session; inspect local startup, authorization and permission diagnostics.", failure)
       }
-      val result = run.useDriverAndCloseIde(closeIdeTimeout = 1.minutes) {
+      val result = run.useDriverAndCloseIde(1.minutes, false) {
         beforeProjectOpen()
         try {
           waitFor("local IDE project opened without an authorization dialog", 2.minutes) {
@@ -328,12 +332,48 @@ internal class IdeScenarioHost {
 
   private fun screenshot(driver: Driver, name: String): String = with(driver) {
     openToolWindow("Project")
-    ideFrame().projectView().projectViewTree.setFocus()
-    // Public Driver screenshot API; the fixed SDK returns a PNG under its log directory.
-    val file = Path.of(requireNotNull(takeScreenshot("reqws-${processes.last()}-$name")))
-    check(file.isAbsolute && file.startsWith(root) && file.toRealPath() == file && Files.isRegularFile(file))
-    val image = requireNotNull(javax.imageio.ImageIO.read(file.toFile())) { "IDE screenshot is not readable" }
-    check(image.width > 0 && image.height > 0)
+    captureIdeContent(this, name)
+  }
+
+  fun captureIdeContent(driver: Driver, name: String): String = with(driver) {
+    require(name.matches(Regex("[a-z0-9-]+")))
+    val frame = ideFrame()
+    val project = Path.of(requireNotNull(singleProject().getBasePath()))
+    check(project.isAbsolute && project.startsWith(root) && project.toRealPath() == project)
+    check(requireNotNull(frame.project).getBasePath() == project.toString()) { "The captured frame belongs to a different project" }
+    val actualPid = utility<RemoteCaptureManagementFactory>().getRuntimeMXBean().getPid()
+    check(actualPid == processes.last()) { "Capture is connected to a different IDE process" }
+    val nativeFrame = cast(frame.component, RemoteCaptureFrame::class)
+    val frameTitle = nativeFrame.getTitle()
+    check(frameTitle.isNotBlank() && frameTitle.length <= 4096)
+    val directory = Files.createDirectories(root.resolve("ide-component-captures"))
+    check(directory.toRealPath() == directory)
+    val file = Files.createFile(directory.resolve("${processes.last()}-$name-${UUID.randomUUID()}.png"))
+    // Render the actual test IDE Swing root pane, not the display underneath it.
+    // All invoked methods are public Driver or standard JDK APIs. No screen
+    // capture, focus requirement, cropping or reconstructed UI is involved.
+    val captured = withContext(OnDispatcher.EDT, LockSemantics.NO_LOCK) {
+      val pane = nativeFrame.getRootPane()
+      check(pane.isShowing()) { "The test IDE root pane is not showing" }
+      val width = pane.getWidth()
+      val height = pane.getHeight()
+      check(width in 320..32768 && height in 200..32768 && width.toLong() * height <= 64L * 1024 * 1024)
+      val image = new(RemoteCaptureImage::class, width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+      val graphics = image.createGraphics()
+      try { pane.printAll(graphics) } finally { graphics.dispose() }
+      check(pane.getWidth() == width && pane.getHeight() == height) { "IDE content resized while being captured" }
+      Triple(image, width, height)
+    }
+    check(utility<RemoteCaptureImageIO>().write(captured.first, "png", new(RemoteCaptureFile::class, file.toString())))
+    check(file.toRealPath() == file && Files.isRegularFile(file) && Files.size(file) in 33..50L * 1024 * 1024)
+    val decoded = requireNotNull(javax.imageio.ImageIO.read(file.toFile())) { "IDE component PNG is not readable" }
+    check(decoded.width == captured.second && decoded.height == captured.third)
+    check(requireNotNull(frame.project).getBasePath() == project.toString()) { "The captured project changed" }
+    Files.writeString(file.resolveSibling("${file.fileName}.json"), json.writeValueAsString(mapOf(
+      "schemaVersion" to 1, "captureKind" to "swing-root-pane-print-all", "project" to project.toString(), "pid" to actualPid,
+      "frameProject" to requireNotNull(frame.project).getBasePath(), "frameTitle" to frameTitle,
+      "width" to decoded.width, "height" to decoded.height,
+    )), StandardOpenOption.CREATE_NEW)
     file.toString()
   }
 
@@ -349,3 +389,38 @@ internal data class ModelEvidence(
   val modules: Map<String, List<String>>,
   val pfi: Map<String, Map<String, Boolean>>,
 )
+
+@Remote("javax.swing.JFrame")
+internal interface RemoteCaptureFrame {
+  fun getRootPane(): RemoteCapturePane
+  fun getTitle(): String
+}
+
+@Remote("java.lang.management.ManagementFactory")
+internal interface RemoteCaptureManagementFactory { fun getRuntimeMXBean(): RemoteCaptureRuntime }
+
+@Remote("java.lang.management.RuntimeMXBean")
+internal interface RemoteCaptureRuntime { fun getPid(): Long }
+
+@Remote("javax.swing.JComponent")
+internal interface RemoteCapturePane {
+  fun getWidth(): Int
+  fun getHeight(): Int
+  fun isShowing(): Boolean
+  fun printAll(graphics: RemoteCaptureGraphics)
+}
+
+@Remote("java.awt.Graphics")
+internal interface RemoteCaptureGraphics { fun dispose() }
+
+@Remote("java.awt.image.RenderedImage")
+internal interface RemoteRenderedImage
+
+@Remote("java.awt.image.BufferedImage")
+internal interface RemoteCaptureImage : RemoteRenderedImage { fun createGraphics(): RemoteCaptureGraphics }
+
+@Remote("java.io.File")
+internal interface RemoteCaptureFile
+
+@Remote("javax.imageio.ImageIO")
+internal interface RemoteCaptureImageIO { fun write(image: RemoteRenderedImage, format: String, file: RemoteCaptureFile): Boolean }

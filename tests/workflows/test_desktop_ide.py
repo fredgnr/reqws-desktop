@@ -4,16 +4,17 @@ import copy
 import struct
 import zlib
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 import uuid
 import xml.etree.ElementTree as ET
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from desktop_ide import ACCEPTANCE_VERSION, PROJECTION_PROOFS, SAVED_PROJECTION_PROOFS, initialize_link, publish, read_message, validate_transcript, validate_projection_evidence, validate_saved_projection, validate_screenshot, native_directory_key
+from desktop_ide import CAPTURE_KIND, close_linked_session, execute_linked, validate_png, ACCEPTANCE_VERSION, PROJECTION_PROOFS, SAVED_PROJECTION_PROOFS, initialize_link, publish, read_message, validate_transcript, validate_projection_evidence, validate_saved_projection, validate_screenshot, native_directory_key
 from check_ide_test_reports import check_reports, DESKTOP_SCENARIOS, SCENARIOS
 from run_local_ide import verify_report, session_closed
 from ide_compatibility import digest, read_policy
@@ -28,6 +29,8 @@ PNG_IHDR = png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
 PNG_IDAT = png_chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33'))
 PNG_IEND = png_chunk(b'IEND')
 VALID_PNG = PNG_SIGNATURE + PNG_IHDR + PNG_IDAT + PNG_IEND
+CAPTURE_PNG = (PNG_SIGNATURE + png_chunk(b'IHDR', struct.pack('>IIBBBBB', 400, 300, 8, 2, 0, 0, 0)) +
+               png_chunk(b'IDAT', zlib.compress((b'\0' + b'\x11\x22\x33' * 400) * 300)) + PNG_IEND)
 
 
 class DesktopIdeTests(unittest.TestCase):
@@ -228,6 +231,73 @@ class DesktopIdeTests(unittest.TestCase):
         link = self.directory / 'link.json'; link.symlink_to(filename)
         with self.assertRaises(OSError): read_message(link)
 
+    def test_existing_same_session_abort_is_idempotent_and_preserves_original_failure(self):
+        abort = self.directory / 'abort.json'
+        publish(abort, {'schemaVersion': 1, 'sessionId': self.session, 'status': 'failed'})
+        original = abort.read_bytes()
+        with patch('desktop_ide.identity', return_value={}), patch('desktop_ide.assert_desktop_source',
+                side_effect=ValueError('original host failure')), patch('desktop_ide.cleanup_owned_processes', return_value=[]) as cleanup:
+            with self.assertRaisesRegex(ValueError, 'original host failure'):
+                execute_linked(['unused'], self.root, 1, {})
+        cleanup.assert_called_once_with(self.root / 'desktop-processes.jsonl')
+        self.assertEqual(abort.read_bytes(), original)
+        self.assertTrue(session_closed(self.root, 'run', 'desktop'))
+
+    def test_abort_write_failure_still_stops_both_children_and_checks_registry(self):
+        registry = self.root / 'desktop-processes.jsonl'
+        registry.touch()
+        host = Mock()
+        host.poll.side_effect = [None, 0]
+        host.wait.side_effect = subprocess.TimeoutExpired('host', 25)
+        desktop = Mock()
+        desktop.poll.side_effect = [None, 0]
+        original_publish = publish
+        def fail_abort(path, value):
+            if path.name == 'abort.json': raise PermissionError('abort denied')
+            original_publish(path, value)
+        with patch('desktop_ide.publish', side_effect=fail_abort), patch('desktop_ide.stop_child') as stop, \
+                patch('desktop_ide.cleanup_owned_processes', return_value=[]) as cleanup:
+            with self.assertRaisesRegex(ValueError, 'Abort publication failed: abort denied'):
+                close_linked_session(self.root, self.session, registry, (host, desktop), False)
+        stop.assert_called_once_with(host)
+        desktop.wait.assert_called_once_with(timeout=25)
+        cleanup.assert_called_once_with(registry)
+        self.assertTrue(session_closed(self.root, 'run', 'desktop'))
+
+    def test_foreign_abort_is_preserved_but_does_not_bypass_cleanup(self):
+        registry = self.root / 'desktop-processes.jsonl'
+        registry.touch()
+        abort = self.directory / 'abort.json'
+        publish(abort, {'schemaVersion': 1, 'sessionId': 'foreign', 'status': 'failed'})
+        original = abort.read_bytes()
+        with patch('desktop_ide.cleanup_owned_processes', return_value=[]) as cleanup:
+            with self.assertRaisesRegex(ValueError, 'different session or status'):
+                close_linked_session(self.root, self.session, registry, (None, None), False)
+        cleanup.assert_called_once_with(registry)
+        self.assertEqual(abort.read_bytes(), original)
+
+    def test_unconfirmed_child_or_registry_cleanup_never_publishes_closed_marker(self):
+        registry = self.root / 'desktop-processes.jsonl'
+        registry.touch()
+        host = Mock()
+        host.poll.return_value = None
+        host.wait.side_effect = OSError('owned child unavailable')
+        desktop = Mock()
+        desktop.poll.side_effect = [None, 0]
+        with patch('desktop_ide.cleanup_owned_processes', side_effect=ValueError('reused PID')) as cleanup:
+            with self.assertRaisesRegex(ValueError, 'owned child unavailable.*reused PID'):
+                close_linked_session(self.root, self.session, registry, (host, desktop), False)
+        desktop.wait.assert_called_once_with(timeout=25)
+        cleanup.assert_called_once_with(registry)
+        self.assertFalse((self.root / 'desktop-session-closed.json').exists())
+
+    def test_successful_test_body_cannot_hide_a_process_leak_during_finalization(self):
+        registry = self.root / 'desktop-processes.jsonl'
+        registry.touch()
+        with patch('desktop_ide.cleanup_owned_processes', return_value=[123]):
+            with self.assertRaisesRegex(ValueError, 'live owned process'):
+                close_linked_session(self.root, self.session, registry, (None, None), True)
+
     def test_ide_reports_reject_legacy_skips_duplicates_and_unclean_processes(self):
         self.transcript()
         self.write_proofs()
@@ -299,7 +369,7 @@ class DesktopIdeTests(unittest.TestCase):
                          'tree': tree, 'trusted': not blocked, 'loadedIds': [repo['id'] for repo in snapshot['repositories'] if repo['name'] in loaded],
                          'lifecycle': 'SAFE_MODE_BLOCKED' if blocked else 'ERROR' if phase in {'malformed', 'mismatched'} else 'SYNCHRONIZED',
                          'error': 'MANIFEST_INVALID_JSON' if name == 'invalid-manifest' and phase == 'malformed' else 'BINDING_ERROR'}
-                proof['screenshot'] = self.screenshot(f'{name}-{index}')
+                proof['screenshot'] = self.screenshot(f'{name}-{index}', snapshot['shell'], pid)
                 for key in ['loadingDigest', 'validatedProjectionDigest', 'lastAppliedDigest']: proof[key] = None if blocked else '1' * 64
                 proofs.append(proof)
         (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in proofs))
@@ -309,29 +379,67 @@ class DesktopIdeTests(unittest.TestCase):
         (shell / 'shell-probe.txt').write_text('unbound same-name shell\n')
         (self.root / 'desktop-ordinary.json').write_text(json.dumps({'pid': 108, 'project': str(ordinary),
             'tree': [['unbound-fixture', '.reqws', 'ide', 'goland', 'shell-probe.txt']], 'inContent': True,
-            'lifecycle': 'INACTIVE', 'vcsMappings': [], 'screenshot': self.screenshot('ordinary')}))
+            'lifecycle': 'INACTIVE', 'vcsMappings': [], 'screenshot': self.screenshot('ordinary', str(ordinary), 108)}))
         errors = []
         for proof in proofs:
             if proof['phase'] not in {'malformed', 'mismatched'}: continue
             errors.append({'scenario': proof['scenario'], 'phase': proof['phase'], 'bindingId': proof['bindingId'],
                 'revision': proof['revision'], 'statusTexts': ['Error'], 'detailTexts': [proof['error']],
-                'screenshot': self.screenshot(f"error-{proof['scenario']}-{proof['phase']}")})
+                'screenshot': self.screenshot(f"error-{proof['scenario']}-{proof['phase']}",
+                    snapshots[proof['scenario'], proof['revision']]['shell'], proof['pid'])})
         (self.root / 'desktop-error-ui.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in errors))
         return proofs
 
-    def screenshot(self, name):
+    def screenshot(self, name, project=None, pid=100):
         file = self.root / f'{name}.png'
-        file.write_bytes(VALID_PNG)
+        file.write_bytes(CAPTURE_PNG)
+        project = project or str(self.root)
+        file.with_name(file.name + '.json').write_text(json.dumps({
+            'schemaVersion': 1, 'captureKind': CAPTURE_KIND, 'project': project, 'frameProject': project,
+            'frameTitle': 'Fixture - GoLand', 'pid': pid, 'width': 400, 'height': 300}))
         return str(file)
 
+    def test_every_capture_requires_component_provenance_matching_project_pid_and_pixels(self):
+        filename = self.screenshot('component')
+        validate_screenshot(self.root, filename, str(self.root), 100)
+        sidecar = Path(filename + '.json')
+        original = read_message(sidecar)
+        for key, value in [('schemaVersion', 2), ('captureKind', 'full-screen'), ('pid', 101), ('pid', True),
+                           ('project', '/Applications/GoLand.app'), ('frameProject', '/foreign'),
+                           ('frameTitle', ''), ('width', 1), ('height', 1)]:
+            with self.subTest(field=key, value=value):
+                sidecar.write_text(json.dumps({**original, key: value}))
+                with self.assertRaises(ValueError): validate_screenshot(self.root, filename, str(self.root), 100)
+        sidecar.unlink()
+        with self.assertRaises(OSError): validate_screenshot(self.root, filename, str(self.root), 100)
+
+    def test_raw_capture_metadata_cannot_be_replaced_by_v4_summary_or_a_renamed_full_screen(self):
+        self.transcript()
+        proofs = self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual(validate_projection_evidence(self.root, pids), PROJECTION_PROOFS)
+        error_ui = [json.loads(line) for line in (self.root / 'desktop-error-ui.jsonl').read_text().splitlines()]
+        ordinary = read_message(self.root / 'desktop-ordinary.json')
+        for observation in [proofs[0], error_ui[0], ordinary]:
+            sidecar = Path(observation['screenshot'] + '.json')
+            original = sidecar.read_bytes()
+            metadata = read_message(sidecar)
+            metadata['captureKind'] = 'full-screen'
+            sidecar.write_text(json.dumps(metadata))
+            try:
+                with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+            finally:
+                sidecar.write_bytes(original)
+
     def test_screenshots_require_complete_crc_checked_png_and_one_bounded_zlib_stream(self):
-        path = Path(self.screenshot('integrity'))
-        validate_screenshot(self.root, str(path))
+        path = self.root / 'integrity.png'
+        path.write_bytes(VALID_PNG)
+        self.assertEqual(validate_png(path.read_bytes()), (1, 1))
         compressed = zlib.compress(b'\0\x11\x22\x33')
         # Multiple consecutive IDAT chunks are one legal PNG image stream.
         prefix = PNG_SIGNATURE + PNG_IHDR
         path.write_bytes(prefix + png_chunk(b'IDAT', compressed[:3]) + png_chunk(b'IDAT', compressed[3:]) + PNG_IEND)
-        validate_screenshot(self.root, str(path))
+        validate_png(path.read_bytes())
         cases = {
             'header-only': prefix,
             'truncated-chunk': VALID_PNG[:-2],
@@ -353,7 +461,7 @@ class DesktopIdeTests(unittest.TestCase):
         for name, image in cases.items():
             with self.subTest(name=name):
                 path.write_bytes(image)
-                with self.assertRaises(ValueError): validate_screenshot(self.root, str(path))
+                with self.assertRaises(ValueError): validate_png(path.read_bytes())
 
     def test_g4_user_root_survives_two_to_empty_before_project_reopen_and_cold_recovery(self):
         self.transcript()
@@ -480,7 +588,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))
