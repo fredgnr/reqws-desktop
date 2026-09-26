@@ -57,6 +57,16 @@ afterEach(async () => {
 });
 
 describe('WorkspaceFileWriter', () => {
+  it('preserves raw path spelling and rejects relative or leading-whitespace inputs', async () => {
+    expect(workspaceManifestPath('/tmp/Cafe\u0301 ')).toBe('/tmp/Cafe\u0301 /.reqws/workspace.json');
+    const { manifest } = await fixture();
+    for (const target of ['', '  ', 'relative', ' /tmp/workspace']) {
+      expect(() => workspaceManifestPath(target)).toThrow('Workspace root must be an absolute path.');
+      await expect(new WorkspaceFileWriter().readManifest(target)).rejects.toMatchObject({ code: 'INVALID_INPUT', stage: undefined });
+      await expect(new WorkspaceFileWriter().writeManifest(target, manifest)).rejects.toMatchObject({ code: 'MANIFEST_WRITE_FAILED', stage: undefined });
+    }
+  });
+
   it.each(['.reqws', '.REQWS', '.git', '.GIT'])('refuses to write a manifest over repository %s', async (name) => {
     const { manifest } = await fixture();
     manifest.repositories[0] = { ...manifest.repositories[0]!, name, relativePath: name };

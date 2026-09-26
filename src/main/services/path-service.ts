@@ -69,17 +69,27 @@ async function restoreTopLevelAlias(
   }
 }
 
+/** Check raw syntax without changing path identity at a persistence boundary. */
+export function assertAbsolutePathSyntax(
+  inputPath: string,
+  label: string,
+  stage?: string,
+): void {
+  if (!path.isAbsolute(inputPath)) {
+    throw new ReqwsError({
+      code: 'INVALID_INPUT',
+      message: `${label} must be an absolute path.`,
+      ...(stage ? { stage } : {}),
+    });
+  }
+}
+
 export function assertAbsolutePath(
   inputPath: string,
   label = 'Path',
 ): string {
   const normalized = inputPath.normalize('NFC').trim();
-  if (!normalized || !path.isAbsolute(normalized)) {
-    throw new ReqwsError({
-      code: 'INVALID_INPUT',
-      message: `${label} must be an absolute path.`,
-    });
-  }
+  assertAbsolutePathSyntax(normalized, label);
   return path.resolve(normalized);
 }
 

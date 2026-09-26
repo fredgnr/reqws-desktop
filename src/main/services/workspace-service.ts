@@ -32,7 +32,9 @@ import {
 } from '../../shared/workspace-utils';
 import type { BranchService } from './branch-service';
 import type { GitRunner } from './git-runner';
+import { workspaceManifestPath as manifestPathFor } from './workspace-file-writer';
 import {
+  assertAbsolutePathSyntax,
   assertCanonicalParentPath,
   assertContainedPath,
   assertIndependentGitRepository,
@@ -67,10 +69,6 @@ export interface OperationProgressPort {
 }
 
 const noProgress: OperationProgressPort = { report: () => undefined };
-
-function manifestPathFor(rootPath: string): string {
-  return path.join(rootPath, '.reqws', 'workspace.json');
-}
 
 async function pathExists(target: string): Promise<boolean> {
   try {
@@ -120,16 +118,6 @@ async function pathEntryExists(target: string): Promise<boolean> {
   } catch (error) {
     if (isNodeError(error, 'ENOENT')) return false;
     throw workspacePathError(error);
-  }
-}
-
-function assertAbsolutePath(target: string, label: string): void {
-  if (!path.isAbsolute(target)) {
-    throw new ReqwsError({
-      code: 'INVALID_INPUT',
-      message: `${label} must be an absolute path.`,
-      stage: 'validating',
-    });
   }
 }
 
@@ -659,8 +647,8 @@ export class WorkspaceService {
     rootPath: string;
     workspaceFilePath: string;
   }> {
-    assertAbsolutePath(input.rootPath, 'Workspace root');
-    assertAbsolutePath(input.workspaceFileDirectory, 'Workspace file directory');
+    assertAbsolutePathSyntax(input.rootPath, 'Workspace root', 'validating');
+    assertAbsolutePathSyntax(input.workspaceFileDirectory, 'Workspace file directory', 'validating');
     if (new Set(input.repositoryIds).size !== input.repositoryIds.length) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -824,8 +812,8 @@ export class WorkspaceService {
   private async readBoundManifest(
     summary: WorkspaceSummary,
   ): Promise<WorkspaceManifest> {
-    assertAbsolutePath(summary.rootPath, 'Workspace root');
-    assertAbsolutePath(summary.workspaceFilePath, 'Workspace file path');
+    assertAbsolutePathSyntax(summary.rootPath, 'Workspace root', 'validating');
+    assertAbsolutePathSyntax(summary.workspaceFilePath, 'Workspace file path', 'validating');
     await this.assertWorkspaceFileDestination(summary.workspaceFilePath);
     const rootStat = await fs.lstat(summary.rootPath);
     const realRoot = await resolveProspectiveRealPath(summary.rootPath);

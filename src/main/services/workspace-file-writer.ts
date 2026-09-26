@@ -16,7 +16,7 @@ import {
   writeJsonAtomically,
   writeJsonAtomicallyIfAbsent,
 } from './atomic-json-store';
-import { assertCanonicalParentPath } from './path-service';
+import { assertAbsolutePathSyntax, assertCanonicalParentPath } from './path-service';
 
 export interface CodeWorkspaceWriteOptions {
   /** Creation uses false so a concurrent user-created file is never replaced. */
@@ -38,12 +38,7 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 function assertAbsolute(inputPath: string, description: string): string {
-  if (!path.isAbsolute(inputPath)) {
-    throw new ReqwsError({
-      code: 'INVALID_INPUT',
-      message: `${description} must be an absolute path.`,
-    });
-  }
+  assertAbsolutePathSyntax(inputPath, description);
   return path.resolve(inputPath);
 }
 
