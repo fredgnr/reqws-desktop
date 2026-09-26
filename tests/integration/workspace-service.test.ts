@@ -152,6 +152,22 @@ describe('WorkspaceService integration', () => {
     expect(stateStore.state.workspaces).toEqual([]);
   });
 
+  it('reuses a logically removed repository with a safe SSH URI origin', async () => {
+    const created = await createWorkspace();
+    const target = path.join(created.rootPath, 'order-api');
+    const url = 'ssh://git@example.invalid/team/order-api.git';
+    expect((await git.run(['remote', 'set-url', 'origin', url], { cwd: target })).exitCode).toBe(0);
+    await service.removeRepository({ workspaceId: created.id, catalogRepositoryId: 'repo-order' });
+    stateStore.state.repositories[0]!.url = url;
+    // The identity check uses real Git. Branch network work is outside this local fixture.
+    vi.spyOn(git, 'fetch').mockResolvedValue(undefined);
+    const clone = vi.spyOn(git, 'clone');
+    const added = await service.addRepository({ workspaceId: created.id, repositoryId: 'repo-order' });
+    expect(added.repositories.map((repo) => repo.name)).toEqual(['order-api']);
+    expect(clone).not.toHaveBeenCalled();
+    expect(await git.originUrlMatches(target, url)).toBe(true);
+  });
+
   async function createWorkspace() {
     return service.create({
       name: 'FEAT-123-refund',

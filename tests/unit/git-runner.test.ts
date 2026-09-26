@@ -179,6 +179,19 @@ describe('GitRunner', () => {
     });
   });
 
+  it('validates origin stdout without exposing unsafe raw output or weakening general redaction', async () => {
+    const calls: SpawnCall[] = [];
+    let url = 'ssh://git@example.test/team/repo.git';
+    const runner = await GitRunner.fromPath('/trusted/git', successfulSpawn(calls, () => ({ stdout: url })));
+    expect(await runner.originUrlMatches('/repo', url)).toBe(true);
+    expect((await runner.run(['remote', 'get-url', 'origin'])).stdout).toContain('<redacted>');
+    for (const unsafe of ['https://rose:secret@example.test/repo.git', 'ssh://git:secret@example.test/repo.git', 'https://example.test/repo?token=secret']) {
+      url = unsafe;
+      expect(await runner.originUrlMatches('/repo', unsafe)).toBe(false);
+      expect(JSON.stringify(await runner.run(['remote', 'get-url', 'origin']))).not.toContain('secret');
+    }
+  });
+
   it('caps each output stream, marks truncation, and retains the tail', async () => {
     const calls: SpawnCall[] = [];
     const oversized = Buffer.concat([

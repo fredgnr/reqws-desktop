@@ -287,6 +287,12 @@ export class GitRunner {
   }
 
   async run(args: readonly string[], options: GitRunOptions = {}): Promise<GitRunResult> {
+    const result = await this.runProcess(args, options);
+    return { ...result, stdout: redactGitOutput(result.stdout) };
+  }
+
+  /** Raw stdout stays inside this service, before command-specific validation. */
+  private async runProcess(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
     const release = this.options.activityGate?.enter();
     let childStarted = false;
     let childClosed = false;
@@ -356,7 +362,7 @@ export class GitRunner {
         cleanupTimers();
         resolve({
           exitCode: code ?? (timedOut ? 124 : 1),
-          stdout: redactGitOutput(stdout.toString()),
+          stdout: stdout.toString(),
           stderr: redactGitOutput(stderr.toString()),
           timedOut,
         });
@@ -462,13 +468,17 @@ export class GitRunner {
     return result.exitCode === 0;
   }
 
-  async getOriginUrl(repositoryPath: string): Promise<string | null> {
-    const result = await this.run(['remote', 'get-url', 'origin'], {
+  private async getOriginUrl(repositoryPath: string): Promise<string | null> {
+    const result = await this.runProcess(['remote', 'get-url', 'origin'], {
       cwd: repositoryPath,
       timeoutMs: GIT_DEFAULT_TIMEOUT_MS,
     });
     if (result.timedOut || result.exitCode !== 0) return null;
-    return result.stdout.trim();
+    const url = result.stdout.trim();
+    return isSafeRepositoryUrl(url)
+      || (this.options.allowLocalRepositoryPaths === true && isSafeLocalRepositoryPath(url))
+      ? url
+      : null;
   }
 
   /** Intentionally conservative: no URL rewriting, canonicalization, or guessing. */
