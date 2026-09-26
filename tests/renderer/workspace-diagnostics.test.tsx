@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, cleanup, render, screen } from '@testing-library/react';
+import { act, fireEvent, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ErrorNotice } from '../../src/renderer/components/ErrorNotice';
@@ -122,7 +122,7 @@ describe('Workspace diagnostics', () => {
 it('distinguishes inaccessible workspace paths in both locales', async () => {
   const error = { code: 'WORKSPACE_PATH_UNAVAILABLE', message: 'Unable to inspect workspace path.', detail: 'EACCES: denied', stage: 'validating' };
   render(<ErrorNotice error={error} />);
-  expect(screen.getByText('无法访问工作区路径，请检查文件权限或磁盘状态。')).toBeInTheDocument();
-  await i18n.changeLanguage('en-US');
-  expect(await screen.findByText('The workspace path could not be accessed. Check file permissions or disk status.')).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('无法访问工作区路径，请检查文件权限或磁盘状态。');
+  await act(async () => { await i18n.changeLanguage('en-US'); });
+  expect(screen.getByRole('alert')).toHaveTextContent('The workspace path could not be accessed. Check file permissions or disk status.');
 });
