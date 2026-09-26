@@ -49,10 +49,15 @@ export class Desktop {
       electron: process.versions.electron, node: process.version,
       platform: process.platform, arch: process.arch,
     }, null, 2));
+    const registry = process.env.REQWS_E2E_PROCESS_REGISTRY;
     try {
       this.app = await _electron.launch({
         args: [this.entry],
-        env: { ...this.isolation.env, REQWS_E2E_CONFIG: configPath },
+        env: {
+          ...this.isolation.env,
+          REQWS_E2E_CONFIG: configPath,
+          ...(registry ? { REQWS_E2E_PROCESS_REGISTRY: registry } : {}),
+        },
         chromiumSandbox: true,
         timeout: 20_000,
         artifactsDir: output,
@@ -135,7 +140,8 @@ export class Desktop {
     try {
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         // Playwright's locked POSIX launcher creates a detached group led by
-        // this exact owned PID; include its Chromium/Git children in cleanup.
+        // this exact owned PID; include its Chromium children in cleanup.
+        // Detached Git groups are separately registered for runner cleanup.
         process.kill(-child.pid, 'SIGKILL');
       }
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null).toBe(true);

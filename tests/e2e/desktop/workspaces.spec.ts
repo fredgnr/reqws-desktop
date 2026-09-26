@@ -96,6 +96,15 @@ test('D04 creates a real two-repository workspace with independent Git and disk 
   expect(new Set(metadataPaths).size).toBe(2);
   expect(await git(desktop, path.join(root, names[0]!), ['rev-parse', '--abbrev-ref', '@{upstream}'])).toBe('origin/feat/e2e');
   expect(await Promise.all(barePaths.map((bare) => git(desktop, bare, ['show-ref'])))).toEqual(refsBefore);
+  const registry = process.env.REQWS_E2E_PROCESS_REGISTRY;
+  if (registry) {
+    const records = (await readFile(registry, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
+      event: string; parent: number; scope?: string;
+    });
+    expect(records.some((record) => record.event === 'start'
+      && record.parent === desktop.app.process().pid && record.scope === desktop.isolation.home),
+    'Main Git clients participate in runner ownership cleanup').toBe(true);
+  }
   await expect(desktop.page.getByRole('row').filter({ has: desktop.page.getByText('two-repositories', { exact: true }) })).toContainText('Ready');
 });
 

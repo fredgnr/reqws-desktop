@@ -1,10 +1,10 @@
 import { execFileSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 /** Register only a process just created by this host, never discover by name. */
-export function registerOwnedProcess(child: ChildProcess): void {
+export function registerOwnedProcess(child: ChildProcess, scope?: string): void {
   const filename = process.env.REQWS_E2E_PROCESS_REGISTRY;
   if (!filename || !child.pid) return;
   const reports = path.join(process.cwd(), 'test-results');
@@ -27,7 +27,30 @@ export function registerOwnedProcess(child: ChildProcess): void {
   }
   const [pid, group] = signature.split(/\s+/u).map(Number);
   if (pid !== child.pid || group !== child.pid) throw new Error('Fixture process does not lead its own process group.');
-  const entry = { id: randomUUID(), pid: child.pid, signature };
+  const entry = { id: randomUUID(), pid: child.pid, signature, parent: process.pid, scope };
   appendFileSync(filename, `${JSON.stringify({ event: 'start', ...entry })}\n`, { mode: 0o600 });
   child.once('close', () => appendFileSync(filename, `${JSON.stringify({ event: 'close', ...entry })}\n`));
+}
+
+/** Preserve a fixture while any registered Git group can still use its files. */
+export function assertOwnedProcessesExited(scope: string): void {
+  const filename = process.env.REQWS_E2E_PROCESS_REGISTRY;
+  if (!filename) return;
+  const records = new Map<string, { event: string; pid: number; signature: string; scope?: string }>();
+  for (const line of readFileSync(filename, 'utf8').split('\n').filter(Boolean)) {
+    const record = JSON.parse(line) as { id: string; event: string; pid: number; signature: string; scope?: string };
+    records.set(record.id, record);
+  }
+  for (const record of records.values()) {
+    if (record.scope !== scope || record.event !== 'start') continue;
+    try {
+      process.kill(-record.pid, 0);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') continue;
+      throw error;
+    }
+    // No signal is sent here. The runner alone verifies the complete signature
+    // before terminating a remaining group; an uncertain fixture stays intact.
+    throw new Error('Owned Git process may still be alive; preserving its fixture.');
+  }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { assertOwnedProcessesExited, registerOwnedProcess } from './process-registry';
 
 import {
   sanitizeGitEnvironment,
@@ -37,6 +38,7 @@ export async function createIsolation(): Promise<Isolation> {
 
   const dispose = async (): Promise<void> => {
     if (disposed) return;
+    assertOwnedProcessesExited(path.join(root, 'home'));
     const current = await lstat(root);
     if (
       !current.isDirectory()
@@ -114,7 +116,7 @@ export function isolatedGitSpawn(
     // GitRunner intentionally strips inherited GIT_* values. Only this fixed
     // test-host value is added afterwards, excluding the machine's Git config.
     sanitized.GIT_CONFIG_NOSYSTEM = '1';
-    return spawn(command, [
+    const child = spawn(command, [
       '-c', 'credential.helper=',
       '-c', 'core.askPass=',
       '-c', `core.hooksPath=${isolation.hooks}`,
@@ -132,5 +134,7 @@ export function isolatedGitSpawn(
       shell: false,
       stdio: 'pipe',
     });
+    if (options.detached) registerOwnedProcess(child, isolation.home);
+    return child;
   };
 }

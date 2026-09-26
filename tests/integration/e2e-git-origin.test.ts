@@ -1,12 +1,16 @@
-import { lstat, readFile, rename, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { once } from 'node:events';
+import { lstat, mkdir, readFile, rename, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { get, request as httpsRequest } from 'node:https';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GitRunner } from '../../src/main/services/git-runner';
 import { createGitOrigin, type GitOrigin } from '../e2e/fixtures/git-origin';
 import { createIsolation, isolatedGitSpawn, type Isolation } from '../e2e/fixtures/isolation';
+import { assertOwnedProcessesExited } from '../e2e/fixtures/process-registry';
 
 describe('isolated E2E HTTPS Git origin', () => {
   let isolations: Isolation[];
@@ -192,5 +196,56 @@ describe('isolated E2E HTTPS Git origin', () => {
     await isolation.dispose();
     await expect(stat(isolation.root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(sentinel, 'utf8')).toBe('preserve external fixture');
+  });
+
+  it('preserves a live Git fixture and lets the runner terminate only its registered detached group', async () => {
+    const isolation = await isolate();
+    const scripts = path.resolve('scripts');
+    const registry = path.join(isolation.root, 'test-results', 'source-processes.jsonl');
+    await mkdir(path.dirname(registry));
+    await writeFile(registry, '');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(isolation.root);
+    vi.stubEnv('REQWS_E2E_PROCESS_REGISTRY', registry);
+    let child: ChildProcessWithoutNullStreams | undefined;
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true, shell: false, stdio: 'pipe',
+    });
+    const unrelatedClosed = once(unrelated, 'close');
+    let operation: ReturnType<GitRunner['run']> | undefined;
+    try {
+      const spawnGit = isolatedGitSpawn(isolation);
+      const git = await GitRunner.create((command, args, options) => {
+        child = spawnGit(command, args, options);
+        return child;
+      });
+      operation = git.run(['hash-object', '--stdin']);
+      const blocked = child!;
+      expect(blocked.pid).toBeGreaterThan(1);
+      const records = (await readFile(registry, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toContainEqual(expect.objectContaining({
+        event: 'start', pid: blocked.pid, scope: isolation.home,
+        signature: expect.stringMatching(new RegExp(`^${blocked.pid}\\s+${blocked.pid}\\s+`, 'u')),
+      }));
+      expect(() => assertOwnedProcessesExited(path.join(isolation.root, 'another-home'))).not.toThrow();
+      await expect(isolation.dispose()).rejects.toThrow('preserving its fixture');
+      expect((await stat(isolation.root)).isDirectory()).toBe(true);
+      const result = await promisify(execFile)('python3', ['-c',
+        'import json, pathlib, sys; sys.path.insert(0, sys.argv[1]); from desktop_e2e import cleanup_owned_processes; print(json.dumps(cleanup_owned_processes(pathlib.Path(sys.argv[2]))))',
+        scripts, registry,
+      ], { timeout: 10_000 });
+      expect(JSON.parse(result.stdout)).toEqual([blocked.pid]);
+      expect((await operation).exitCode).not.toBe(0);
+      expect(blocked.signalCode).toBe('SIGKILL');
+      expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
+      expect(() => assertOwnedProcessesExited(isolation.home)).not.toThrow();
+      await isolation.dispose();
+      await expect(stat(isolation.root)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (child?.pid && child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL');
+      if (unrelated.pid && unrelated.exitCode === null && unrelated.signalCode === null) process.kill(-unrelated.pid, 'SIGKILL');
+      await Promise.allSettled([operation, unrelatedClosed]);
+      cwd.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });
