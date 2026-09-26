@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { linkRequestSchema, publishLinkJson, readLinkJson, waitLinkRequest } from '../e2e/fixtures/desktop-link';
+import { editorLaunchSchema, linkRequestSchema, publishLinkJson, readLinkJson, waitLinkRequest } from '../e2e/fixtures/desktop-link';
 import { assertProcessRegistryPath } from '../e2e/fixtures/process-registry';
 
 describe('Desktop/IDE private message protocol', () => {
@@ -52,6 +52,17 @@ describe('Desktop/IDE private message protocol', () => {
     await expect(waitLinkRequest(root, sessionId, 1, 1)).rejects.toThrow('timed out');
     await publishLinkJson(path.join(root, 'abort.json'), { sessionId });
     await expect(waitLinkRequest(root, sessionId, 1, 1_000)).rejects.toThrow('aborted');
+  });
+
+  it('records only the fixed GoLand OS spawn boundary with shell disabled', () => {
+    const launch = { command: '/usr/bin/open', args: ['-a', '/fixture/home/Applications/GoLand.app', '/fixture/workspaces/selection/.reqws/ide/goland'],
+      shell: false, boundary: 'os-spawn-only' };
+    expect(editorLaunchSchema.parse(launch)).toEqual(launch);
+    for (const invalid of [{ ...launch, shell: true }, { ...launch, command: '/bin/sh' },
+      { ...launch, args: ['-a', launch.args[1]] }, { ...launch, args: ['-R', launch.args[1], launch.args[2]] },
+      { ...launch, boundary: 'real-native-launch' }]) {
+      expect(editorLaunchSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 
   it('allows only the current linked session registry and rejects reused identities or symlinks', async () => {

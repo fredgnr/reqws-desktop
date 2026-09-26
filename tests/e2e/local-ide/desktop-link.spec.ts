@@ -6,10 +6,10 @@ import { Desktop } from '../fixtures/desktop';
 import { createIsolation } from '../fixtures/isolation';
 import { createGitOrigin } from '../fixtures/git-origin';
 import { addRepository, createWorkspace, navigate } from '../fixtures/ui';
-import { openDesktopLink, publishLinkJson, waitLinkRequest, type LinkRequest } from '../fixtures/desktop-link';
+import { editorLaunchSchema, openDesktopLink, publishLinkJson, waitLinkRequest, type EditorLaunch, type LinkRequest } from '../fixtures/desktop-link';
 
 const members = ['repo-a', 'repo-b', 'repo-c'];
-type Workspace = { root: string; manifest: string; codeWorkspace: string; workspaceFilePath: string; workspaceId: string; bindingId?: string; revision: number; gitHeads: string[] };
+type Workspace = { root: string; manifest: string; codeWorkspace: string; workspaceFilePath: string; workspaceId: string; bindingId?: string; revision: number; gitHeads: string[]; editorLaunch?: EditorLaunch };
 
 // Playwright requires destructuring even though this test allocates its own shared fixture.
 // eslint-disable-next-line no-empty-pattern
@@ -18,6 +18,7 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
   const isolation = await createIsolation(link.root);
   const origin = await createGitOrigin(isolation);
   const desktop = new Desktop(isolation, origin, info);
+  const applicationPath = path.join(isolation.home, 'Applications', 'GoLand.app');
   const workspaces = new Map<string, Workspace>();
   const openSelection = async (name: string): Promise<Locator> => {
     const dialog = desktop.page.getByRole('dialog');
@@ -26,14 +27,26 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
     await desktop.page.getByRole('button', { name: `View details for ${name}`, exact: true }).click();
     return desktop.page.getByRole('region', { name: 'GoLand repository loading', exact: true });
   };
-  const save = async (name: string, selected: string[]) => {
+  const save = async (name: string, selected: string[], open = false) => {
     const workspace = workspaces.get(name)!;
     const section = await openSelection(name);
     await section.getByRole('radio', { name: 'Selected repositories', exact: true }).check();
     for (const repo of members) await section.getByRole('checkbox', { name: repo, exact: true }).setChecked(selected.includes(repo));
-    await section.getByRole('button', { name: 'Save selection', exact: true }).click();
+    const launchesBefore = await desktop.app.evaluate(() => globalThis.__reqwsE2E.launches.length);
+    await section.getByRole('button', { name: open ? 'Save and open GoLand' : 'Save selection', exact: true }).click();
     await expect(section.getByRole('status')).toHaveText('Selection saved');
-    const shell = path.join(workspace.root, '.reqws', 'ide', 'goland');
+    await expect(section.getByRole('alert')).toHaveCount(0);
+    const launches = await desktop.app.evaluate(() => globalThis.__reqwsE2E.launches);
+    expect(launches).toHaveLength(launchesBefore + Number(open));
+    if (open) {
+      workspace.editorLaunch = editorLaunchSchema.parse({ ...launches.at(-1), boundary: 'os-spawn-only' });
+      expect(workspace.editorLaunch).toEqual({ command: '/usr/bin/open',
+        args: ['-a', applicationPath, path.join(workspace.root, '.reqws', 'ide', 'goland')],
+        shell: false, boundary: 'os-spawn-only' });
+    }
+    if (!workspace.editorLaunch) throw new Error('The linked entry requires a successful real Save and open GoLand action.');
+    // Starter receives the target observed at the real EditorLauncher's final OS boundary.
+    const shell = workspace.editorLaunch.args[2];
     const project = JSON.parse(await readFile(path.join(shell, 'reqws-project.json'), 'utf8')) as GoLandProject;
     expect(project.workspaceId).toBe(workspace.workspaceId);
     expect(project.revision).toBe(workspace.revision + 1);
@@ -55,7 +68,7 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
     expect(desktop.errors).toEqual([]);
     await desktop.page.screenshot({ path: info.outputPath(`${name}-revision-${project.revision}.png`) });
     return { name, root: workspace.root, shell, workspaceId: project.workspaceId, bindingId: project.bindingId,
-      revision: project.revision, selected, repositories };
+      revision: project.revision, selected, repositories, editorLaunch: workspace.editorLaunch };
   };
   const execute = async (request: Exclude<LinkRequest, { operation: 'finish' }>) => {
     if (request.operation === 'create') {
@@ -79,7 +92,7 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
         manifest: await readFile(path.join(root, '.reqws/workspace.json'), 'utf8'),
         codeWorkspace: await readFile(workspace.workspaceFilePath, 'utf8'), revision: 0,
         gitHeads: await Promise.all(members.map((repo) => readFile(path.join(root, repo, '.git/HEAD'), 'utf8'))) });
-      const snapshot = await save(request.name, ['repo-a', 'repo-b']);
+      const snapshot = await save(request.name, ['repo-a', 'repo-b'], true);
       await writeFile(path.join(snapshot.shell, 'shell-probe.txt'), 'dedicated shell stays hidden\n', { flag: 'wx' });
       return snapshot;
     }
@@ -87,6 +100,16 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
     return save(request.name, request.selected);
   };
   try {
+    // Discovery uses real filesystem/plutil validation. Only the final OS spawn
+    // remains the existing adapter; this fixture executable must never be run.
+    await mkdir(path.join(applicationPath, 'Contents', 'MacOS'), { recursive: true });
+    await writeFile(path.join(applicationPath, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.jetbrains.goland</string>
+<key>CFBundleExecutable</key><string>goland</string>
+<key>CFBundleShortVersionString</key><string>2026.2.1.1</string>
+</dict></plist>\n`, { flag: 'wx', mode: 0o600 });
+    await writeFile(path.join(applicationPath, 'Contents', 'MacOS', 'goland'), '#!/bin/sh\nexit 97\n', { flag: 'wx', mode: 0o755 });
     await desktop.start();
     await addRepository(desktop, 'repo-a');
     await addRepository(desktop, 'repo-b');

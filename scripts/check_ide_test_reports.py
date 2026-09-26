@@ -35,10 +35,11 @@ def check_reports(reports, root_file, suite='legacy'):
     result = {'tests': len(cases), 'skipped': 0, 'failed': 0, 'processes': len(events),
               'selectors': sorted(actual), 'scope': 'local-ide-integration', 'suite': suite}
     if suite == 'desktop':
-        from desktop_ide import ACCEPTANCE_VERSION, SAVED_PROJECTION_PROOFS, validate_projection_evidence
+        from desktop_ide import ACCEPTANCE_VERSION, ERROR_UI_PROOFS, SAVED_PROJECTION_PROOFS, validate_projection_evidence
         result['projectionProofs'] = validate_projection_evidence(root, events)
         result['savedProjectionProofs'] = SAVED_PROJECTION_PROOFS
         result['acceptanceVersion'] = ACCEPTANCE_VERSION
+        result['errorUiProofs'] = ERROR_UI_PROOFS
     print(f'All {len(expected)} {suite} IDE scenario groups completed with {process_count} distinct, cleanly exited processes')
     return result
 

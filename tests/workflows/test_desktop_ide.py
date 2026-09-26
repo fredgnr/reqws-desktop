@@ -35,13 +35,15 @@ class DesktopIdeTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
+        self.workspaces = self.root / 'reqws-e2e-fixture/workspaces'
+        self.workspaces.mkdir(parents=True)
         self.session = initialize_link(self.root)
         self.directory = self.root / 'desktop-link'
 
     def transcript(self):
         sequence = 0
         for name in ['selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage']:
-            root = self.root / name
+            root = self.workspaces / name
             root.mkdir()
             values = ([['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]
                       if name == 'selection' else [['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]
@@ -55,6 +57,9 @@ class DesktopIdeTests(unittest.TestCase):
                 snapshot = {'name': name, 'root': str(root), 'shell': str(root / '.reqws/ide/goland'),
                             'workspaceId': name, 'bindingId': binding, 'revision': revision,
                             'selected': selected, 'repositories': [{'id': 'a', 'name': 'repo-a'}, {'id': 'b', 'name': 'repo-b'}, {'id': 'c', 'name': 'repo-c'}]}
+                snapshot['editorLaunch'] = {'command': '/usr/bin/open',
+                    'args': ['-a', str(root.parent.parent / 'home/Applications/GoLand.app'), snapshot['shell']],
+                    'shell': False, 'boundary': 'os-spawn-only'}
                 publish(self.directory / f'request-{sequence}.json', request)
                 publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed', 'snapshot': snapshot})
             self.write_saved_model(snapshot)
@@ -179,6 +184,42 @@ class DesktopIdeTests(unittest.TestCase):
         path.unlink()
         with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
 
+    def test_starter_target_requires_the_exact_observed_desktop_goland_os_launch(self):
+        self.transcript()
+        self.assertEqual(validate_transcript(self.root, self.session)['editorLaunches'], 5)
+        path = self.directory / 'response-1.json'
+        original = read_message(path)
+        expected = original['snapshot']['editorLaunch']
+        variants = [None, {**expected, 'shell': True}, {**expected, 'shell': 0},
+                    {**expected, 'command': '/bin/sh'}, {**expected, 'boundary': 'native-open'},
+                    {**expected, 'args': ['-a', expected['args'][1], original['snapshot']['root']]},
+                    {**expected, 'args': ['-a', '/Applications/GoLand.app', expected['args'][2]]}]
+        for launch in variants:
+            changed = copy.deepcopy(original)
+            if launch is None: del changed['snapshot']['editorLaunch']
+            else: changed['snapshot']['editorLaunch'] = launch
+            path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
+        path.write_text(json.dumps(original))
+
+    def test_service_error_alone_cannot_replace_visible_tool_window_error_and_code(self):
+        self.transcript()
+        proofs = self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual(validate_projection_evidence(self.root, pids), PROJECTION_PROOFS)
+        path = self.root / 'desktop-error-ui.jsonl'
+        original = [json.loads(line) for line in path.read_text().splitlines()]
+        variants = [[], original[:-1], original + [original[0]]]
+        for key, value in [('statusTexts', ['Synced']), ('detailTexts', ['OTHER_ERROR']),
+                           ('detailTexts', ['BINDING_ERROR_SUFFIX']), ('bindingId', 'foreign'),
+                           ('revision', 99), ('screenshot', proofs[0]['screenshot'])]:
+            changed = copy.deepcopy(original); changed[0][key] = value; variants.append(changed)
+        for entries in variants:
+            path.write_text(''.join(json.dumps(value) + '\n' for value in entries))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        path.unlink()
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+
     def test_protocol_does_not_overwrite_or_follow_message_symlinks(self):
         filename = self.directory / 'message.json'
         publish(filename, {'keep': True})
@@ -269,6 +310,13 @@ class DesktopIdeTests(unittest.TestCase):
         (self.root / 'desktop-ordinary.json').write_text(json.dumps({'pid': 108, 'project': str(ordinary),
             'tree': [['unbound-fixture', '.reqws', 'ide', 'goland', 'shell-probe.txt']], 'inContent': True,
             'lifecycle': 'INACTIVE', 'vcsMappings': [], 'screenshot': self.screenshot('ordinary')}))
+        errors = []
+        for proof in proofs:
+            if proof['phase'] not in {'malformed', 'mismatched'}: continue
+            errors.append({'scenario': proof['scenario'], 'phase': proof['phase'], 'bindingId': proof['bindingId'],
+                'revision': proof['revision'], 'statusTexts': ['Error'], 'detailTexts': [proof['error']],
+                'screenshot': self.screenshot(f"error-{proof['scenario']}-{proof['phase']}")})
+        (self.root / 'desktop-error-ui.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in errors))
         return proofs
 
     def screenshot(self, name):
@@ -325,7 +373,7 @@ class DesktopIdeTests(unittest.TestCase):
         changed[12]['modules']['ReqWS-' + changed[12]['bindingId']] = []
         variants.append(changed)
         changed = copy.deepcopy(proofs)
-        changed[12]['pfi'][str(self.root / 'selection/user-extra/keep-extra.txt')]['inContent'] = False
+        changed[12]['pfi'][str(self.workspaces / 'selection/user-extra/keep-extra.txt')]['inContent'] = False
         variants.append(changed)
         changed = copy.deepcopy(proofs)
         changed[12]['tree'] = [entry for entry in changed[12]['tree'] if 'user-extra' not in entry]
@@ -355,8 +403,8 @@ class DesktopIdeTests(unittest.TestCase):
         self.transcript()
         proofs = self.write_proofs()
         pids = [str(pid) for pid in range(100, 109)]
-        for key in [str(self.root / 'invalid-binding/repo-a/docs/probe.txt'),
-                    str(self.root / 'invalid-binding/.reqws/ide/goland')]:
+        for key in [str(self.workspaces / 'invalid-binding/repo-a/docs/probe.txt'),
+                    str(self.workspaces / 'invalid-binding/.reqws/ide/goland')]:
             changed = copy.deepcopy(proofs)
             changed[20]['pfi'][key] = {'inContent': False, 'excluded': True}
             (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
@@ -379,7 +427,7 @@ class DesktopIdeTests(unittest.TestCase):
         changed[10]['modules']['ReqWS-' + changed[10]['bindingId']] = []
         variants.append(changed)
         changed = copy.deepcopy(proofs)
-        changed[29]['modules']['user'] = [str(self.root / 'coverage/user-content')]
+        changed[29]['modules']['user'] = [str(self.workspaces / 'coverage/user-content')]
         variants.append(changed)
         changed = copy.deepcopy(proofs)
         changed[3]['tree'] = [entry for entry in changed[3]['tree'] if entry[-1] != 'late-repo.txt']
@@ -392,7 +440,7 @@ class DesktopIdeTests(unittest.TestCase):
         self.transcript()
         self.write_proofs()
         pids = [str(pid) for pid in range(100, 109)]
-        late = self.root / 'selection/.reqws/ide/goland/late-shell.txt'
+        late = self.workspaces / 'selection/.reqws/ide/goland/late-shell.txt'
         original = late.read_text()
         late.unlink()
         with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
@@ -432,7 +480,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))

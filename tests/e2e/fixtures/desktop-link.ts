@@ -18,6 +18,13 @@ export const linkRequestSchema = z.discriminatedUnion('operation', [
   z.object({ ...envelope, operation: z.literal('finish') }).strict(),
 ]);
 export type LinkRequest = z.infer<typeof linkRequestSchema>;
+export const editorLaunchSchema = z.object({
+  command: z.literal('/usr/bin/open'),
+  args: z.tuple([z.literal('-a'), z.string(), z.string()]),
+  shell: z.literal(false),
+  boundary: z.literal('os-spawn-only'),
+}).strict();
+export type EditorLaunch = z.infer<typeof editorLaunchSchema>;
 
 export async function readLinkJson(filename: string): Promise<unknown> {
   const file = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);

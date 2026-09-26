@@ -7,7 +7,9 @@ import com.intellij.driver.client.service
 import com.intellij.driver.client.utility
 import com.intellij.driver.sdk.invokeAction
 import com.intellij.driver.sdk.isPluginLoaded
+import com.intellij.driver.sdk.openToolWindow
 import com.intellij.driver.sdk.singleProject
+import com.intellij.driver.sdk.ui.components.common.ideFrame
 import com.intellij.driver.sdk.ui.components.elements.checkBox
 import com.intellij.driver.sdk.ui.ui
 import com.intellij.driver.sdk.waitFor
@@ -20,6 +22,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -182,6 +186,7 @@ class DesktopWorkspaceIntegrationTest {
               val state = service.getState()
               state.getLifecycle().name() == "ERROR" && state.getLastError()?.getCode() == errorCode
             }
+            assertVisibleError(fixture, phase, errorCode)
             val after = host.modelEvidence(this, fixture)
             assertEquals(before.roots, after.roots, "Invalid input changed content roots")
             assertEquals(before.modules, after.modules, "Invalid input changed protected modules")
@@ -208,6 +213,31 @@ class DesktopWorkspaceIntegrationTest {
       }
       fixture.assertDiskPreserved()
     }
+  }
+
+  private fun Driver.assertVisibleError(fixture: DesktopProjectionFixture, phase: String, errorCode: String) {
+    openToolWindow("ReqWS")
+    val panel = ideFrame().x { byJavaClass("com.reqws.goland.ui.ReqwsToolWindowPanel") }
+    var statusTexts = emptyList<String>()
+    var detailTexts = emptyList<String>()
+    waitFor("ReqWS visibly reports Error and $errorCode", 30.seconds) {
+      desktop.checkAbort()
+      if (!panel.present()) false else {
+        statusTexts = panel.getAllTexts { it.text == "Error" }.map { it.text }
+        detailTexts = panel.getAllTexts { it.text == errorCode || it.text.startsWith("$errorCode · ") }.map { it.text }
+        statusTexts.isNotEmpty() && detailTexts.isNotEmpty()
+      }
+    }
+    // Preserve the user-visible error panel before the independent Project-tree
+    // proof changes tool windows. No Sync Now, refresh or model mutation occurs.
+    val screenshot = Path.of(requireNotNull(takeScreenshot("reqws-error-${fixture.name}-$phase")))
+    check(screenshot.isAbsolute && screenshot.startsWith(host.root) && screenshot.toRealPath() == screenshot)
+    requireNotNull(javax.imageio.ImageIO.read(screenshot.toFile()))
+    val evidence = mapOf("scenario" to fixture.name, "phase" to phase, "revision" to fixture.revision,
+      "bindingId" to fixture.bindingId, "statusTexts" to statusTexts, "detailTexts" to detailTexts,
+      "screenshot" to screenshot.toString())
+    Files.writeString(host.root.resolve("desktop-error-ui.jsonl"), ObjectMapper().writeValueAsString(evidence) + "\n",
+      StandardOpenOption.CREATE, StandardOpenOption.APPEND)
   }
 
   private fun Driver.uncheckTrustParent() {

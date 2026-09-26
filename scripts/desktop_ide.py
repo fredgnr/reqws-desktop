@@ -19,9 +19,10 @@ from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 2
+ACCEPTANCE_VERSION = 3
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
+ERROR_UI_PROOFS = 4
 
 
 def assert_desktop_source(expected=None):
@@ -96,8 +97,14 @@ def validate_transcript(run_root, session_id):
             raise ValueError('Desktop must create three distinct real repository members')
         root = Path(snapshot['root'])
         if (not root.is_absolute() or root.resolve() != root or not root.is_relative_to(run_root)
+                or root.parent.name != 'workspaces' or root.parent.parent.parent != run_root
+                or not root.parent.parent.name.startswith('reqws-e2e-')
                 or snapshot['shell'] != str(root / '.reqws/ide/goland') or snapshot['name'] != name):
             raise ValueError('Desktop workspace escaped its private run')
+        expected_launch = {'command': '/usr/bin/open', 'args': ['-a', str(root.parent.parent / 'home/Applications/GoLand.app'), snapshot['shell']],
+                           'shell': False, 'boundary': 'os-spawn-only'}
+        if snapshot.get('editorLaunch') != expected_launch or snapshot['editorLaunch'].get('shell') is not False:
+            raise ValueError('The Starter entry lacks the real Desktop Save-and-open OS target')
         expected = ['repo-a', 'repo-b'] if operation == 'create' else request.get('selected')
         if (not isinstance(expected, list) or len(set(expected)) != len(expected)
                 or not set(expected) <= {'repo-a', 'repo-b'} or snapshot['selected'] != expected
@@ -110,7 +117,7 @@ def validate_transcript(run_root, session_id):
         else:
             before = created[name]
             if (any(snapshot.get(key) != before.get(key) for key in
-                    ('root', 'shell', 'workspaceId', 'bindingId', 'repositories'))
+                    ('root', 'shell', 'workspaceId', 'bindingId', 'repositories', 'editorLaunch'))
                     or snapshot['revision'] != before['revision'] + 1):
                 raise ValueError('Desktop identity/revision changed across a selection')
             created[name] = snapshot
@@ -125,7 +132,8 @@ def validate_transcript(run_root, session_id):
         raise ValueError('Missing unselected user-root coverage across empty and restored selections')
     if len({value['bindingId'] for value in created.values()}) != len(NAMES):
         raise ValueError('Scenario workspaces must have independent Desktop bindings')
-    return {'requests': len(requests), 'workspaces': len(created), 'selections': selections, 'coverageSelections': coverage}
+    return {'requests': len(requests), 'workspaces': len(created), 'selections': selections, 'coverageSelections': coverage,
+            'editorLaunches': len(created), 'editorLaunchBoundary': 'os-spawn-only'}
 
 
 def validate_projection_evidence(run_root, process_ids):
@@ -143,7 +151,7 @@ def validate_projection_evidence(run_root, process_ids):
         raise ValueError('Missing per-step IDE model/Project-tree evidence')
     if ordinary['pid'] in {proof.get('pid') for proof in proofs}:
         raise ValueError('Unbound shell must use its own independent IDE process')
-    screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')]
+    screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')] + validate_error_ui_evidence(run_root, proofs)
     if any(not isinstance(path, str) for path in screenshots) or len(set(screenshots)) != len(screenshots):
         raise ValueError('Every IDE observation requires its own fresh screenshot')
     for name in NAMES:
@@ -252,6 +260,30 @@ def validate_projection_evidence(run_root, process_ids):
                     raise ValueError('Late files were not observed through real VFS/tree boundaries')
         validate_saved_projection(run_root, snapshots[name, steps[-1]['revision']])
     return len(proofs)
+
+
+def validate_error_ui_evidence(run_root, projections):
+    path = run_root / 'desktop-error-ui.jsonl'
+    if not path.is_file() or path.is_symlink() or path.resolve() != path or path.stat().st_size > 64 * 1024:
+        raise ValueError('User-visible ReqWS error evidence is missing or unsafe')
+    observations = [json.loads(line) for line in path.read_text().splitlines()]
+    expected = {(proof['scenario'], proof['phase']): proof for proof in projections
+                if proof.get('scenario') in {'invalid-binding', 'invalid-manifest'} and proof.get('phase') in {'malformed', 'mismatched'}}
+    if len(observations) != ERROR_UI_PROOFS or {(item.get('scenario'), item.get('phase')) for item in observations} != set(expected):
+        raise ValueError('A required user-visible ReqWS error observation is missing or duplicated')
+    screenshots = []
+    for observation in observations:
+        proof = expected[observation['scenario'], observation['phase']]
+        code = 'MANIFEST_INVALID_JSON' if observation['scenario'] == 'invalid-manifest' and observation['phase'] == 'malformed' else 'BINDING_ERROR'
+        status = observation.get('statusTexts')
+        details = observation.get('detailTexts')
+        if (observation.get('bindingId') != proof['bindingId'] or observation.get('revision') != proof['revision']
+                or not isinstance(status, list) or 'Error' not in status
+                or not isinstance(details, list) or not any(isinstance(text, str) and (text == code or text.startswith(code + ' · ')) for text in details)):
+            raise ValueError('The ReqWS Tool Window did not visibly report Error and the stable code')
+        validate_screenshot(run_root, observation.get('screenshot'))
+        screenshots.append(observation['screenshot'])
+    return screenshots
 
 
 def validate_vcs_observation(mappings):

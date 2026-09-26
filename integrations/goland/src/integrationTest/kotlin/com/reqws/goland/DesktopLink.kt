@@ -180,7 +180,10 @@ internal class DesktopProjectionFixture(
   override val hasUserModel: Boolean,
 ) : ProjectionFixture {
   override val root: Path = Path.of(requiredText(snapshot, "root"))
-  override val shell: Path = Path.of(requiredText(snapshot, "shell"))
+  private val editorLaunch: JsonNode = snapshot.path("editorLaunch")
+  // Use the real EditorLauncher OS target supplied by Desktop, then validate it
+  // against the sole legal binding entry before Starter consumes this property.
+  override val shell: Path = Path.of(requireNotNull(editorLaunch.path("args").path(2).textValue()))
   override val workspaceId: String = requiredText(snapshot, "workspaceId")
   override val bindingId: String = requiredText(snapshot, "bindingId")
   override val repositories: Map<String, String> = repositoryMap(snapshot)
@@ -205,14 +208,20 @@ internal class DesktopProjectionFixture(
   }
 
   init {
-    require(snapshot.fieldNames().asSequence().toSet() == setOf("name", "root", "shell", "workspaceId", "bindingId", "revision", "selected", "repositories"))
+    require(snapshot.fieldNames().asSequence().toSet() == setOf("name", "root", "shell", "workspaceId", "bindingId", "revision", "selected", "repositories", "editorLaunch"))
+    require(editorLaunch.isObject && editorLaunch.fieldNames().asSequence().toSet() == setOf("command", "args", "shell", "boundary"))
+    require(requiredText(editorLaunch, "command") == "/usr/bin/open" && requiredText(editorLaunch, "boundary") == "os-spawn-only")
+    require(editorLaunch.path("shell").isBoolean && !editorLaunch.path("shell").booleanValue())
+    require(stringList(editorLaunch.path("args")) == listOf("-a", root.parent.parent.resolve("home/Applications/GoLand.app").toString(), root.resolve(".reqws/ide/goland").toString()))
+    require(requiredText(snapshot, "shell") == shell.toString())
     require(requiredText(snapshot, "name") == name)
     require(UUID.fromString(bindingId).toString() == bindingId)
     link.validateWorkspace(root, shell, name)
   }
 
   fun acceptSelection(snapshot: JsonNode, expected: Set<String>) {
-    require(snapshot.fieldNames().asSequence().toSet() == setOf("name", "root", "shell", "workspaceId", "bindingId", "revision", "selected", "repositories"))
+    require(snapshot.fieldNames().asSequence().toSet() == setOf("name", "root", "shell", "workspaceId", "bindingId", "revision", "selected", "repositories", "editorLaunch"))
+    require(snapshot.path("editorLaunch") == editorLaunch)
     require(requiredText(snapshot, "name") == name && requiredText(snapshot, "root") == root.toString())
     require(requiredText(snapshot, "shell") == shell.toString() && requiredText(snapshot, "workspaceId") == workspaceId)
     require(requiredText(snapshot, "bindingId") == bindingId && repositoryMap(snapshot) == repositories)
