@@ -44,6 +44,7 @@ internal class IdeScenarioHost {
   private val candidateDigest = requireNotNull(System.getProperty("reqws.plugin.expectedSha256"))
   private val untrustedContexts = mutableSetOf<IDETestContext>()
   private val json = ObjectMapper()
+  private var lateDiagnosticChanges = 0
 
   fun prepare() {
     environment.prepareHost()
@@ -135,11 +136,7 @@ internal class IdeScenarioHost {
         state.getLastAppliedDigest() == loading.getDigest()
     }
     // A real external late file must reach VFS on its own; never force refresh.
-    if (fixture.hasLateFiles) waitFor("late fixture files observed by the native watcher", 1.minutes) {
-      val files = utility<RemoteLocalFileSystem>().getInstance()
-      files.findFileByPath(fixture.root.resolve("repo-a/docs/late-repo.txt").toString()) != null &&
-        files.findFileByPath(fixture.shell.resolve("late-shell.txt").toString()) != null
-    }
+    if (fixture.hasLateFiles) waitForLateFiles(this, fixture, phase)
     val model = modelEvidence(this, fixture)
     val roots = model.roots.toSet()
     for (name in fixture.repositories.keys) {
@@ -202,13 +199,59 @@ internal class IdeScenarioHost {
     // UI text must agree too; model convergence alone is not a Project-panel/UI pass.
     waitFor("ReqWS loaded count", 30.seconds) { count.present() }
     if (fixture.userCoveredRepositories.isNotEmpty()) {
+      val repositories = ideFrame().x { byJavaClass("com.reqws.goland.ui.ReqwsToolWindowPanel") }
+        .x { byJavaClass("com.reqws.goland.ui.ReqwsRepositoryList") }
       waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
-        ideFrame().x { byVisibleText("Included via User Project Root") }.present()
+        if (!repositories.present()) false else {
+          val texts = repositories.getAllTexts().map { it.text }
+          "Included via User Project Root" in texts && fixture.userCoveredRepositories.all { it in texts }
+        }
       }
     }
     fixture.verifyInputs()
     fixture.assertDiskPreserved()
     recordProof(this, fixture, phase, model, displayedPaths)
+  }
+
+  private fun waitForLateFiles(driver: Driver, fixture: ProjectionFixture, phase: String) = with(driver) {
+    val repoPath = fixture.root.resolve("repo-a/docs/late-repo.txt")
+    val shellPath = fixture.shell.resolve("late-shell.txt")
+    val ide = ideFrame()
+    check(requireNotNull(ide.project).getBasePath() == fixture.shell.toString())
+    val frame = cast(ide.component, RemoteCaptureFrame::class)
+    val files = utility<RemoteLocalFileSystem>().getInstance()
+    val started = System.nanoTime()
+    var last = emptyMap<String, Boolean>()
+    var recorded = emptyMap<String, Boolean>()
+    fun record(event: String) {
+      Files.writeString(root.resolve("late-vfs-observations.jsonl"), json.writeValueAsString(mapOf(
+        "event" to event, "pid" to processes.last(), "phase" to phase, "revision" to fixture.revision,
+        "elapsedMillis" to (System.nanoTime() - started) / 1_000_000,
+        "repoPath" to repoPath.toString(), "shellPath" to shellPath.toString(), "observation" to last,
+      )) + "\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+    }
+    try {
+      waitFor("late fixture files observed by the native watcher", 1.minutes) {
+        // Query both independently so a missing repository file cannot conceal
+        // whether the excluded shell was discovered. These calls never refresh.
+        val repoVfs = files.findFileByPath(repoPath.toString()) != null
+        val shellVfs = files.findFileByPath(shellPath.toString()) != null
+        last = mapOf("repoDiskExists" to Files.exists(repoPath), "shellDiskExists" to Files.exists(shellPath),
+          "repoVfsExists" to repoVfs, "shellVfsExists" to shellVfs,
+          "frameFocused" to frame.isFocused(), "frameActive" to frame.isActive())
+        if (last != recorded && lateDiagnosticChanges < 32) {
+          record("state-change")
+          recorded = last
+          lateDiagnosticChanges++
+        }
+        repoVfs && shellVfs
+      }
+      record("wait-completed")
+    } catch (failure: Exception) {
+      val diagnostic = IllegalStateException("Late-file VFS wait failed: repo=$repoPath, shell=$shellPath, last=$last", failure)
+      try { record("wait-failed") } catch (recordFailure: Exception) { diagnostic.addSuppressed(recordFailure) }
+      throw diagnostic
+    }
   }
 
   fun modelEvidence(driver: Driver, fixture: ProjectionFixture): ModelEvidence = with(driver) {
@@ -394,6 +437,8 @@ internal data class ModelEvidence(
 internal interface RemoteCaptureFrame {
   fun getRootPane(): RemoteCapturePane
   fun getTitle(): String
+  fun isFocused(): Boolean
+  fun isActive(): Boolean
 }
 
 @Remote("java.lang.management.ManagementFactory")
