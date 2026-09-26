@@ -11,7 +11,7 @@ updated: 2026-09-26
 
 ## 候选与环境
 
-- 分支 `feat/playwright-automation`，基线 `39c80b78de4fb36fce2307d9b896f4c4346d7ac9`；当前改动以本分支 Git diff 定位。未提交或推送的差异不能冒充该基线提交已经包含的实现。
+- 分支 `feat/playwright-automation`，初始基线 `39c80b78de4fb36fce2307d9b896f4c4346d7ac9`；实现提交 `b70e452`，公开 Git 接口修复 `ea90aeb`。随后合并 main `677ef00`，并以 `4831585` 补齐独立 Git 进程组登记。最终代码候选 `56657ea7586ba1b6f0820a13ffbab50749ce4928` 修复 D12 等待顺序；对应 CI 实际 tested merge commit 为 `f2d90844fe938b7cdd372656b637d794ee94da10`。后续仅更新本记录与索引，不改变运行时代码或测试。
 - 本机 macOS 15.7.3（24G419）、arm64、Node 24.20.0、Electron 43.4.0、Playwright 1.63.0。Playwright 使用仓库 Electron runtime，没有另行下载浏览器矩阵。
 - 每次源码入口重新构建 `.vite/e2e` 的 Main、真实 preload 和 renderer；测试实例使用独占临时 HOME、userData、sessionData、logs、origin 和输出目录。未使用真实 ReqWS 数据、工作区或日常 IDE。
 - 插件最低版本影响：未改变插件 API、SDK、manifest/selection schema 或 IDE 入口协议；最低仍为整个 262 系列，无 `until-build` 或 `strict-until-build`。本轮 Desktop 选择测试不证明 GoLand 模型或 Project 树结果。
@@ -20,17 +20,17 @@ updated: 2026-09-26
 
 | 阶段 | 当前结论 |
 |---|---|
-| S0 | 手工清单、当前 Electron/Playwright、本机构建产物、sandbox、HTTPS Git、负向证据均已验证；托管 runner 的实际执行仍待 S3 远端证据。 |
-| S1 | 本机通过：锁前隔离、真实装配、PID/目录归属、正常及阻止退出的清理、生产 ASAR 排除均有检查。 |
-| S2 | 本机通过：D01–D12 代表场景与独立磁盘/Git 断言，共 18 项集成用例通过。 |
-| S3 | 实现与本地门禁/稳定性检查通过；真实 CI 和同次构建 `.app` 的实际启动未运行，不能标记完整通过。 |
+| S0 | 通过：手工清单、当前 Electron/Playwright、sandbox、HTTPS Git、故障证据及真实 macOS runner/同包启动均已验证。 |
+| S1 | 通过：锁前隔离、真实装配、PID/目录归属、正常及阻止退出的清理、生产 ASAR 排除均有检查；同步 main 后补齐 detached Git 的登记与删除前存活检查。 |
+| S2 | 通过：最终代码候选在真实 CI 的 D01–D12 共 18 项通过；D12 等待竞态修复另有本机连续 20 次通过。 |
+| S3 | 通过：最终代码候选的源码、负向、同包、项目及 Desktop 聚合门禁通过；核心 smoke 80/80，0 skip/flaky/retries。保留原有插件/API 检查，未撤销旧手工门槛。 |
 | S4 / V | 未实施；未撤销旧手工门槛。 |
 
 ## 实现边界
 
 生产入口与外置测试入口共用 bootstrap。路径设置同步发生在 single-instance lock 之前；真实 AppStateStore、WorkspaceFileWriter、GitRunner、WorkspaceService、IPC/Zod、preload、窗口安全、activity gate 和 mutation coordinator 均保留。生产入口没有测试环境开关或控制协议。
 
-允许的替换位于系统边界：原生选目录返回值、编辑器最终 spawn、updater adapter、指定原子发布的单次 OS 错误/等待。故障和控制对象仅在外置 test-main。Forge 显式只收集生产 build/renderer，排除 `.vite/e2e` 和源测试代码；还需以最终 `.app` 内实际 ASAR 验证，而非只依赖源配置。
+允许的替换位于系统边界：原生选目录返回值、编辑器最终 spawn、updater adapter、指定原子发布的单次 OS 错误/等待。故障和控制对象仅在外置 test-main。Forge 显式只收集生产 build/renderer，排除 `.vite/e2e` 和源测试代码；已在本机及 CI 同次生成的 `.app` 内检查实际 ASAR，而非只依赖源配置。
 
 Git fixture 使用临时 CA 和 loopback HTTPS，经真实 `git http-backend` clone/fetch；不关闭 TLS、不导入钥匙串、不允许本地路径 URL，不使用 insteadOf。测试 spawn wrapper 在生产 sanitizer 之后设置固定的无系统配置策略，使用隔离 HOME/XDG、空 hooks/templates、非交互凭据策略及环境 allowlist。
 
@@ -51,7 +51,7 @@ Playwright 显式 `chromiumSandbox: true`，运行时核对 `app.getAppMetrics()
 
 以上是开发检查点，不替代最终集成候选的完整基线和稳定性结果。最初沙箱拒绝 loopback listen 的运行不是通过；允许本次隔离服务后重新执行。测试日志/trace 留在忽略的 `test-results/`，临时 CA、Git 和数据目录在确认归属与进程退出后清理，不提交产物或逐文件摘要。
 
-## 最终本机集成验证
+## 合并主分支前的本机集成验证
 
 | 命令/检查 | 实际结果 |
 |---|---|
@@ -72,10 +72,35 @@ Playwright 显式 `chromiumSandbox: true`，运行时核对 `app.getAppMetrics()
 
 runner 超时/中断时先请求本轮 Node 退出，再核对已登记 Electron/Git 的 PID、独立进程组和内核创建时间；只对仍一致的归属进程终止并确认。正常返回如留下活进程仍判失败。开发中一次因测试参数错误主动中断的运行真实返回失败并完成进程审计，未被计入通过数字。
 
-## 尚待远端和后续阶段验证
+## 主分支同步与 CI 修复
 
-- 同一次 CI 打包生成的精确 `.app` 启动、设置持久化、退出和 ASAR 排除证据。此入口仅允许真实 GitHub-hosted 一次性 macOS runner，不在本机伪造 CI 环境；本机已做的 ASAR 检查不能替代它。
-- 真实远端 CI 执行与 macOS runner 可行性；本地 Python 工作流测试不能替代远端运行证据。
+用户已授权提交、推送和分支 CI；本轮沿用 [PR #22](https://github.com/fredgnr/reqws-desktop/pull/22)，未合并或发布。
+
+- [首轮 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36219318927) 对 head `b70e452`、合并候选 `72def816` 执行。18 项 Electron、两项故障探针与精确包 smoke 通过，但项目检查发现 main 已将 `getOriginUrl` 改为私有，新增测试因此类型检查失败。测试改用公开 `run` 和 `originUrlMatches`；未放宽生产可见性。
+- [第二轮 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36219763922) 对 head `ea90aeb` 完整通过，包括源码、负向、同包、项目和保留的 GoLand/API 门禁。随后本地同步 main `677ef00`，避免沿用旧运行时代码的稳定性结论。
+- main 的 GitRunner 新增独立进程组。只读复核发现测试清理遗漏 client；`4831585` 将 host 和 Main 的 Git client 都登记到本轮 registry，保留生产 detached 行为。按 fixture HOME 标记 scope；删除前只读探测未关闭的 Git 组，存活或身份不明则保留目录，终止仍由核对完整进程身份的 runner 负责。真实 `GitRunner.run(['hash-object', '--stdin'])` 回归证明运行中拒删、Python 精确终止、无关 Node 进程存活、确认 close 后才删除；HTTPS/Git fixture 共 8/8 通过，D04 另核对实际 Main 的登记。
+- `4831585` 本机 `npm run check` 通过：49 文件、512 项通过、1 项按既有规则跳过，338-key i18n、26 索引/110 文档及类型/lint 均通过。核心 smoke 20 轮共 80/80 通过，0 skip/flaky/retries，报告在 `test-results/final-stability-4831585/`；报告记录 clean commit `483158500762720f86c7180fd927a18f352b1664`。
+- [第三轮 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36220222258) 对 head `4831585`、合并候选 `60e61e91` 执行。项目检查 513/513、工作流 177/177 和精确包 smoke 1/1 通过；runner 为 macOS 15.7.9 arm64，Node 24.20.0、Electron 43.4.0、Playwright 1.63.0。包报告核对两个独立 PID、真实 ASAR、renderer sandbox 和设置重启持久化。
+- 第三轮源码结果为 17/18：D12 解除原子写挂起后，在首次状态文件发布前读取磁盘，遇到 ENOENT；失败 artifact 中收尾磁盘快照已包含目标设置。修复将等待顺序改为先观察 UI 从保存中返回已保存状态，再独立读取磁盘，不捕获 ENOENT 冒充成功，不增加自动重试。`npm run test:e2e -- tests/e2e/desktop/native-boundaries.spec.ts --grep 'D12 a real settings write' --repeat-each=20` 已 20/20 通过；类型和受影响 lint 通过。补丁以 `56657ea` 提交；第三轮仍是失败结果，不因后续修复而改记为通过。
+
+## 最终代码候选验证
+
+[修复后 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36236695695) 的 head 为 `56657ea`，实际 tested merge commit 为 `f2d90844`。以下为已执行的 Desktop 检查，不把单个 job 的通过当作整轮 CI 结论；原有 GoLand/API 最终聚合以 PR 必需检查为准。
+
+| 检查 | 实际结果 |
+|---|---|
+| Project and workflow checks | Vitest 49 文件、513/513；Python 工作流 177/177；类型、lint、338-key i18n、26 索引/110 文档通过。 |
+| Desktop Electron regression | 18/18，包含修复后的 D12；单 worker，零 retry、skip、flaky。 |
+| 两项故障探针 | 断 preload 与早期 renderer 错误按精确原因失败；wrapper 验证报告、真实 DOM/trace/截图、Main/磁盘及退出证据后返回 0。本机同一代码候选亦再次通过。 |
+| macOS package smoke | 同次构建的显式 ad-hoc `.app` 1/1 通过；真实 ASAR/bridge/资源、renderer OS sandbox、设置保存、完整退出和新 PID 重启通过。未再次构建测试替代包。 |
+| Checks and macOS package smoke | 所有适用 Desktop 依赖成功后，保留名称的聚合门禁通过。失败、取消、零测试、skip 和缺报告的拒绝行为仍由工作流负向测试保护。 |
+| 稳定性与等待顺序 | `4831585` 上核心 20 轮共 80/80；后续 `56657ea` 仅调整不属于 smoke 的 D12 断言顺序，未改变应用或 fixture 运行时代码。该 D12 在提交前的精确补丁上另外连续 20/20，通过后由本轮完整 Desktop 套件再验证。 |
+
+源码和精确包使用相同 Electron 43.4.0、Playwright 1.63.0、Node 24.20.0；真实 runner 为 macOS 15.7.9 arm64。详细报告绑定候选及 profile；本机 macOS 15.7.3 的稳定性数字不冒充托管 runner 的重复运行统计。
+
+远端报告分别保留在 `ci-desktop-e2e`、`ci-desktop-packaged` artifact，保留期 7 天。源码和包报告同时记录 PR head 与实际 tested merge commit；本地通过、某一 job 通过和整轮 CI 通过分开记录。
+
+## 后续阶段与保留边界
+
 - S4 Desktop→IDE 联动和 V 替代验收不在本轮实施范围。旧手工步骤保持[登记表](manual-inventory.md)中的保留状态；没有测量 Computer Use 成本，不宣称达到 80% 降低目标。
-
-2026-09-26 用户已授权将本轮范围内改动提交、推送到 `feat/playwright-automation` 并运行分支 CI；此处尚未记录远端通过结果，S3 完成仍需取得同一提交的实际证据。签名、Finder/系统信任、真实编辑器加载及真实两版本自更新都不由本轮 OS adapter 或源码 E2E 证明。
+- 签名、Finder/系统信任、真实编辑器加载及真实两版本自更新都不由本轮 OS adapter、CI ad-hoc 包或源码 E2E 证明。

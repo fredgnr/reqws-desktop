@@ -120,7 +120,7 @@ Playwright 的网页 dialog/filechooser 事件不处理 Electron 原生 dialog�
   → 真实生产校验、clone、fetch 和 branch 操作
 ```
 
-测试生成临时 CA／服务证书，只通过隔离 Git 配置中的 `http.sslCAInfo` 信任，不导入系统钥匙串、不关闭证书验证。Git 的 HTTP backend 与 CA 配置提供所需基础能力；具体装配需要在阶段 S0 实测，不应标成已经可用。[O7][O8]
+测试生成临时 CA／服务证书，只通过隔离 Git 配置中的 `http.sslCAInfo` 信任，不导入系统钥匙串、不关闭证书验证。Git 的 HTTP backend 与 CA 配置提供所需基础能力；阶段 S0 已以真实 HTTPS fixture 验证装配，范围和候选见[实施记录](implementation-2026-09-26.md)。[O7][O8]
 
 该方案避免依赖外部 GitHub 可用性和用户账号，也避免用 `url.insteadOf` 改写后导致 origin 比对语义变化。不得删除 Git 环境清理规则，或把 `file://`／本地路径放进生产 schema。隔离配置要验证实际生效，并避免继承个人 Git 配置、SSH agent、代理与凭据。普通成功场景仍运行真实 Git。网络故障要在该 Git 传输层制造，不能把 Playwright page.route 或 browser offline 当作 Git 子进程网络拦截。
 

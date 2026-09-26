@@ -7,11 +7,11 @@
 | [自动化方案与改造流程](technical-design.md) | active | 定义真实链路、测试隔离、D01–D12 用例、CI/本机边界、S0–S4/V 实施阶段与手工替代门槛。 |
 | [子代理实施分工](subagent-plan.md) | draft | 定义各阶段的委派、文件/资源所有权、交接和集成约束，引用统一编码模型政策。 |
 | [旧验收步骤与替代登记](manual-inventory.md) | draft | 追溯旧断言、已实现 D01–D12 选择器及 S4/V 前仍保留的范围。 |
-| [S0–S3 实施与验证记录](implementation-2026-09-26.md) | active | 区分隔离真实链路的本机检查点、最终候选和 CI/手工证据缺口。 |
+| [S0–S3 实施与验证记录](implementation-2026-09-26.md) | active | 记录 S0–S3 的最终代码候选、真实 CI、稳定性和保留的手工边界。 |
 
 ## 当前状态
 
-2026-09-26 在 `feat/playwright-automation` 实施 S0–S3。共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现；18 项 Electron 集成及完整 Desktop 基线已在本机通过。稳定性、精确包与真实 CI 证据进度见[实施记录](implementation-2026-09-26.md)。S4 联动和 V 手工替代仍未实施，不撤销现有验收门槛。
+2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 联动和 V 手工替代仍未实施，不撤销现有验收门槛。
 
 方案入库基于 main `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`（0.1.6），已对齐 PR #21 合入后的插件规则，不沿用早期调研中的旧 build 上下限或 CI 完整 IDE 建议。
 
