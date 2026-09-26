@@ -20,7 +20,7 @@ from ide_compatibility import read_policy
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 6
+ACCEPTANCE_VERSION = 7
 CAPTURE_KIND = 'swing-root-pane-print-all'
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
@@ -386,21 +386,74 @@ def validate_project_reopen_evidence(run_root, proofs, snapshots):
                             'projectOpen': True, 'projectInitialized': True, 'openProjects': [snapshot['shell']]}
             or any(type(reopened.get(key)) is not bool for key in ('originalOpen', 'projectOpen', 'projectInitialized'))):
         raise ValueError('The original project did not close and the exact fixture did not reopen')
-    if (set(selected) != {'stage', 'pid', 'welcomeProject', 'frameTitle', 'tree', 'selectedRow', 'selectedPath'}
+    if (set(selected) != {'stage', 'pid', 'welcomeProject', 'frameTitle', 'tree', 'selectedRow', 'selectedPath',
+                         'visibleTexts', 'recentProjectsFile', 'recentProjectPaths', 'displayName'}
             or selected.get('stage') != 'recent-project-selected' or selected.get('welcomeProject') != welcome
             or selected.get('frameTitle') != 'GoLandWorkspace – Welcome to GoLand'
             or type(selected.get('selectedRow')) is not int or selected['selectedRow'] < 0):
         raise ValueError('Project reopen lacks the actual welcome frame and selected row')
     tree = selected.get('tree')
-    if (not isinstance(tree, list) or not tree or any(not isinstance(entry, dict) or set(entry) != {'row', 'path'}
+    if (not isinstance(tree, list) or len(tree) != 1 or any(not isinstance(entry, dict) or set(entry) != {'row', 'path'}
             or type(entry.get('row')) is not int or entry['row'] < 0 or not isinstance(entry.get('path'), list)
-            or not entry['path'] or any(not isinstance(text, str) or not text for text in entry['path']) for entry in tree)
-            or len({entry['row'] for entry in tree}) != len(tree)):
-        raise ValueError('Project reopen lacks complete unambiguous Recent Projects rows')
-    exact = re.compile(r'(^|\s)' + re.escape(snapshot['shell']) + r'(?=\s|$)')
-    matches = [entry for entry in tree if exact.search(entry['path'][-1])]
-    if len(matches) != 1 or matches[0] != {'row': selected['selectedRow'], 'path': selected.get('selectedPath')}:
-        raise ValueError('The clicked Recent Projects row is not the unique canonical fixture path')
+            or any(not isinstance(text, str) or not text for text in entry['path']) for entry in tree)
+            or tree[0] != {'row': selected['selectedRow'], 'path': selected.get('selectedPath')}):
+        raise ValueError('Project reopen did not click the unique actual Recent Projects row')
+    paths, display_name = validate_recent_project_snapshot(run_root, selected.get('recentProjectsFile'), snapshot['shell'])
+    texts = selected.get('visibleTexts')
+    if (selected.get('recentProjectPaths') != paths or selected.get('displayName') != display_name
+            or not isinstance(texts, list) or any(not isinstance(text, str) or not text for text in texts)
+            or texts.count(display_name) != 1):
+        raise ValueError('The unique Recent Projects row did not show the recorded fixture identity')
+
+
+def validate_recent_project_snapshot(run_root, filename, project):
+    path = run_root / 'desktop-recent-projects.xml'
+    if (filename != str(path) or not path.is_file() or path.is_symlink() or path.resolve() != path
+            or path.stat().st_size > 65536):
+        raise ValueError('Missing private Recent Projects XML snapshot')
+    raw = path.read_bytes()
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise ValueError('Recent Projects XML must use the IDE UTF-8 encoding') from error
+    if '\0' in text or '<!DOCTYPE' in text or '<!ENTITY' in text:
+        raise ValueError('Recent Projects XML cannot contain declarations')
+    try:
+        document = ET.fromstring(text)
+    except ET.ParseError as error:
+        raise ValueError('Invalid Recent Projects XML') from error
+    if (document.tag != 'application' or len(document) != 1 or document[0].tag != 'component'
+            or document[0].get('name') != 'RecentProjectsManager'):
+        raise ValueError('Unexpected Recent Projects document')
+    options = list(document[0])
+    names = [option.get('name') for option in options]
+    if (any(option.tag != 'option' for option in options) or len(set(names)) != len(names)
+            or set(names) - {'additionalInfo', 'lastOpenedProject'} or 'additionalInfo' not in names):
+        raise ValueError('Unexpected or duplicate Recent Projects options')
+    welcome = '$APPLICATION_CONFIG_DIR$/projects/GoLandWorkspace'
+    for option in options:
+        if option.get('name') == 'lastOpenedProject' and option.get('value') not in {project, welcome}:
+            raise ValueError('Recent Projects contains an unrelated last project')
+    additional = options[names.index('additionalInfo')]
+    if len(additional) != 1 or additional[0].tag != 'map':
+        raise ValueError('Missing complete Recent Projects path map')
+    entries = list(additional[0])
+    paths = [entry.get('key') for entry in entries]
+    if len(set(paths)) != len(paths) or paths.count(project) != 1 or set(paths) - {project, welcome}:
+        raise ValueError('Recent Projects must contain only the fixture and optional hidden welcome workspace')
+    display_name = None
+    for entry in entries:
+        if (entry.tag != 'entry' or len(entry) != 1 or entry[0].tag != 'value'
+                or len(entry[0]) != 1 or entry[0][0].tag != 'RecentProjectMetaInfo'):
+            raise ValueError('Invalid Recent Projects metadata')
+        metadata = entry[0][0]
+        if entry.get('key') == project:
+            display_name = metadata.get('displayName')
+            if metadata.get('hidden', 'false') != 'false' or not isinstance(display_name, str) or not display_name.strip():
+                raise ValueError('The fixture recent-project record is hidden or unnamed')
+        elif metadata.get('hidden') != 'true':
+            raise ValueError('The welcome workspace must be hidden from Recent Projects')
+    return paths, display_name
 
 
 def validate_error_ui_evidence(run_root, projections, snapshots):

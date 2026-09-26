@@ -460,7 +460,16 @@ class DesktopIdeTests(unittest.TestCase):
         snapshot = snapshots['selection', 7]
         config = self.profile / 'config'
         welcome = str(config / 'projects/GoLandWorkspace')
-        path = ['Recent Projects', 'goland ' + snapshot['shell']]
+        path = []  # Fixed 262 cell reader returns no text for the actual single row.
+        recent = ET.Element('application')
+        component = ET.SubElement(recent, 'component', name='RecentProjectsManager')
+        entries = ET.SubElement(ET.SubElement(component, 'option', name='additionalInfo'), 'map')
+        recent_paths = [snapshot['shell'], '$APPLICATION_CONFIG_DIR$/projects/GoLandWorkspace']
+        for key in recent_paths:
+            metadata = ET.SubElement(ET.SubElement(ET.SubElement(entries, 'entry', key=key), 'value'), 'RecentProjectMetaInfo')
+            if key == snapshot['shell']: metadata.set('displayName', 'shell, user...')
+            else: metadata.set('hidden', 'true')
+        ET.ElementTree(recent).write(self.root / 'desktop-recent-projects.xml')
         (self.root / 'desktop-project-reopen.json').write_text(json.dumps({
             'schemaVersion': 1, 'sessionId': self.session, 'scenario': 'selection', 'phase': 'reopened-empty',
             'revision': 7, 'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId'],
@@ -469,7 +478,9 @@ class DesktopIdeTests(unittest.TestCase):
                 {'stage': 'closed', 'pid': 101, 'originalOpen': False, 'openProjects': [welcome]},
                 {'stage': 'recent-project-selected', 'pid': 101, 'welcomeProject': welcome,
                  'frameTitle': 'GoLandWorkspace – Welcome to GoLand', 'tree': [{'row': 0, 'path': path}],
-                 'selectedRow': 0, 'selectedPath': path},
+                 'selectedRow': 0, 'selectedPath': path, 'visibleTexts': ['/private/...', 'shell, user...'],
+                 'recentProjectsFile': str(self.root / 'desktop-recent-projects.xml'),
+                 'recentProjectPaths': recent_paths, 'displayName': 'shell, user...'},
                 {'stage': 'reopened', 'pid': 101, 'originalOpen': False, 'projectOpen': True,
                  'projectInitialized': True, 'openProjects': [snapshot['shell']]}]}))
         return proofs
@@ -547,7 +558,7 @@ class DesktopIdeTests(unittest.TestCase):
                 path.write_bytes(image)
                 with self.assertRaises(ValueError): validate_png(path.read_bytes())
 
-    def test_reopen_requires_closed_original_unique_canonical_recent_row_and_same_pid(self):
+    def test_reopen_requires_closed_original_unique_recorded_recent_project_and_same_pid(self):
         self.transcript()
         self.write_proofs()
         pids = [str(pid) for pid in range(100, 109)]
@@ -564,16 +575,13 @@ class DesktopIdeTests(unittest.TestCase):
             (0, 'openProjects', ['/unrelated/project']), (0, 'pid', 101.0),
             (1, 'selectedRow', True), (1, 'selectedRow', 1), (1, 'selectedPath', ['goland']),
             (1, 'welcomeProject', '/foreign/config/projects/GoLandWorkspace'),
-            (1, 'frameTitle', 'Other IDE'), (2, 'pid', 102), (2, 'originalOpen', True),
+            (1, 'frameTitle', 'Other IDE'), (1, 'visibleTexts', ['/private/...']),
+            (1, 'visibleTexts', ['shell, user...', 'shell, user...']), (1, 'displayName', 'other'),
+            (1, 'recentProjectPaths', ['/unrelated/project']), (1, 'recentProjectsFile', '/wrong.xml'),
+            (2, 'pid', 102), (2, 'originalOpen', True),
             (2, 'projectOpen', False), (2, 'projectInitialized', 1), (2, 'openProjects', []),
         ]:
             changed = copy.deepcopy(original); changed['stages'][index][key] = value; variants.append(changed)
-        for path in [['goland /private/.../goland'], ['goland ' + original['project'] + '-other'],
-                     [original['project'], 'child-without-path']]:
-            changed = copy.deepcopy(original)
-            changed['stages'][1]['tree'][0]['path'] = path
-            changed['stages'][1]['selectedPath'] = path
-            variants.append(changed)
         changed = copy.deepcopy(original)
         changed['stages'][1]['tree'].append({**changed['stages'][1]['tree'][0], 'row': 1})
         variants.append(changed)
@@ -604,6 +612,35 @@ class DesktopIdeTests(unittest.TestCase):
             with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
         filename.unlink()
         with self.assertRaises(FileNotFoundError): validate_projection_evidence(self.root, pids)
+        filename.write_text(json.dumps(original))
+        xml_path = self.root / 'desktop-recent-projects.xml'
+        xml_original = xml_path.read_text()
+        variants = [xml_original.replace(original['project'], original['project'] + '-other'),
+                    xml_original.replace('hidden="true"', 'hidden="false"'),
+                    xml_original.replace('displayName=', 'hidden="true" displayName='),
+                    xml_original.replace('displayName="shell, user..."', 'displayName=""'),
+                    '<!DOCTYPE application [<!ENTITY extra "value">]>' + xml_original]
+        for key in ['/unrelated/project', original['project']]:
+            changed = ET.fromstring(xml_original)
+            entries = changed.find('./component/option/map')
+            ET.SubElement(ET.SubElement(ET.SubElement(entries, 'entry', key=key), 'value'), 'RecentProjectMetaInfo', displayName='extra')
+            variants.append(ET.tostring(changed, encoding='unicode'))
+        changed = ET.fromstring(xml_original)
+        ET.SubElement(changed.find('./component'), 'option', name='lastOpenedProject', value='/unrelated/project')
+        variants.append(ET.tostring(changed, encoding='unicode'))
+        for changed in variants:
+            xml_path.write_text(changed)
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        declared = ('<?xml version="1.0" encoding="UTF-16"?>'
+                    '<!DOCTYPE application [<!ENTITY fixtureName "shell, user...">]>' +
+                    xml_original.replace('displayName="shell, user..."', 'displayName="&fixtureName;"'))
+        # ElementTree accepts UTF-16; raw ASCII declaration scans miss these
+        # bytes. Reject both the BOM encoding and its NUL-containing LE form.
+        for encoding in ['utf-16', 'utf-16-le']:
+            xml_path.write_bytes(declared.encode(encoding))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        xml_path.unlink()
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
 
     def test_g4_user_root_survives_two_to_empty_before_project_reopen_and_cold_recovery(self):
         self.transcript()
@@ -730,7 +767,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('acceptanceVersion', 5), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('acceptanceVersion', 5), ('acceptanceVersion', 6), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))

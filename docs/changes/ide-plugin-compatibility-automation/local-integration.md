@@ -73,9 +73,9 @@ Driver 通过本轮 UUID 和递增序号请求 Desktop 创建五个普通文本 
 
 临时通信不暴露在产品中，也不接收任意路径或命令。任一端失败、取消、超时、skip、缺证据或异常退出都阻止通过。Desktop 项目保留在私有运行目录，不在 IDE 退出状态未确认时删除；两端退出确认不足则保留 active-session 标记。报告的 `suite=desktop` 与原 `suite=legacy` 区分，Desktop 源码身份与插件 ZIP 身份分别记录。只跑 Desktop 协议检查、编译或旧三组套件都不代表联动通过。
 
-同进程重开必须记录目标 Project 已关闭、精确目标路径已从打开集合消失，以及实际欢迎页中与 canonical shell 路径唯一匹配的 Recent Projects 项；点击后重新核对同一 JVM PID 和目标路径。允许 IDE 自动创建专用 `GoLandWorkspace` 欢迎项目，不能要求所有打开项目为空，也不能猜测列表首行。缺少唯一匹配时保存树路径并失败。原始记录的 config 与启动前报告的 profile ID、固定 IDE 和专用身份 marker 交叉核对；重读报告时该 config 与 marker 仍须可读，不读取账号或许可内容。
+同进程重开必须记录目标 Project 已关闭、精确目标路径已从打开集合消失，以及实际欢迎页中的唯一 Recent Projects 项。固定 Driver 的单元格读取器不能读取新版 renderer 文本，宿主改为只读专用 `recentProjects.xml` 并保存原始快照：近期项目全集只能包含精确 fixture 路径及可选的隐藏欢迎项目，实际 UI 只能有一个项目行且显示名称与该记录唯一匹配。点击前再次核对，点击后核对同一 JVM PID 和目标路径；不猜测首行。允许 IDE 自动创建专用 `GoLandWorkspace` 欢迎项目，不能要求所有打开项目为空。任何额外路径、未知身份或 UI 歧义均保留诊断并失败。原始记录的 config 与启动前报告的 profile ID、固定 IDE 和专用身份 marker 交叉核对；重读报告时该 config 与 marker 仍须可读，不读取账号或许可内容。
 
-当前 `acceptanceVersion=6` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张独立组件图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
+当前 `acceptanceVersion=7` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张独立组件图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
 
 通过证据使用真实 IDE Swing root pane 的 `printAll` 图像；侧车绑定实际 JVM PID、项目、frame 标题和尺寸，门禁检查完整 PNG chunk/CRC 与有界解压。它不证明 macOS 窗口装饰或遮挡。正常退出和周期全屏采集已关闭，但固定 SDK 在异常或超时时仍可能生成含其他窗口的全屏诊断图。此次用户已明确允许它们仅留私有测试目录；不得上传、展示为 IDE 通过证据或把本次许可当作发布授权。
 

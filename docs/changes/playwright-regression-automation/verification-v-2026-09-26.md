@@ -52,7 +52,7 @@ V 尚未完成，旧门槛未撤销。用户已明确允许固定 SDK 在异常/
 
 G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓，不能证明清空时保留该 root。因此新增“额外 root 已存在时，由 Desktop 执行 `2→0`”的过程证明；同 PID 重开后完整退出，新 PID 先只读恢复这个实际清空结果，再恢复两仓并再次冷启动，不用离线构造空输入代替保存链覆盖。
 
-当前新报告使用 `acceptanceVersion=6`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、37 张独立 IDE Swing 内容图、五个 Desktop 工作区和 16 个请求。五个工作区初建必须由真实 Desktop“保存并打开 GoLand”走 Main/EditorLauncher 到最终 OS spawn 边界，Starter 使用该次观测的合法 shell 参数；只有最后 OS spawn 由隔离 adapter 记录，不证明系统 LaunchServices。四次非法输入必须实际读取 ReqWS 面板中的 Error 和稳定码，并保存独立原始 UI 记录及截图，不能只检查服务状态。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。G1/G6 的独立只读审查和 25 项直接 Python 检查已通过；后续 v4 采集/清理修复的直接检查见下节。完整正向实跑、重复运行及最终复核尚待完成。
+当前新报告使用 `acceptanceVersion=7`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、37 张独立 IDE Swing 内容图、五个 Desktop 工作区和 16 个请求。五个工作区初建必须由真实 Desktop“保存并打开 GoLand”走 Main/EditorLauncher 到最终 OS spawn 边界，Starter 使用该次观测的合法 shell 参数；只有最后 OS spawn 由隔离 adapter 记录，不证明系统 LaunchServices。四次非法输入必须实际读取 ReqWS 面板中的 Error 和稳定码，并保存独立原始 UI 记录及截图，不能只检查服务状态。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。G1/G6 的独立只读审查和 25 项直接 Python 检查已通过；后续 v4 采集/清理修复的直接检查见下节。完整正向实跑、重复运行及最终复核尚待完成。
 
 ### 首轮 GUI 证据拒绝
 
@@ -80,7 +80,11 @@ G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓
 
 `7c555dd` 的完整新轮 `reqws-local-ide-uocn4pqe` 执行四项：三项通过、一项失败，零跳过。G3 的三段真实焦点/文件证据成立，late repo 文件在原 60 秒门限内约 19 秒进入 VFS；两种 Excluded Files 状态和后续 G2 选择切换均通过。覆盖说明、无绑定 PFI、Trust 和四次错误 UI 也通过。选择组在用户额外 root 已经历 `2→0` 后，项目关闭重开步骤等待 `getOpenProjects().isEmpty()` 超时；实际 SDK 文本层级显示 `GoLandWorkspace – Welcome to GoLand`，该宿主假设仍待修正。七个 IDE 进程全部退出，Desktop 闭环和 profile 释放已复核。完整结果保留为 failed，不将局部通过计作一次稳定成功。
 
-该轮 JUnit 与 idea.log 已交叉确认：目标项目从打开集合移除并 disposed 后，固定 GoLand 自动创建专用 `GoLandWorkspace` 欢迎项目。旧 Driver 的 `welcomeScreen()` 还硬查 `FlatWelcomeFrame`，不匹配本轮 `IdeFrameImpl` 欢迎工作区。后续宿主保留真实 CloseProject，改为检查原 Project 关闭和目标路径消失；只允许明确的专用欢迎项目。通过公开 `goWelcomeScreen()` 读取实际 Recent Projects 树，必须唯一匹配完整 canonical shell 路径才点击，再记录同 PID、同路径重开并执行原 `reopened-empty` 断言。关闭/选择/重开三段原始证据纳入严格门禁，版本升为 v6；无法唯一定位时保留全树文本并失败，不猜首行、增加刷新或改变 SDK 设置。新增原始门禁还将 config 绑定本轮 report 的 profile ID 和专用身份 marker，拒绝协同替换成另一个 profile。35 项定向 Python 检查、Java 25 宿主编译已通过；首次编译错误日志保留。此修复仍待新冻结实跑。
+该轮 JUnit 与 idea.log 已交叉确认：目标项目从打开集合移除并 disposed 后，固定 GoLand 自动创建专用 `GoLandWorkspace` 欢迎项目。旧 Driver 的 `welcomeScreen()` 还硬查 `FlatWelcomeFrame`，不匹配本轮 `IdeFrameImpl` 欢迎工作区。后续宿主保留真实 CloseProject，改为检查原 Project 关闭和目标路径消失；只允许明确的专用欢迎项目。通过公开 `goWelcomeScreen()` 读取实际 Recent Projects 树，必须唯一匹配完整 canonical shell 路径才点击，再记录同 PID、同路径重开并执行原 `reopened-empty` 断言。关闭/选择/重开三段原始证据纳入严格门禁，版本升为 v6；无法唯一定位时保留全树文本并失败，不猜首行、增加刷新或改变 SDK 设置。新增原始门禁还将 config 绑定本轮 report 的 profile ID 和专用身份 marker，拒绝协同替换成另一个 profile。35 项定向 Python 检查、Java 25 宿主编译已通过；首次编译错误日志保留。该 v6 修复的实际结果见下一段。
+
+`1b99c80` 的 v6 首轮 `reqws-local-ide-k1bwalcd` 仍为四项中三项通过、一项失败，零跳过；七个 IDE 全退出，Desktop 与 profile 收尾已核实。新的原始记录证明目标 Project 已关闭，剩余项目正是专用欢迎工作区；失败变为 30 秒内无法在 Recent Projects 单元格文本找到完整路径。实际控件存在，UI hierarchy 有路径和名称，SDK `collectExpandedPaths` 的 cell reader 却只返回一行空 path。本轮严格拒绝通过，失败与 SDK 私有诊断全部保留。
+
+后续 v7 仅替换该 UI 身份读取方式：只读专用 `options/recentProjects.xml` 并保存原文；近期项目全集必须是唯一 fixture 路径和可选的精确隐藏欢迎项目。实际 Recent Projects 控件必须只有一个可点击项目行，真实绘制文字与 XML 显示名称唯一一致，点击前重读确认；同 PID、原 Project 已关闭、目标路径/初始化及原 `reopened-empty` 投影门禁全部保留。原始 XML 和 UI 行一起进入严格汇总，不调用项目打开 API、Refresh、原生 picker 或修改 SDK 设置。v7 的 Java 25 宿主编译、25 项直接检查、完整 workflow 226/226 和独立只读复审通过；UTF-16 DTD 绕过的定向负向也已加入。完整实跑仍待完成。
 
 ## 预先固定的成本样本
 

@@ -31,9 +31,11 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.UUID
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -406,23 +408,29 @@ internal class IdeScenarioHost {
       "openProjects" to getOpenProjects().map { it.getBasePath() }))
     val welcome = goWelcomeScreen()
     val recent = welcome.tree("//div[@accessiblename='Recent Projects']")
-    val exactPath = Regex("(^|\\s)${Regex.escape(project)}(?=\\s|$)")
-    var paths = recent.collectExpandedPaths()
-    try {
-      waitFor("unique canonical fixture path in the real Recent Projects tree", 30.seconds) {
-        paths = recent.collectExpandedPaths()
-        paths.count { it.path.lastOrNull()?.let(exactPath::containsMatchIn) == true } == 1
-      }
-    } finally {
-      // Preserve every actual row even when a renderer truncates the path or the
-      // identity is ambiguous; never guess the first or similarly named project.
-      record(mapOf("stage" to "recent-projects-observed", "tree" to paths.map {
-        mapOf("row" to it.row, "path" to it.path)
-      }))
+    val paths = recent.collectExpandedPaths()
+    val texts = recent.getAllTexts().map { it.text }
+    record(mapOf("stage" to "recent-projects-observed", "tree" to paths.map {
+      mapOf("row" to it.row, "path" to it.path)
+    }, "visibleTexts" to texts))
+    // 262's cell reader can return an empty path for this renderer. Bind the
+    // actual single UI row to the complete, isolated recent-project record.
+    val source = config.resolve("options/recentProjects.xml")
+    check(Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) && source.toRealPath() == source && Files.size(source) <= 65536)
+    val bytes = Files.readAllBytes(source)
+    val evidence = root.resolve("desktop-recent-projects.xml")
+    Files.write(evidence, bytes, StandardOpenOption.CREATE_NEW)
+    val (recentPaths, displayName) = readRecentProjects(bytes, project)
+    check(paths.size == 1 && paths.single().row >= 0 && texts.count { it == displayName } == 1) {
+      "Recent Projects must contain one visible row matching the unique recorded fixture: paths=$paths, texts=$texts"
     }
-    val selected = paths.single { it.path.lastOrNull()?.let(exactPath::containsMatchIn) == true }
+    val selected = paths.single()
     check(recent.collectExpandedPaths().map { it.row to it.path } == paths.map { it.row to it.path }) {
       "Recent Projects changed before the bound UI action"
+    }
+    check(recent.getAllTexts().map { it.text } == texts &&
+      readRecentProjects(Files.readAllBytes(source), project) == (recentPaths to displayName)) {
+      "Recent Projects identity changed before the bound UI action"
     }
     check(getOpenProjects().map { it.getBasePath() } == listOf(welcomeProject))
     val title = cast(welcome.component, RemoteCaptureFrame::class).getTitle()
@@ -432,7 +440,8 @@ internal class IdeScenarioHost {
     stages.removeAt(stages.lastIndex)
     record(mapOf("stage" to "recent-project-selected", "welcomeProject" to welcomeProject,
       "frameTitle" to title, "tree" to paths.map { mapOf("row" to it.row, "path" to it.path) },
-      "selectedRow" to selected.row, "selectedPath" to selected.path))
+      "selectedRow" to selected.row, "selectedPath" to selected.path, "visibleTexts" to texts,
+      "recentProjectsFile" to evidence.toString(), "recentProjectPaths" to recentPaths, "displayName" to displayName))
     recent.doubleClickRow(selected.row)
     waitFor("same fixture reopened in the existing IDE process", 2.minutes) {
       getOpenProjects().singleOrNull()?.let { it.getBasePath() == project && it.isOpen() && it.isInitialized() } == true
@@ -447,6 +456,46 @@ internal class IdeScenarioHost {
       "idePid" to pid, "profileConfig" to config.toString(), "previousScreenshot" to previous.path("screenshot").asText(),
       "stages" to stages,
     )), StandardOpenOption.CREATE_NEW)
+  }
+
+  private fun readRecentProjects(bytes: ByteArray, project: String): Pair<List<String>, String> {
+    val factory = DocumentBuilderFactory.newInstance().apply {
+      setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+      setFeature("http://xml.org/sax/features/external-general-entities", false)
+      setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+    }
+    fun org.w3c.dom.Element.elements(): List<org.w3c.dom.Element> = (0 until childNodes.length)
+      .mapNotNull { childNodes.item(it) as? org.w3c.dom.Element }
+    val document = factory.newDocumentBuilder().parse(bytes.inputStream()).documentElement
+    check(document.tagName == "application")
+    val component = document.elements().single()
+    check(component.tagName == "component" && component.getAttribute("name") == "RecentProjectsManager")
+    val options = component.elements()
+    check(options.all { it.tagName == "option" && it.getAttribute("name") in setOf("additionalInfo", "lastOpenedProject") })
+    check(options.map { it.getAttribute("name") }.distinct().size == options.size)
+    val welcomeKey = "\$APPLICATION_CONFIG_DIR\$/projects/GoLandWorkspace"
+    options.singleOrNull { it.getAttribute("name") == "lastOpenedProject" }?.let {
+      check(it.getAttribute("value") in setOf(project, welcomeKey))
+    }
+    val map = options.single { it.getAttribute("name") == "additionalInfo" }.elements().single()
+    check(map.tagName == "map")
+    val entries = map.elements()
+    val keys = entries.map { it.getAttribute("key") }
+    check(keys.distinct().size == keys.size && keys.count { it == project } == 1 && keys.all { it in setOf(project, welcomeKey) })
+    var displayName = ""
+    for (entry in entries) {
+      check(entry.tagName == "entry")
+      val value = entry.elements().single()
+      check(value.tagName == "value")
+      val metadata = value.elements().single()
+      check(metadata.tagName == "RecentProjectMetaInfo")
+      if (entry.getAttribute("key") == project) {
+        check(metadata.getAttribute("hidden") in setOf("", "false"))
+        displayName = metadata.getAttribute("displayName")
+        check(displayName.isNotBlank())
+      } else check(metadata.getAttribute("hidden") == "true")
+    }
+    return keys to displayName
   }
 
   fun vcsMappings(driver: Driver): List<Map<String, String>> = with(driver) {
