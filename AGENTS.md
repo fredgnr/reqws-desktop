@@ -30,6 +30,12 @@ The plan supersedes older single-build and routine-manual-regression design dire
 
 The [2026-09-21 development record](docs/changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md) describes the policy, frozen API matrix and local-only Starter/Driver scenarios. CI retains compilation, unit and all Light/Heavy platform tests (`HeavyPlatformTestCase` included), forbidden API, structure/artifact policy and Verifier checks. PR/Release/weekly workflows must not launch a complete IDE or require IDE licensing credentials. The [local entry](docs/changes/ide-plugin-compatibility-automation/local-integration.md) consumes an explicit ZIP without rebuilding it, supports dedicated-profile JetBrains Account preparation and optional License Server, and records UI results separately. CI green is not UI evidence; signed ZIPs cannot borrow pre-signing reports. The [verification record](docs/changes/ide-plugin-compatibility-automation/verification-2026-09-21.md) distinguishes executed checks from blocked local UI coverage; preserve pending coverage until actually verified.
 
+## Development subagents
+
+Delegate code exploration, implementation, debugging, tests and review only when independent work benefits from it. Before spawning, follow the [coding-subagent policy](docs/guides/agent-workflow.md#8-开发子代理): resolve model identity and reasoning effort separately from display names, confirm an allowed preset from effective host configuration, and assign exclusive file and test-resource ownership. Main owns shared contracts, integration and authorized remote writes; keep reviewers read-only. Small tasks need no subagent. Pure translation retains its separate skill contract. Missing delegation capability blocks only the affected delegation, not unrelated safe work.
+
+For the Playwright migration, use the [stage-specific subagent plan](docs/changes/playwright-regression-automation/subagent-plan.md); do not confuse planned automation, a worker report and candidate verification.
+
 ## Work and verification
 
 Use two-space indentation, single quotes, semicolons, trailing commas, strict TypeScript, and existing naming conventions; ESLint is authoritative. Keep Kotlin packages under `com.reqws.goland`. For IPC changes, update shared schemas/types/channels, preload, main handlers, and contract tests together.
