@@ -49,7 +49,7 @@ describe('isolated E2E HTTPS Git origin', () => {
     await git.clone(one.url, destination);
     expect((await lstat(path.join(destination, '.git'))).isDirectory()).toBe(true);
     expect(await readFile(path.join(destination, 'README.txt'), 'utf8')).toBe('ReqWS Git fixture: one\n');
-    expect(await git.getOriginUrl(destination)).toBe(one.url);
+    expect((await git.run(['remote', 'get-url', 'origin'], { cwd: destination })).stdout.trim()).toBe(one.url);
     expect(await git.originUrlMatches(destination, one.url)).toBe(true);
     expect(await git.originUrlMatches(destination, two.url)).toBe(false);
     expect((await git.run(['branch', '--show-current'], { cwd: destination })).stdout.trim()).toBe('main');
