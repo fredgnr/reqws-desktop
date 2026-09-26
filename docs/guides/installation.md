@@ -16,7 +16,7 @@ updated: 2026-09-26
 | 直接使用 ReqWS | [Releases 中的 Desktop ZIP](https://github.com/fredgnr/reqws-desktop/releases/latest) | macOS Apple silicon、Git；不需要 Node.js 或 JDK。 |
 | 自己构建本地应用 | [源码安装](#从源码安装) | macOS、Git、Node.js 24、npm，以及下载依赖的网络。 |
 | 修改 ReqWS 的代码 | [开发运行](development-guide.md#1-环境准备) | 同上，并使用开发指南中的隔离与验证流程。 |
-| 在 GoLand 中按需加载仓库 | [独立插件安装](goland-plugin-guide.md#安装插件) | 已安装 GoLand，并选择与其兼容的插件 ZIP。 |
+| 在 GoLand 中按需加载仓库 | [v0.1.7 独立插件安装](goland-plugin-guide.md#安装插件) | GoLand 2026.2（262 系列）起；兼容上限与实际验收范围见插件指南。 |
 
 截至 2026-09-26，[v0.1.7 发布页](https://github.com/fredgnr/reqws-desktop/releases/tag/v0.1.7)已提供 Desktop arm64 ZIP 和独立 GoLand 插件 ZIP。后续版本以 Releases 的发布说明及资产为准，不从分支版本号推断已发布内容。
 

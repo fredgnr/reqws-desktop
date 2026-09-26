@@ -41,7 +41,7 @@ ReqWS 管理的是**本机代码工作区**。它不会代你提交、push、合
 ## 使用前需要什么
 
 - **macOS 与 Git。** 发布版 Desktop 为 Apple silicon（arm64）；Windows/Linux 不在当前分发范围。Git 的认证需要预先配置好，ReqWS 不保存密码、Token 或私钥。
-- **一个编辑器即可。** VS Code、Cursor、GoLand 都是可选项；GoLand 插件独立分发，兼容范围见[插件指南](docs/guides/goland-plugin-guide.md#安装插件)。
+- **一个编辑器即可。** VS Code、Cursor、GoLand 都是可选项；本文按 v0.1.7 插件说明 GoLand 用法，最低为 GoLand 2026.2（262 系列）；插件独立分发，兼容范围见[插件指南](docs/guides/goland-plugin-guide.md#安装插件)。
 - **足够的磁盘空间。** 每个新工作区都会生成所选仓库的完整副本。移除记录后，磁盘文件仍然保留。
 
 ## 日常管理与数据保护

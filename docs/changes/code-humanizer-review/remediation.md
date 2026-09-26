@@ -38,7 +38,7 @@ R01–R06、C01/C02 已在整改分支实现，尚未合并或发布。实现分
 | R06、C02 | `npx vitest run tests/renderer/app-refresh-order.test.tsx tests/renderer/app-toasts.test.tsx` | 7 项通过；旧成功/错误、刷新标志、卸载、语言切换、独立 3200ms 过期和 dismiss 清理 |
 | C01 | `npx vitest run tests/unit/path-service.test.ts tests/unit/workspace-file-writer.test.ts tests/integration/workspace-service.test.ts` | 61 项通过；空白、相对路径、NFC/raw 路径、错误 stage、symlink/canonical 边界保持 |
 
-最终本机环境为 macOS arm64、Node.js 24.20.0、npm 11.19.0。`npm ci` 按 lockfile 安装；未修改依赖或 lockfile。完整 `npm run check` 在允许原生安全服务访问的本机权限下通过：TypeScript、ESLint、338 个 i18n key、文档检查、**47 个测试文件，495 项通过、1 项跳过**。跳过项是仅真实 GitHub-hosted macOS runner 可执行的管理员信任回归，不记为通过。
+Rebase 前的验证环境为 macOS arm64、Node.js 24.20.0、npm 11.19.0。`npm ci` 按 lockfile 安装；未修改依赖或 lockfile。完整 `npm run check` 在允许原生安全服务访问的本机权限下通过：TypeScript、ESLint、338 个 i18n key、文档检查、**47 个测试文件，495 项通过、1 项跳过**。跳过项是仅真实 GitHub-hosted macOS runner 可执行的管理员信任回归，不记为通过。
 
 首次沙箱内完整检查的 4 项原生签名测试失败（证书抽取无输出、临时钥匙串导入与离线信任命令受限）；随后完整本机权限检查通过。签名测试仅使用现有套件的一次性身份和临时材料，没有操作发布凭据、安装应用或更改真实信任。
 
@@ -47,5 +47,11 @@ R01–R06、C01/C02 已在整改分支实现，尚未合并或发布。实现分
 使用 Vite 加虚构内存 API 在本机浏览器检查 renderer：工作区显示异常状态，打开详情显示 `WORKSPACE_PATH_UNAVAILABLE` 中文提示，未见布局遮挡；截图保存在本次任务临时产物中。这是 renderer fixture smoke，不是 Electron 安装验收、真实 macOS TCC 测试或 GoLand GUI GO。原生 IDE、Gradle、发布验证不在本次变更范围；U01–U03 未作新结论。
 
 `git diff --check` 通过；最终差异审阅确认没有修改 Kotlin、manifest 读取接受集合、preload 安全边界、发布工作流或凭据。用户指南同步保留目录、upstream、无输出超时与不可访问诊断；原报告保留历史基线，局部及父级索引指向整改记录。
+
+## Rebase 到 main 后的核验
+
+2026-09-26 按用户要求将整改分支 rebase 到 `main@e90cd31`。唯一内容冲突是 GoLand 使用指南，按正式 v0.1.7 插件统一为 GoLand 262 起的兼容范围；不再混入旧 review 分支的精确 build 限制。最低版本影响：**无**，保持既有 `since-build="262"` 且不新增上限，未修改插件实现、构建或发布工作流。
+
+`git range-diff` 核对整改提交保留；rebase 前后 Desktop 源码及相关测试没有内容差异。插件代码和 CI 直接继承 main；本次仅重组使用文档并更新设置页截图。`npm run check` 在 v0.1.7 整合候选上重新执行通过：47 个测试文件，495 项通过、1 项 CI 专用跳过，338 个 i18n key 一致；文档检查通过 25 个索引、104 个文件。没有以旧结果代替本次运行，也没有重跑 Gradle、安装插件或宣称新的 GoLand GUI 验收。
 
 返回[审查与整改索引](README.md)。

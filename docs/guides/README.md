@@ -6,7 +6,7 @@
 |---|---|---|
 | [图解使用教程](user-guide.md) | active | 用一个退款需求示例，演示仓库登记、工作区创建、编辑器打开、成员维护与数据恢复。 |
 | [安装与更新](installation.md) | active | 说明发布包选择、首次启动、个人签名证书信任、应用内更新和源码安装。 |
-| [GoLand 插件图解](goland-plugin-guide.md) | active | 说明独立 ZIP 安装、版本范围、两类加载模式、Project 面板核对、Git 配置和排障。 |
+| [GoLand 插件图解](goland-plugin-guide.md) | active | 以 v0.1.7 插件为准，说明 262+ 兼容范围、ZIP 安装、加载模式、Project 核对与排障。 |
 | [图片与来源](images/README.md) | active | 保存虚构数据的真实 Desktop 界面截图、工作区关系图及版本范围。 |
 | [开发指南](development-guide.md) | active | 说明 Desktop/GoLand 开发环境、进程边界、阶段验证、通用追踪、签名凭据维护及打包发布流程。 |
 | [Actions 缓存分层与复用](actions-cache-policy.md) | active | 说明默认分支写入、跨分支只读复用、依赖分层、CI 拆分、占用快照和迁移验收。 |
