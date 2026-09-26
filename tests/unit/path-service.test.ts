@@ -30,6 +30,14 @@ afterEach(async () => {
 });
 
 describe('PathService', () => {
+  it('normalizes selected paths while retaining absolute-path error metadata', () => {
+    expect(assertAbsolutePath('  /tmp/Cafe\u0301/../Cafe\u0301  ')).toBe('/tmp/Café');
+    for (const target of ['', '   ', 'relative']) {
+      try { assertAbsolutePath(target, 'Selected path'); throw new Error('expected rejection'); }
+      catch (error) { expect(error).toMatchObject({ code: 'INVALID_INPUT', message: 'Selected path must be an absolute path.', stage: undefined }); }
+    }
+  });
+
   it('requires absolute user-selected paths', () => {
     expect(() => assertAbsolutePath('../relative')).toThrowError(ReqwsError);
     expect(assertAbsolutePath('/tmp/../tmp/workspace')).toBe('/tmp/workspace');

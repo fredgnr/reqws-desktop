@@ -56,6 +56,10 @@ describe('IPC and state schemas', () => {
     }).success).toBe(false);
   });
 
+  it.each(['.reqws', '.REQWS', ' .GiT '])('rejects reserved input name %s', (name) => {
+    expect(createRepositoryInputSchema.safeParse({ name, url: 'https://example.test/repo.git', defaultBranch: 'main' }).success).toBe(false);
+  });
+
   it('rejects unsafe repository names', () => {
     expect(
       createRepositoryInputSchema.safeParse({

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ReqwsError } from '../../shared/errors';
 import {
-  isValidRepositoryName,
+  isUsableRepositoryName,
   isSafeRepositoryUrl,
   normalizeRepositoryName,
   repositoryNameKey,
@@ -220,7 +220,7 @@ export class RepositoryService {
   }
 
   private validateName(name: string): void {
-    if (!isValidRepositoryName(name)) {
+    if (!isUsableRepositoryName(name)) {
       throw new ReqwsError({
         code: 'INVALID_REPOSITORY_NAME',
         message: 'Repository name is invalid.',

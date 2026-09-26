@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="590" viewBox="0 0 1200 590" role="img" aria-labelledby="title desc">
+  <title id="title">同一组仓库配置，为不同需求建立独立代码副本</title>
+  <desc id="desc">仓库列表只保存地址。退款需求完整克隆 order-api、payment-api 和 web-console；库存修复完整克隆 order-api 和 inventory-api。两个 order-api 副本分别处于 feature/128-refund 和 hotfix/042-stock 分支，各有独立的 .git。</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#7770d5" stroke-width="1.5"/></marker></defs>
+  <rect width="1200" height="590" rx="20" fill="#f7f8fc"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif">
+    <text x="40" y="44" fill="#171827" font-size="25" font-weight="700">一个需求，一个独立工作区</text>
+    <text x="40" y="72" fill="#626579" font-size="16">仓库地址配置一次；开始新需求时，再选择要用的仓库。</text>
+    <rect x="250" y="100" width="700" height="104" rx="14" fill="#fff" stroke="#d9dce9"/>
+    <text x="600" y="132" text-anchor="middle" font-size="19" font-weight="600" fill="#373447">仓库列表 · 只保存名称、Git 地址和默认分支</text>
+    <text x="600" y="173" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="16" fill="#5d55c9">order-api    payment-api    web-console    inventory-api</text>
+    <path d="M600 204 V224 H310 V250 M600 224 H890 V250" fill="none" stroke="#7770d5" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M310 241 V250" fill="none" stroke="#7770d5" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="40" y="262" width="540" height="253" rx="14" fill="#fff" stroke="#c6c1f8"/>
+    <rect x="620" y="262" width="540" height="253" rx="14" fill="#fff" stroke="#c6c1f8"/>
+    <text x="64" y="300" font-size="21" font-weight="700" fill="#242239">退款需求 · FEAT-128-refund</text>
+    <text x="644" y="300" font-size="21" font-weight="700" fill="#242239">库存修复 · HOTFIX-042-stock</text>
+    <text x="64" y="330" font-size="16" font-family="Menlo,Consolas,monospace" fill="#6254c7">feature/128-refund</text>
+    <text x="644" y="330" font-size="16" font-family="Menlo,Consolas,monospace" fill="#6254c7">hotfix/042-stock</text>
+    <rect x="60" y="346" width="500" height="43" rx="8" fill="#efedff"/>
+    <rect x="640" y="346" width="500" height="43" rx="8" fill="#efedff"/>
+    <g fill="#29283a" font-size="17" font-family="Menlo,Consolas,monospace">
+      <text x="76" y="374">order-api/</text><text x="656" y="374">order-api/</text>
+      <text x="76" y="419">payment-api/</text><text x="656" y="419">inventory-api/</text>
+      <text x="76" y="461">web-console/</text>
+    </g>
+    <g fill="#66637b" font-size="16">
+      <text x="326" y="374">完整副本 + 独立 .git</text><text x="906" y="374">完整副本 + 独立 .git</text>
+      <text x="326" y="419">完整副本 + 独立 .git</text><text x="906" y="419">完整副本 + 独立 .git</text>
+      <text x="326" y="461">完整副本 + 独立 .git</text>
+    </g>
+    <text x="600" y="556" text-anchor="middle" font-size="18" font-weight="600" fill="#39364f">同名仓库的本地文件与分支互不影响；提交、推送和合并仍由你在 Git / IDE 中完成。</text>
+  </g>
+</svg>

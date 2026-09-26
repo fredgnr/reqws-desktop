@@ -63,6 +63,8 @@ export function App({
   const [repositorySearch, setRepositorySearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const dataLoadGeneration = useRef(0);
+  const mounted = useRef(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [repositoryDialog, setRepositoryDialog] = useState<Repository | 'new' | null>(null);
   const [testResult, setTestResult] = useState<TestRepositoryResult | null>(null);
@@ -78,34 +80,37 @@ export function App({
   const editorActionsInFlight = useRef(new Set<string>());
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  const nextToastId = useRef(0);
+  const toastTimers = useRef(new Map<number, number>());
+
+  const dismissToast = useCallback((id: number): void => {
+    window.clearTimeout(toastTimers.current.get(id));
+    toastTimers.current.delete(id);
+    setToasts((current) => current.filter((item) => item.id !== id));
+  }, []);
+
+  const enqueueToast = useCallback((payload: Omit<ToastMessage, 'id'>): void => {
+    if (!mounted.current) return;
+    const id = ++nextToastId.current;
+    setToasts((current) => [...current, { ...payload, id }]);
+    toastTimers.current.set(id, window.setTimeout(() => dismissToast(id), 3200));
+  }, [dismissToast]);
+
   const toast = useCallback((
     messageKey: string,
     values: Record<string, string | number> = {},
     tone: ToastMessage['tone'] = 'success',
     errorCode?: string,
   ): void => {
-    const id = Date.now() + Math.random();
-    setToasts((current) => [
-      ...current,
-      {
-        id,
-        messageKey,
-        values,
-        tone,
-        ...(errorCode ? { errorCode } : {}),
-      },
-    ]);
-    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
-  }, []);
+    enqueueToast({ messageKey, values, tone, ...(errorCode ? { errorCode } : {}) });
+  }, [enqueueToast]);
 
   const toastText = useCallback((
     message: string,
     tone: ToastMessage['tone'] = 'success',
   ): void => {
-    const id = Date.now() + Math.random();
-    setToasts((current) => [...current, { id, message, tone }]);
-    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
-  }, []);
+    enqueueToast({ message, tone });
+  }, [enqueueToast]);
 
   const toastError = useCallback((error: unknown): void => {
     const normalized = toDisplayError(error);
@@ -114,6 +119,9 @@ export function App({
   }, [i18n, toast]);
 
   const loadData = useCallback(async (showRefresh = false): Promise<void> => {
+    if (!mounted.current) return;
+    const generation = ++dataLoadGeneration.current;
+    const isCurrent = (): boolean => mounted.current && generation === dataLoadGeneration.current;
     if (showRefresh) setRefreshing(true);
     try {
       const [nextRepositories, nextWorkspaces, nextAvailability] = await Promise.all([
@@ -121,21 +129,45 @@ export function App({
         api.workspaces.list(),
         api.editors.getAvailability(),
       ]);
+      if (!isCurrent()) return;
       setRepositories(nextRepositories);
       setWorkspaces(nextWorkspaces);
       setAvailability(nextAvailability);
     } catch (error) {
-      toastError(error);
+      if (isCurrent()) toastError(error);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [toastError]);
 
+  const invalidateDataLoads = useCallback((): void => {
+    dataLoadGeneration.current++;
+  }, []);
+
   useEffect(() => {
-    queueMicrotask(() => void loadData());
-    return api.operations.onProgress(setActiveOperation);
-  }, [loadData]);
+    mounted.current = true;
+    const timers = toastTimers.current;
+    return () => {
+      mounted.current = false;
+      invalidateDataLoads();
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, [invalidateDataLoads]);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => { if (active) void loadData(); });
+    const unsubscribe = api.operations.onProgress(setActiveOperation);
+    return () => {
+      active = false;
+      invalidateDataLoads();
+      unsubscribe();
+    };
+  }, [invalidateDataLoads, loadData]);
 
   useEffect(() => {
     if (initialSettings) return;
@@ -563,7 +595,7 @@ export function App({
         />
       )}
       {detailLoading && <div aria-live="polite" className="sr-only">{t('app.loadingWorkspaceDetail')}</div>}
-      <ToastRegion dismiss={(id) => setToasts((current) => current.filter((toastItem) => toastItem.id !== id))} toasts={toasts} />
+      <ToastRegion dismiss={dismissToast} toasts={toasts} />
     </>
   );
 }
