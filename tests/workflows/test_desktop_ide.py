@@ -112,6 +112,8 @@ class DesktopIdeTests(unittest.TestCase):
                 roots = [str(root / repo) for repo in loaded]
                 modules = {} if blocked else {'ReqWS-' + snapshot['bindingId']: roots.copy()}
                 tree = [[repo, 'docs', 'probe.txt'] for repo in loaded]
+                invalid = phase in {'malformed', 'mismatched'}
+                if invalid: tree.append(['goland', 'reqws-project.json'])
                 if name != 'trust':
                     roots.append(str(root / 'user-content')); modules['user'] = [str(root / 'user-content')]
                     tree.append(['user-content', 'keep.txt'])
@@ -123,6 +125,7 @@ class DesktopIdeTests(unittest.TestCase):
                          'lifecycle': 'SAFE_MODE_BLOCKED' if blocked else 'ERROR' if phase in {'malformed', 'mismatched'} else 'SYNCHRONIZED',
                          'error': 'MANIFEST_INVALID_JSON' if name == 'invalid-manifest' and phase == 'malformed' else 'BINDING_ERROR'}
                 for key in ['loadingDigest', 'validatedProjectionDigest', 'lastAppliedDigest']: proof[key] = None if blocked else '1' * 64
+                proof['pfi'][snapshot['shell']] = {'inContent': invalid, 'excluded': not invalid}
                 proofs.append(proof)
         (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in proofs))
         return proofs
@@ -137,6 +140,17 @@ class DesktopIdeTests(unittest.TestCase):
                                   (0, 'validatedProjectionDigest', None)]:
             changed = copy.deepcopy(proofs); changed[index][key] = value; variants.append(changed)
         for changed in variants:
+            (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+
+    def test_invalid_inputs_may_revoke_shell_hiding_but_must_preserve_repository_pfi(self):
+        self.transcript()
+        proofs = self.write_proofs()
+        pids = [str(pid) for pid in range(100, 106)]
+        for key in [str(self.root / 'invalid-binding/repo-a/docs/probe.txt'),
+                    str(self.root / 'invalid-binding/.reqws/ide/goland')]:
+            changed = copy.deepcopy(proofs)
+            changed[11]['pfi'][key] = {'inContent': False, 'excluded': True}
             (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
             with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
 

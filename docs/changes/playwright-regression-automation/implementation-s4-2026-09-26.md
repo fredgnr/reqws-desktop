@@ -7,13 +7,13 @@ updated: 2026-09-26
 
 # S4 Desktop 与 GoLand 本机联动实施记录
 
-本记录区分 S4 联动实现、允许的本机检查和尚待获准运行的完整 IDE 验收。
+本记录区分 S4 联动实现、CI 检查和获准执行后的本机 IDE 实际结果。
 
 ## 1. 范围与当前结论
 
 基于 `feat/playwright-automation` 的 `4f5ff89` 扩展 S4；原 S0–S3 证据仍见[既有记录](implementation-2026-09-26.md)。本次不改生产 Desktop/插件行为、manifest schema、SDK、发布配置或兼容性下限：仍支持整个 `262` 系列，无上限；完整 GUI 代表仍为 GO 2026.2.1.1 / 262.9437.286。
 
-**S4 代码已实现，完整 IDE 联动尚未运行，不能判定 S4 验收通过。** 尚未启动专用 IDE、安装候选、操作授权或真实用户工作区。V 和旧手工门槛保持原状；不把编译、Electron 协议验证、CI 或旧 ZIP 的本机结果作为本轮联动通过证据。
+**S4 已获准实跑，但首轮三项测试失败，尚未通过验收。** 使用 `42d23dd` 的 CI 原始 ZIP、固定代表 IDE 和专用测试 profile；不涉及日常 IDE 或真实用户工作区。首轮暴露冷启动时延迟 JPS 覆盖，以及两项宿主问题，详见第 4 节。V 和旧手工门槛保持原状；不把编译、Electron 协议验证、CI 或旧 ZIP 的本机结果作为本轮联动通过证据。
 
 ## 2. 实现与真实性
 
@@ -37,7 +37,7 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 | `compileIntegrationTestKotlin` | 通过；Java 25，仅编译，无 IDE 启动。 |
 | `npm run check` | 518 通过、1 项原有 hosted-only 系统信任检查跳过，共 50 个测试文件；类型、lint、i18n 和当时文档检查通过。跳过不计作通过。 |
 | 新增 TS 协议安全检查 | 6 项，涵盖不可覆盖、会话/序号、symlink/大小、受限命令、abort/超时和私有进程 registry。 |
-| Python 本机协议/报告检查 | 7 项，覆盖丢失/错误证据、实时与冷启动步骤、旧 suite、同 ZIP 不同 Desktop 源码、两端清理和 profile 保留。 |
+| Python 本机协议/报告检查 | 首轮 7 项；宿主修正后 8 项，覆盖丢失/错误证据、实时与冷启动步骤、旧 suite、同 ZIP 不同 Desktop 源码、两端清理、profile 保留及非法输入的受保护 PFI。 |
 | Desktop 协议单独试跑 | 实际 UI 完成 9 个创建/保存请求及 1 个结束请求；Playwright 1/1，通过，零重试。仅验证 Desktop 端，无 IDE 启动，`scope=desktop-link-protocol-only`。 |
 | `npm run test:e2e` | 18/18 通过，零跳过/重试；覆盖本次修改涉及的共享 fixture、进程登记与退出。 |
 | `npm run test:e2e:negative` | 两项预定真实启动故障均准确失败并留下完整新鲜证据，严格外层门禁通过；无吞掉或改标 expected-failure。 |
@@ -49,11 +49,23 @@ CI 继续只编译宿主并运行平台/API 检查；无工作流完整 IDE、�
 
 独立只读审查发现“同 ZIP 可借用不同 Desktop 源码的旧报告”；已增加干净 Git 候选的运行前后校验、verify-report 校验和拒绝测试。审查者只读，未运行 IDE；其结论不代替实际执行。
 
-插件平台/API 检查在本轮交接前单独汇总；未完成结果不预记为通过。
+`42d23dd` 的[完整 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36238709358) 已通过 Electron、同包 smoke、项目/工作流、插件 baseline、冻结的七个 API 目标及聚合门禁。已下载该次原始 ZIP、矩阵与七份报告，严格汇总确认属于同一精确 ZIP，再用于获准本机运行。本机独立 `check:goland` 在第五个 API 目标下载依赖时停止，记为未完整完成；不把 CI ZIP 的结果转记到本机重建 ZIP。
 
-## 4. 待执行与保留范围
+## 4. 获准首轮执行与修正
 
-完整 S4 入口须对准备好的同一 ZIP 和冻结 Desktop commit，在用户获准的专用 profile 上执行。实际授权窗口、图形权限、Safe Mode/Trust 对话框、树、真实 watcher 和六个进程退出均以该次结果为准；遇需用户协助事项停止等待回复。
+用户允许后，使用专用 profile `goland-2026.2.1.1` 和同一 CI ZIP 执行 `run --suite desktop`。首次运行在 IDE 启动前遭遇官方 Maven TLS 下载失败；使用正常 Gradle 依赖解析重试成功，未修改版本或 TLS 校验，再执行完整套件。
+
+实际运行目录标识为 `reqws-local-ide-2g688u0l`：三项 JUnit 均失败，记录五个已退出 IDE 进程、十条局部投影证据，Desktop 会话退出已确认，profile 锁和 active-session 已释放。局部成功步骤不计作整个套件通过。
+
+- 选择场景的第一进程完成全部实时选择，第二进程完成冷启动空集合及切回两仓库；随后 IDE 延迟执行旧 `.iml` 的 JPS 加载，覆盖刚提交的两个根。第三进程遇到缺少根/marker 的所有权冲突。日志显示覆盖发生在第二进程退出前；不能归结为单纯退出未保存，也不能用路径清单重新认领、固定等待或测试自动保存掩盖。生产修复尚未完成。
+- Trust 场景的真实 Safe Mode 与信任后投影均有证据，但固定 IDE 随附的可选 `com.ypwang.plugin.go-linter` 在未信任状态启动时报错，严格 IDE 错误门禁使该项失败。宿主修正只为 Trust context 使用公开 Starter 配置生成本轮临时 disabled-plugins 文件，并回查该插件未加载；不改持久 profile 的插件设置、候选 ZIP 或错误门禁。该环境限定必须随 Trust 结果记录，不能宣称默认全部 bundled plugins 下通过。
+- 非法 binding 场景错误地要求 shell PFI 不变。既有契约要求撤销非法绑定的临时 shell 排除/树过滤，同时保留模型和用户内容。修正后严格比较根、模块和非 shell PFI，另要求原生 shell 恢复可见；证据保存实际错误态而非错误前快照。Python 负向用例继续拒绝仓库 PFI 被改变或 shell 隐藏未撤销。
+
+两项宿主修正的 `compileIntegrationTestKotlin` 与八项 Python 协议/报告检查通过；完整 IDE 重验仍未完成。兼容基线和生产插件代码未改变。
+
+## 5. 待执行与保留范围
+
+冷启动问题解决前不能给出 S4 GO；宿主修正也须实际重验。全部结果以同一精确 ZIP、冻结 Desktop commit、独立完整进程与新鲜报告为准；遇需用户协助事项停止等待回复。
 
 原三组 `legacy` 宿主在本次抽取公共 host 后仅完成编译，不能借用 2026-09-22 结果声称新宿主 UI 已通过。V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Excluded Files 两态、late-shell、额外 repo3 用户覆盖、完整负向破坏实验及成本/稳定性口径；本轮不撤销其要求。
 

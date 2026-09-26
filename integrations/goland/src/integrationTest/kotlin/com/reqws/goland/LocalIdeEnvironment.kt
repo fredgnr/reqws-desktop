@@ -111,6 +111,20 @@ internal class LocalIdeEnvironment {
       check(project.toRealPath().startsWith(root))
       if (preTrustProject) addProjectToTrustedLocations(project, configPath = config)
     }
+    if (!preTrustProject) {
+      // This bundled, optional linter throws before trust in the fixed IDE.
+      // Isolate it only for the ReqWS trust scenario; never mute IDE errors or
+      // change the persistent profile's plugin state or the candidate ZIP.
+      pluginConfigurator.disablePlugins("com.ypwang.plugin.go-linter")
+      val disabled = pluginConfigurator.disabledPluginsPath.toRealPath()
+      check(disabled.startsWith(root) && !Files.isSymbolicLink(disabled))
+      applyVMOptionsPatch { addSystemProperty("disabled.plugins.file.path", disabled) }
+      json.writeValue(root.resolve("trust-scenario-options.json").toFile(), mapOf(
+        "disabledPlugins" to listOf("com.ypwang.plugin.go-linter"),
+        "reason" to "Bundled Go Linter throws before project trust in GO-262.9437.286",
+        "disabledPluginsFile" to disabled.toString(),
+      ))
+    }
     // Reuse the dedicated config in place. Never copy licenses, account data or user settings.
     // Starter's system/plugins/log locations and all .idea state stay under the fresh run root.
     applyVMOptionsPatch {

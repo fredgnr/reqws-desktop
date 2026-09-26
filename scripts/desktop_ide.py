@@ -153,9 +153,15 @@ def validate_projection_evidence(run_root, process_ids):
                 continue
             if step['phase'] in {'malformed', 'mismatched'}:
                 expected_error = 'MANIFEST_INVALID_JSON' if name == 'invalid-manifest' and step['phase'] == 'malformed' else 'BINDING_ERROR'
+                shell = snapshot['shell']
+                protected_pfi = {path: value for path, value in pfi.items() if path != shell}
+                previous_pfi = {path: value for path, value in steps[index - 1]['pfi'].items() if path != shell}
                 if step.get('lifecycle') != 'ERROR' or step.get('error') != expected_error or any(
-                        step[key] != steps[index - 1][key] for key in ('roots', 'modules', 'pfi')):
+                        step[key] != steps[index - 1][key] for key in ('roots', 'modules')) or protected_pfi != previous_pfi:
                     raise ValueError('Invalid input did not preserve the prior model')
+                if pfi.get(shell) != {'inContent': True, 'excluded': False} or not any(
+                        part.split(' [', 1)[0].split(' /', 1)[0] == 'goland' for entry in tree for part in entry):
+                    raise ValueError('Invalid input did not revoke the transient shell hiding capability')
                 continue
             loaded = {repo['id'] for repo in snapshot['repositories'] if repo['name'] in snapshot['selected']}
             if (step.get('trusted') is not True or step.get('lifecycle') not in {'SYNCHRONIZED', 'DEGRADED'}

@@ -62,12 +62,12 @@ npm run check:goland:desktop -- \
   --version 0.1.7
 ```
 
-等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。该入口尚须以获准本机运行验证，实施和实际结果见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md)。
+等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。该入口已获准实跑，首轮失败与修正状态见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md)。
 
 Driver 通过本轮 UUID 和递增序号请求 Desktop 创建四个普通文本 Git 工作区及保存加载选择。Desktop UI 是成功路径上 manifest/binding 的唯一 writer，Driver 独立回读文件并观察普通 Project 树、模块根、ProjectFileIndex、加载数量和 live digest。三个场景组要求六个独立、正常退出的 IDE 进程和二十条逐步投影证据：
 
 - `desktopSelectionAndColdProcesses`：保持 IDE 打开执行 `2→1→0→2`，再验证空集合及非空集合的完整进程冷启动，保留用户 root 和磁盘文件。
-- `desktopTrustTransitionUsesRealUi`：实际选择 Safe Mode，确认 ReqWS 未写保护模型，再通过 IDE 信任对话框恢复；不全局自动信任，不调用信任 setter 或同步函数。
+- `desktopTrustTransitionUsesRealUi`：实际选择 Safe Mode，确认 ReqWS 未写保护模型，再通过 IDE 信任对话框恢复；不全局自动信任，不调用信任 setter 或同步函数。固定 IDE 的可选 bundled Go Linter 在未信任启动时报错，故仅该 context 通过公开 Starter 配置和本轮临时 `disabled.plugins.file.path` 禁用 `com.ypwang.plugin.go-linter`，记录在 `trust-scenario-options.json` 并回查未加载；不修改持久 profile 插件设置，全部 IDE 错误仍导致失败。Trust 结果须保留此环境限定。
 - `desktopInvalidInputsPreserveUserModel`：在本轮自建 fixture 对 binding 和 manifest 分别注入损坏 JSON/身份不匹配，检查真实 watcher 报错、模型保留和恢复。故障文件写入不计作 Desktop 成功链路。
 
 临时通信不暴露在产品中，也不接收任意路径或命令。任一端失败、取消、超时、skip、缺证据或异常退出都阻止通过。Desktop 项目保留在私有运行目录，不在 IDE 退出状态未确认时删除；两端退出确认不足则保留 active-session 标记。报告的 `suite=desktop` 与原 `suite=legacy` 区分，Desktop 源码身份与插件 ZIP 身份分别记录。只跑 Desktop 协议检查、编译或旧三组套件都不代表联动通过。

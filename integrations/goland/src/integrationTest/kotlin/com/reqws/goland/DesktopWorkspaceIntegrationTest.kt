@@ -6,6 +6,7 @@ import com.intellij.driver.client.Driver
 import com.intellij.driver.client.service
 import com.intellij.driver.client.utility
 import com.intellij.driver.sdk.invokeAction
+import com.intellij.driver.sdk.isPluginLoaded
 import com.intellij.driver.sdk.singleProject
 import com.intellij.driver.sdk.ui.components.elements.checkBox
 import com.intellij.driver.sdk.ui.ui
@@ -71,6 +72,7 @@ class DesktopWorkspaceIntegrationTest {
       uncheckTrustParent()
       preview.click()
     }) {
+      assertFalse(isPluginLoaded("com.ypwang.plugin.go-linter"), "Only the trust scenario isolates the unrelated bundled linter")
       val trust = utility<RemoteTrustedProjects>()
       val reqws = service<ReqwsRemoteService>(singleProject())
       assertFalse(trust.isProjectTrusted(singleProject()), "The trust scenario was bypassed")
@@ -133,11 +135,21 @@ class DesktopWorkspaceIntegrationTest {
               val state = service.getState()
               state.getLifecycle().name() == "ERROR" && state.getLastError()?.getCode() == errorCode
             }
-            assertEquals(before, host.modelEvidence(this, fixture), "Invalid input changed protected project data")
+            val after = host.modelEvidence(this, fixture)
+            assertEquals(before.roots, after.roots, "Invalid input changed content roots")
+            assertEquals(before.modules, after.modules, "Invalid input changed protected modules")
+            // Invalid bindings revoke the transient shell hiding capability. The
+            // native shell root remains, while repository/user PFI must not change.
+            val shellPath = fixture.shell.toString()
+            assertEquals(before.pfi.filterKeys { it != shellPath }, after.pfi.filterKeys { it != shellPath },
+              "Invalid input changed repository/user ProjectFileIndex boundaries")
+            assertEquals(mapOf("inContent" to true, "excluded" to false), after.pfi.getValue(shellPath))
             fixture.assertDiskPreserved()
             val tree = host.projectTree(this, fixture, phase)
             assertTrue(tree.any { path -> path.any { it.substringBefore(" [").substringBefore(" /") == "user-content" } && path.last() == "keep.txt" })
-            host.recordProof(this, fixture, phase, before, tree)
+            assertTrue(tree.any { path -> path.any { it.substringBefore(" [").substringBefore(" /") == "goland" } },
+              "The invalid binding must not keep hiding the native shell")
+            host.recordProof(this, fixture, phase, after, tree)
           } finally {
             // Restore only the original bytes of this private fixture input, even on failure.
             desktop.faultWrite(path, original, restoring = true)

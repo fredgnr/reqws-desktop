@@ -10,7 +10,7 @@ updated: 2026-09-26
 本方案补齐 Electron 真实操作链路，并与现有本机 GoLand 自动化对接，逐项替代重复的 Computer Use 回归。
 
 - 调研日期：2026-09-22。
-- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据见[实施记录](implementation-2026-09-26.md)。S4 跨进程入口已实现、完整 IDE 待验，见 [S4 记录](implementation-s4-2026-09-26.md)；V 替代验收仍为后续目标。
+- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据见[实施记录](implementation-2026-09-26.md)。S4 跨进程入口已实现、获准首轮执行失败、修正待验，见 [S4 记录](implementation-s4-2026-09-26.md)；V 替代验收仍为后续目标。
 - 入库基线：`fredgnr/reqws-desktop`，`main` 提交 `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`，应用版本 `0.1.6`。初次方案审阅基于 `7f9dc8b3a17d11339cfed5d7d770f90df659fe3b`；本次已核对两提交差异并同步新的插件与 CI 边界。
 - 关联工作：PR #20 是早期设计来源；插件兼容性与本机自动化已随 PR #21 合入上述 main。现行执行边界以[插件需求包](../ide-plugin-compatibility-automation/README.md)和[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)为准，完整 V 验收仍未完成。
 - 初次入库仅包含方案与索引；2026-09-26 的 S0–S3 实现单独以分支 diff 和执行报告定位，不改兼容性下限或发布配置，不将本机源码测试当作 CI/精确包证据。
