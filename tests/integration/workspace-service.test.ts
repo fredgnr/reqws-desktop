@@ -1,11 +1,14 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApplicationActivityGate } from '../../src/main/services/application-activity-gate';
 import { BranchService } from '../../src/main/services/branch-service';
 import { GitRunner } from '../../src/main/services/git-runner';
 import {
   WorkspaceService,
+  WorkspaceMutationCoordinator,
   manifestPathFor,
   type AppStatePort,
   type WorkspaceFilePort,
@@ -166,6 +169,51 @@ describe('WorkspaceService integration', () => {
     expect(added.repositories.map((repo) => repo.name)).toEqual(['order-api']);
     expect(clone).not.toHaveBeenCalled();
     expect(await git.originUrlMatches(target, url)).toBe(true);
+  });
+
+  it('kills a stalled clone process group before cleaning staging and continuing the queue', async () => {
+    const gate = new ApplicationActivityGate();
+    let firstClone = true;
+    let cloneChild: ChildProcessWithoutNullStreams | undefined;
+    let staging: string | undefined;
+    let descendantPid: number | undefined;
+    let closed = false;
+    const stalledGit = await GitRunner.fromPath(git.gitPath, (command, args, options) => {
+      if (args[0] !== 'clone' || !firstClone) return spawn(command, args, options);
+      firstClone = false;
+      staging = path.dirname(args.at(-1)!);
+      cloneChild = spawn(process.execPath, ['--eval', `
+        const { spawn } = require('node:child_process');
+        const worker = spawn(process.execPath, ['--eval', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"], { stdio: ['ignore', 'pipe', 'inherit'] });
+        process.on('SIGTERM', () => {});
+        worker.stdout.once('data', () => console.log(worker.pid));
+        setInterval(() => {}, 1000);
+      `], options);
+      cloneChild.stdout.on('data', (chunk) => { descendantPid = Number(String(chunk).trim()); });
+      cloneChild.once('close', () => { closed = true; });
+      return cloneChild;
+    }, { allowLocalRepositoryPaths: true, cloneIdleTimeoutMs: 1_000, activityGate: gate });
+    service = new WorkspaceService(stateStore, files, stalledGit, new BranchService(stalledGit), undefined, new WorkspaceMutationCoordinator(gate));
+    const first = createWorkspace();
+    const failure = expect(first).rejects.toMatchObject({ code: 'GIT_PROCESS_TIMEOUT', stage: 'cloning' });
+    try {
+      await vi.waitFor(() => expect(descendantPid).toBeGreaterThan(0));
+      expect(() => gate.acquireShutdown()).toThrow();
+      expect(closed).toBe(false);
+      expect(await fs.stat(staging!)).toBeTruthy();
+      const next = createWorkspace();
+      await failure;
+      expect(closed).toBe(true);
+      expect(() => process.kill(cloneChild!.pid!, 0)).toThrow();
+      await vi.waitFor(() => expect(() => process.kill(descendantPid!, 0)).toThrow());
+      await expect(fs.stat(staging!)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await next).status).toBe('ready');
+      gate.acquireShutdown()();
+      expect(stateStore.state.workspaces).toHaveLength(1);
+    } finally {
+      if (!closed && cloneChild?.pid) process.kill(-cloneChild.pid, 'SIGKILL');
+      await first.catch(() => undefined);
+    }
   });
 
   async function createWorkspace() {

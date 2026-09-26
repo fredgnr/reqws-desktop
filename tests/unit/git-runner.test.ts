@@ -10,6 +10,7 @@ import { ApplicationActivityGate } from '../../src/main/services/application-act
 
 import {
   GIT_OUTPUT_LIMIT_BYTES,
+  GIT_CLONE_IDLE_TIMEOUT_MS,
   GitRunner,
   redactGitOutput,
   type SpawnGitProcess,
@@ -71,7 +72,7 @@ describe('GitRunner', () => {
     release();
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
   it('retains a live child lease after an error until its close event', async () => {
     const gate = new ApplicationActivityGate();
@@ -82,13 +83,57 @@ describe('GitRunner', () => {
       else pending = child;
       return child;
     };
-    const runner = await GitRunner.fromPath('/usr/bin/git', spawnProcess, { activityGate: gate });
+    const runner = await GitRunner.fromPath('/usr/bin/git', spawnProcess, { activityGate: gate, signalProcess: (child, signal) => { child.kill(signal); } });
     const operation = runner.run(['fetch']);
+    let settled = false;
+    void operation.catch(() => { settled = true; });
     pending.emit('error', new Error('Unable to signal child'));
-    await expect(operation).rejects.toMatchObject({ code: 'GIT_PROCESS_FAILED' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
     expect(() => gate.acquireShutdown()).toThrow();
     pending.emit('close', 1, null);
+    await expect(operation).rejects.toMatchObject({ code: 'GIT_PROCESS_FAILED' });
     gate.acquireShutdown()();
+  });
+
+  it('allows long progressing clones, escalates stalled clones, and releases only after close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const gate = new ApplicationActivityGate();
+    let pending!: ChildProcessWithoutNullStreams;
+    const spawnProcess: SpawnGitProcess = (_command, args) => {
+      const child = Object.assign(fakeChild(), { pid: 12345 });
+      if (args[0] === '--version') queueMicrotask(() => child.emit('close', 0, null));
+      else pending = child;
+      return child;
+    };
+    const runner = await GitRunner.fromPath('/git', spawnProcess, {
+      activityGate: gate,
+      signalProcess: (child, signal) => { child.kill(signal); },
+    });
+    const operation = runner.clone('ssh://git@example.test/repo.git', '/staging/repo');
+    const rejected = expect(operation).rejects.toMatchObject({ code: 'GIT_PROCESS_TIMEOUT', stage: 'cloning' });
+    let settled = false;
+    void operation.catch(() => { settled = true; });
+    for (let interval = 0; interval < 4; interval++) {
+      await vi.advanceTimersByTimeAsync(GIT_CLONE_IDLE_TIMEOUT_MS - 1);
+      pending.stderr.emit('data', 'Receiving objects');
+    }
+    expect(pending.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(GIT_CLONE_IDLE_TIMEOUT_MS);
+    expect(pending.kill).toHaveBeenCalledWith('SIGTERM');
+    pending.emit('error', new Error('signal failed'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(pending.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(settled).toBe(false);
+    expect(() => gate.acquireShutdown()).toThrow();
+    pending.emit('close', null, 'SIGKILL');
+    await rejected;
+    gate.acquireShutdown()();
+    expect(vi.getTimerCount()).toBe(0);
+    const next = runner.clone('ssh://git@example.test/repo.git', '/staging/next');
+    pending.emit('close', 0, null);
+    await next;
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('resolves PATH Git to an absolute path and validates it with git --version', async () => {
@@ -254,6 +299,7 @@ describe('GitRunner', () => {
     expect(calls[2]?.args).toEqual([
       'clone',
       '--no-hardlinks',
+      '--progress',
       '--',
       'git@example.test:team/order-api.git',
       '/tmp/-destination',
@@ -347,6 +393,7 @@ describe('GitRunner', () => {
     expect(testCalls[1]?.args).toEqual([
       'clone',
       '--no-hardlinks',
+      '--progress',
       '--',
       '/tmp/local.git',
       '/tmp/clone',
