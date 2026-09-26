@@ -99,3 +99,7 @@ V 后续仍需逐项核对[旧步骤登记](manual-inventory.md)，特别是 Exc
 `scripts/ide_api_exception.py` 同时核对实际 ZIP/JAR 指令和原始 Verifier 报告，只允许固定私有 `awaitPlatform(Project, Continuation)` 内一次精确 cast 与接口调用。所有 Gradle failure levels 保留，原始任务仍如实非零退出；统一 runner 仅接受两行 Internal、一行 Experimental 和唯一可解释的 `verifyPlugin` 失败，其余内容或失败仍阻断。最低/固定目标统一走 `--baseline`，CI、weekly、release 和本机原有完整矩阵继续保留；签名后仍按最终 ZIP 重新核验。二十项新门禁检查及整合后的二百零八项 Python workflows 通过。独立只读审查未发现生产修复或例外门禁的剩余明确问题，审查不计作测试执行。
 
 Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-only 跳过，类型/lint/i18n/文档检查通过；首轮沙箱阻断 loopback 与一次性 macOS fixture，未改标跳过。Starter 改用公开 `useRelease(version)` 避免无关 EAP/preview 查询，保留固定 SDK 的 ProductInfo 强核对；坏 Marketplace JSON 仅位于旧 run root，新轮自然使用新目录，未修改 profile 的账号或许可文件。完整 API 矩阵和新 ZIP 的 S4/legacy 执行结果仍待本轮集成，不提前记为通过。
+
+`16ffce1` 的[完整 CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36243622124)已全部通过，包括七个 API 目标；已下载原始 ZIP/报告并严格核对同一候选。其 ZIP 与本机重建 ZIP 字节不同，因此 GUI 选择已核验的 CI 原始 ZIP，本机慢速下载中的矩阵仍独立记录。为避免共享 Gradle 输出，在同一提交的隔离 checkout 编译宿主和运行 Electron，仍独占同一专用 IDE profile。
+
+隔离首轮 `reqws-local-ide-futqtkvq` 在任何 IDE 启动前失败：Starter ZIP reader 尝试可写打开只读输入，解包失败清理又删除了本轮下载的临时 CI ZIP。Desktop 已退出、profile 已释放；未触碰用户原有产物。随后修正本机入口：原 ZIP 保持只读，先创建本轮私有可写的精确字节副本再交给 Starter；每 context 安装前后、成功前都校验候选，报告记录原件和副本。新增测试模拟安装器删除副本，确认只读原件完整保留，并拒绝错摘要、链接和已存在的 staging 目录。恢复的 CI ZIP 必须重新核对原 CI 证据，不能将该失败轮记作通过。

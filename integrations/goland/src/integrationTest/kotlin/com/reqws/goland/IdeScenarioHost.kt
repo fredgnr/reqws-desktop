@@ -47,9 +47,11 @@ internal class IdeScenarioHost {
     "reqws-$name", environment.testCase(LocalProjectInfo(project, isReusable = true)),
     preserveSystemDir = true,
   ).apply {
+    check(digest() == candidateDigest) { "Candidate changed before plugin installation" }
     environment.configure(this, project, preTrustProject)
     if (!preTrustProject) untrustedContexts += this
     pluginConfigurator.installPluginFromPath(archive).assertPluginIsInstalled("com.reqws.workspace")
+    check(digest() == candidateDigest) { "Installer changed the candidate bytes" }
   }
 
   fun withIde(context: IDETestContext, beforeProjectOpen: Driver.() -> Unit = {}, block: Driver.() -> Unit) {

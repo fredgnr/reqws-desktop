@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -46,6 +48,25 @@ def checked_path(path):
         if item.is_symlink() and str(item) not in {'/tmp', '/var'}:
             raise EnvironmentBlocked('UNSAFE_PATH', 'Local run/profile paths must not traverse user symlinks.')
     return path.resolve()
+
+
+def stage_candidate(archive, run_root, expected_digest):
+    # Starter's ZIP reader opens archives read/write and may remove its input on
+    # unpack failure. It must never receive the caller's original candidate.
+    archive = checked_path(archive)
+    directory = checked_path(run_root) / 'candidate'
+    directory.mkdir(mode=0o700)
+    target = directory / 'plugin.zip'
+    source_fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(source_fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError('The candidate is not a regular archive')
+        target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(target_fd, 'wb') as output:
+            shutil.copyfileobj(source, output)
+    if digest(archive) != expected_digest or digest(target) != expected_digest:
+        raise ValueError('Candidate bytes changed while staging the private installer copy')
+    return target
 
 
 def initialize_profile(path, policy):
@@ -241,6 +262,8 @@ def main():
                 report['candidate'] = {'path': str(archive), 'sha256': candidate['sha256'], 'version': args.version}
                 if not server and not (profile / 'preparation-session.json').is_file():
                     raise EnvironmentBlocked('AUTHORIZATION_PREPARATION_REQUIRED', 'Run prepare with this profile and sign in in the dedicated IDE, or use an optional authorized License Server.')
+                installation_archive = stage_candidate(archive, run_root, candidate['sha256'])
+                report['installationArchive'] = {'path': str(installation_archive), 'sha256': candidate['sha256']}
             isolate_project_state(profile, run_root)
             write_json(report_path, report)
             command = [str(ROOT / 'integrations/goland/gradlew'), '-p', str(ROOT / 'integrations/goland'),
@@ -248,7 +271,7 @@ def main():
                        '--no-daemon', '--no-configuration-cache', '--console=plain',
                        f'-PreqwsLocalIdeProfile={profile}', f'-PreqwsLocalIdeRunRoot={run_root}']
             if args.command == 'run':
-                command += [f'-PreqwsPluginArchive={archive}', f'-PreleaseVersion={args.version}',
+                command += [f'-PreqwsPluginArchive={installation_archive}', f'-PreleaseVersion={args.version}',
                             f"-PreqwsPluginSha256={candidate['sha256']}", f'-PreqwsLocalIdeSuite={args.suite}']
                 if args.suite == 'desktop':
                     session_id = initialize_link(run_root)
@@ -274,7 +297,7 @@ def main():
                 if session_closed(run_root, args.command, args.suite):
                     active.unlink()
             report['exitCode'] = code
-            if args.command == 'run' and digest(archive) != candidate['sha256']:
+            if args.command == 'run' and any(digest(path) != candidate['sha256'] for path in (archive, installation_archive)):
                 raise ValueError('Candidate bytes changed; signed and unsigned artifacts cannot share evidence.')
             blocked = run_root / 'environment-blocked.json'
             if blocked.is_file():
