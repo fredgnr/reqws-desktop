@@ -15,7 +15,7 @@
 
 2026-09-27 的 [Playwright V](../playwright-regression-automation/verification-v-2026-09-26.md)已按[逐项登记](../playwright-regression-automation/manual-inventory.md)完成其范围的替代：原始 CI ZIP 上两轮 Desktop 四项联动、保留 legacy 三项及当前宿主 watcher 负向均有原始证据。它补足真实 Desktop 保存、模型/PFI/Project 和恢复的重复手工步骤，不表示本需求包全部独立负向验收或 Account 长期授权复用都已实跑。
 
-2026-09-26 用户为 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 批准单独的受控 API 例外，范围与软超时限制见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md#6-已授权-api-例外)。原始 Verifier 失败级别全部保留，由统一入口对精确调用点、字节码和原始报告裁决；最低/固定两目标和后续完整 API 矩阵均继续执行，不扩大到其他内部或实验 API。
+2026-09-26 用户为 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 批准单独的受控 API 例外，范围与软超时限制见 [S4 记录](../playwright-regression-automation/implementation-2026-09-26.md#6-已授权-api-例外)。原始 Verifier 失败级别全部保留，由统一入口对精确调用点、字节码和原始报告裁决；最低/固定两目标和后续完整 API 矩阵均继续执行，不扩大到其他内部或实验 API。
 
 2026-09-22 已移除 API 矩阵的 `max-parallel` 限制，工作流测试要求不再设置该字段；并发由 GitHub 的可用 runner 和账户配额决定。每周两组候选仍按阶段验证，全部必需目标和同一 ZIP 的汇总校验继续保留。此前开发记录中的双并发描述仅代表当时实现。
 

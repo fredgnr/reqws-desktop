@@ -29,7 +29,7 @@ Playwright 完整名称带文件前缀，以上表达式不加开头锚点。每
 
 启动故障由独立 `npm run test:e2e:negative` 执行[断 preload](../../../tests/e2e/probes/disconnected-preload.spec.ts)和[早期 renderer 错误](../../../tests/e2e/probes/startup-error.spec.ts)；外层 runner 必须验证准确的失败原因和完整新鲜证据才成功。这些探针不作为普通套件的 expected-failure 注解。
 
-S4 加入 [Desktop 联动 spec](../../../tests/e2e/local-ide/desktop-link.spec.ts)与 [Driver 场景](../../../integrations/goland/src/integrationTest/kotlin/com/reqws/goland/DesktopWorkspaceIntegrationTest.kt)，入口为 `check:goland:desktop`。历史三个选择器是 `desktopSelectionAndColdProcesses`、`desktopTrustTransitionUsesRealUi`、`desktopInvalidInputsPreserveUserModel`，原 S4 结果与 Trust 环境限定见 [S4 记录](implementation-s4-2026-09-26.md#7-修复后的同候选验证)。V 新增 `desktopUserCoverageAndUnboundShell`，并补齐 G3 两态/late 文件、G4 同进程重开和额外 root、G5 用户覆盖、G6 Error UI；v7 四项套件已在同一原始 CI ZIP 上完成两轮独立正向及严格重读，不能用旧 S4 报告替代这些新证据。
+S4 加入 [Desktop 联动 spec](../../../tests/e2e/local-ide/desktop-link.spec.ts)与 [Driver 场景](../../../integrations/goland/src/integrationTest/kotlin/com/reqws/goland/DesktopWorkspaceIntegrationTest.kt)，入口为 `check:goland:desktop`。历史三个选择器是 `desktopSelectionAndColdProcesses`、`desktopTrustTransitionUsesRealUi`、`desktopInvalidInputsPreserveUserModel`，原 S4 结果与 Trust 环境限定见 [S4 记录](implementation-2026-09-26.md#7-修复后的同候选验证)。V 新增 `desktopUserCoverageAndUnboundShell`，并补齐 G3 两态/late 文件、G4 同进程重开和额外 root、G5 用户覆盖、G6 Error UI；v7 四项套件已在同一原始 CI ZIP 上完成两轮独立正向及严格重读，不能用旧 S4 报告替代这些新证据。
 
 以下“本轮裁决”只作用于明确列出的断言。“替代”撤销该业务范围的重复 Computer Use，“部分替代”保留列出的原生或未覆盖范围；“保留”继续原门禁。CI、翻译复核和低层安全测试不计作新增替代。历史 MVP 报告为 archived，仅用于追溯旧步骤；执行以当前有效设计、标准和授权为准，不恢复已被语言解耦规范移除的 Go SDK、搜索或原生 Git 全套验收。
 
