@@ -40,19 +40,66 @@ class DesktopWorkspaceIntegrationTest {
     val context = host.context("desktop-selection", fixture.shell)
     host.withIde(context) {
       host.assertProjection(this, fixture)
+      val originalExcluded = host.excludedFiles(this)
+      try {
+        host.setExcludedFiles(this, false)
+        host.assertProjection(this, fixture, phase = "excluded-off")
+        host.setExcludedFiles(this, true)
+        host.assertProjection(this, fixture, phase = "excluded-on")
+        fixture.createLateFiles()
+        host.assertProjection(this, fixture, phase = "late-files-on")
+        host.setExcludedFiles(this, false)
+        host.assertProjection(this, fixture, phase = "late-files-off")
+      } finally {
+        host.setExcludedFiles(this, originalExcluded)
+      }
+      assertEquals(originalExcluded, host.excludedFiles(this))
+      host.assertProjection(this, fixture, phase = "excluded-restored")
       for (selection in listOf(setOf("repo-a"), emptySet(), setOf("repo-a", "repo-b"), emptySet())) {
         desktop.select(fixture, selection)
         host.assertProjection(this, fixture)
       }
     }
     // Complete process shutdown is checked by the host before either new process starts.
+    // The user's extra root is inside the existing managed module, not merely a sibling module.
+    addUnclaimedRootToSavedManagedModule(fixture)
     host.withIde(context) {
+      host.assertProjection(this, fixture, phase = "cold-empty")
+      desktop.select(fixture, setOf("repo-a", "repo-b"))
+      host.assertProjection(this, fixture, phase = "user-root-selected")
+      desktop.select(fixture, emptySet())
+      host.assertProjection(this, fixture, phase = "user-root-empty")
+      host.reopenProject(this, fixture)
+      host.assertProjection(this, fixture, phase = "reopened-empty")
+    }
+    host.withIde(context) {
+      host.assertProjection(this, fixture, phase = "post-clear-cold-empty")
+      desktop.select(fixture, setOf("repo-a", "repo-b"))
+      host.assertProjection(this, fixture)
+    }
+    host.withIde(context) { host.assertProjection(this, fixture, phase = "cold-selected") }
+    fixture.assertDiskPreserved()
+  }
+
+  @Test
+  fun desktopUserCoverageAndUnboundShell() {
+    val fixture = desktop.create("coverage")
+    host.withIde(host.context("desktop-coverage", fixture.shell)) {
+      host.assertProjection(this, fixture)
+      desktop.select(fixture, emptySet())
       host.assertProjection(this, fixture)
       desktop.select(fixture, setOf("repo-a", "repo-b"))
       host.assertProjection(this, fixture)
     }
-    host.withIde(context) { host.assertProjection(this, fixture) }
     fixture.assertDiskPreserved()
+    // Exactly the same .reqws/ide/goland shape, but no ReqWS manifest or binding.
+    val ordinary = Files.createTempDirectory(host.root, "unbound-")
+    val unboundShell = Files.createDirectories(ordinary.resolve(".reqws/ide/goland"))
+    Files.writeString(unboundShell.resolve("shell-probe.txt"), "unbound same-name shell\n")
+    val idea = Files.createDirectory(ordinary.resolve(".idea"))
+    Files.writeString(idea.resolve("modules.xml"), """<project version="4"><component name="ProjectModuleManager"><modules><module fileurl="file://${'$'}PROJECT_DIR${'$'}/.idea/ordinary.iml" filepath="${'$'}PROJECT_DIR${'$'}/.idea/ordinary.iml"/></modules></component></project>""")
+    Files.writeString(idea.resolve("ordinary.iml"), """<module type="JAVA_MODULE" version="4"><component name="NewModuleRootManager"><content url="${ordinary.toUri().toString().removeSuffix("/")}"/><orderEntry type="sourceFolder" forTests="false"/></component></module>""")
+    host.withIde(host.context("desktop-unbound-shell", ordinary)) { host.recordOrdinary(this, ordinary) }
   }
 
   @Test
@@ -141,9 +188,11 @@ class DesktopWorkspaceIntegrationTest {
             // Invalid bindings revoke the transient shell hiding capability. The
             // native shell root remains, while repository/user PFI must not change.
             val shellPath = fixture.shell.toString()
-            assertEquals(before.pfi.filterKeys { it != shellPath }, after.pfi.filterKeys { it != shellPath },
+            assertEquals(before.pfi.filterKeys { it != shellPath && !it.startsWith("$shellPath/") },
+              after.pfi.filterKeys { it != shellPath && !it.startsWith("$shellPath/") },
               "Invalid input changed repository/user ProjectFileIndex boundaries")
             assertEquals(mapOf("inContent" to true, "excluded" to false), after.pfi.getValue(shellPath))
+            assertEquals(mapOf("inContent" to true, "excluded" to false), after.pfi.getValue("$shellPath/shell-probe.txt"))
             fixture.assertDiskPreserved()
             val tree = host.projectTree(this, fixture, phase)
             assertTrue(tree.any { path -> path.any { it.substringBefore(" [").substringBefore(" /") == "user-content" } && path.last() == "keep.txt" })

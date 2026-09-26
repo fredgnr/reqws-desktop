@@ -4,7 +4,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 
-export const linkNames = ['selection', 'trust', 'invalid-binding', 'invalid-manifest'] as const;
+export const linkNames = ['selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'] as const;
 const envelope = {
   schemaVersion: z.literal(1),
   sessionId: z.uuid(),

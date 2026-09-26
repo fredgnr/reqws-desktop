@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from check_ide_test_reports import check_reports
 from ide_compatibility import ROOT, digest, read_policy, write_json
 from plugin_release import validate_plugin
-from desktop_ide import assert_desktop_source, execute_linked, initialize_link
+from desktop_ide import ACCEPTANCE_VERSION, PROJECTION_PROOFS, SAVED_PROJECTION_PROOFS, assert_desktop_source, execute_linked, initialize_link, read_message, validate_transcript
 
 PROFILE_MARKER = '.reqws-ide-profile.json'
 PROJECT_STATE = ('workspace', 'projects', 'options/recentProjects.xml', 'options/recentProjectDirectories.xml',
@@ -192,7 +192,11 @@ def verify_report(path, archive, version, suite='legacy'):
             or report.get('suite', 'legacy') != suite
             or suite == 'desktop' and (report.get('desktop', {}).get('tests', {}).get('passed') != 1
                                       or report.get('results', {}).get('suite') != 'desktop'
-                                      or report.get('results', {}).get('savedProjectionProofs') != 4)
+                                      or report.get('results', {}).get('acceptanceVersion') != ACCEPTANCE_VERSION
+                                      or report.get('results', {}).get('projectionProofs') != PROJECTION_PROOFS
+                                      or report.get('results', {}).get('savedProjectionProofs') != SAVED_PROJECTION_PROOFS
+                                      or report.get('results', {}).get('tests') != 4
+                                      or report.get('results', {}).get('processes') != 9)
             or report.get('candidate', {}).get('sha256') != digest(archive)
             or report['candidate'].get('version') != version
             or report.get('actualIde') != report.get('ide')
@@ -203,6 +207,15 @@ def verify_report(path, archive, version, suite='legacy'):
         if not isinstance(source, dict):
             raise ValueError('Desktop source identity is missing from the linked report.')
         assert_desktop_source(source)
+        run_root = Path(path).resolve().parent
+        marker = run_root / 'run-root.txt'
+        if marker.is_symlink() or Path(marker.read_text().strip()) != run_root:
+            raise ValueError('The linked report no longer has its original private evidence root.')
+        if check_reports(run_root / 'junit', marker, suite) != report['results']:
+            raise ValueError('The linked report summary differs from its current raw evidence.')
+        session = read_message(run_root / 'desktop-link/session.json')
+        if validate_transcript(run_root, session['sessionId']) != report['desktop'].get('exchange'):
+            raise ValueError('The linked Desktop transcript is missing or changed.')
     return report
 
 

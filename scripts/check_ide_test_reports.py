@@ -5,7 +5,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 SCENARIOS = {'loadingAndProjectTree', 'atomicSelectionAutomaticallyRefreshes', 'emptyAndNonemptySurviveColdProcesses'}
-DESKTOP_SCENARIOS = {'desktopSelectionAndColdProcesses', 'desktopTrustTransitionUsesRealUi', 'desktopInvalidInputsPreserveUserModel'}
+DESKTOP_SCENARIOS = {'desktopSelectionAndColdProcesses', 'desktopTrustTransitionUsesRealUi', 'desktopInvalidInputsPreserveUserModel', 'desktopUserCoverageAndUnboundShell'}
 
 
 def check_reports(reports, root_file, suite='legacy'):
@@ -27,16 +27,19 @@ def check_reports(reports, root_file, suite='legacy'):
         pid, phase = line.split('\t')
         events.setdefault(pid, []).append(phase)
     # Loading + ordinary + refresh + twice three cold processes.
-    process_count = 6 if suite == 'desktop' else 9
+    # Desktop: four selection processes, trust, two invalid-input projects,
+    # user-root coverage and an unbound ordinary project. Legacy remains nine.
+    process_count = 9
     if len(events) != process_count or any(phases != ['started', 'passed', 'exited'] for phases in events.values()):
         raise ValueError('Cold process coverage/cleanup is incomplete or an IDE was force-killed')
     result = {'tests': len(cases), 'skipped': 0, 'failed': 0, 'processes': len(events),
               'selectors': sorted(actual), 'scope': 'local-ide-integration', 'suite': suite}
     if suite == 'desktop':
-        from desktop_ide import validate_projection_evidence
+        from desktop_ide import ACCEPTANCE_VERSION, SAVED_PROJECTION_PROOFS, validate_projection_evidence
         result['projectionProofs'] = validate_projection_evidence(root, events)
-        result['savedProjectionProofs'] = 4
-    print(f'All three {suite} IDE scenario groups completed with {process_count} distinct, cleanly exited processes')
+        result['savedProjectionProofs'] = SAVED_PROJECTION_PROOFS
+        result['acceptanceVersion'] = ACCEPTANCE_VERSION
+    print(f'All {len(expected)} {suite} IDE scenario groups completed with {process_count} distinct, cleanly exited processes')
     return result
 
 

@@ -16,6 +16,7 @@ interface ReqwsRemoteState {
   fun getValidatedProjectionDigest(): String?
   fun getLastAppliedDigest(): String?
   fun getLastError(): ReqwsRemoteError?
+  fun getUserRootCoverage(): Set<String>
 }
 
 @Remote("com.reqws.goland.project.ReqwsProjectError", plugin = "com.reqws.workspace")
@@ -63,4 +64,23 @@ interface RemoteProjectFileIndex {
 interface RemoteLocalFileSystem {
   fun getInstance(): RemoteLocalFileSystem
   fun findFileByPath(path: String): com.intellij.driver.sdk.VirtualFile?
+}
+
+@Remote("com.intellij.ide.projectView.ProjectView")
+interface RemoteProjectView {
+  fun getInstance(project: com.intellij.driver.sdk.Project): RemoteProjectView
+  fun getCurrentViewId(): String
+  fun isShowExcludedFiles(paneId: String): Boolean
+}
+
+@Remote("com.intellij.openapi.vcs.ProjectLevelVcsManager")
+interface RemoteVcsManager {
+  fun getInstance(project: com.intellij.driver.sdk.Project): RemoteVcsManager
+  fun getDirectoryMappings(): List<RemoteVcsMapping>
+}
+
+@Remote("com.intellij.openapi.vcs.VcsDirectoryMapping")
+interface RemoteVcsMapping {
+  fun getDirectory(): String
+  fun getVcs(): String
 }

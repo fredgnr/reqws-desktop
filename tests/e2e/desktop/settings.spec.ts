@@ -34,4 +34,10 @@ test('D02 settings and language survive a cold process restart @smoke', async ({
   await expect(desktop.page.getByLabel('Default workspace parent folder', { exact: true })).toHaveValue(isolation.workspaceRoot);
   await expect(desktop.page.getByLabel('.code-workspace file folder', { exact: true })).toHaveValue(isolation.outputRoot);
   expect((await desktop.state()).settings.localePreference).toBe('en-US');
+  const chineseProcess = desktop.app.process().pid;
+  await desktop.restart();
+  expect(desktop.app.process().pid).not.toBe(chineseProcess);
+  for (const name of ['Repositories', 'Workspaces', 'Settings'] as const) await navigate(desktop, name);
+  await expect(desktop.page.getByLabel('Interface language', { exact: true })).toHaveValue('en-US');
+  expect((await desktop.state()).settings.localePreference).toBe('en-US');
 });

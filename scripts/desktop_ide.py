@@ -6,16 +6,22 @@ from pathlib import Path
 import re
 import signal
 import stat
+import struct
 import subprocess
 import time
 import uuid
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
+import zlib
 
 from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read_json, validate_report
 
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
-NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest'}
+NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
+REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
+ACCEPTANCE_VERSION = 2
+PROJECTION_PROOFS = 32
+SAVED_PROJECTION_PROOFS = 5
 
 
 def assert_desktop_source(expected=None):
@@ -62,6 +68,7 @@ def validate_transcript(run_root, session_id):
         raise ValueError('Incomplete Desktop/Driver exchange')
     created = {}
     selections = []
+    coverage = []
     for sequence in range(1, len(requests) + 1):
         request = read_message(directory / f'request-{sequence}.json')
         response = read_message(directory / f'response-{sequence}.json')
@@ -80,6 +87,13 @@ def validate_transcript(run_root, session_id):
         if name not in NAMES or operation not in {'create', 'select'}:
             raise ValueError('Unknown Desktop operation')
         snapshot = response['snapshot']
+        repositories = snapshot.get('repositories')
+        if (not isinstance(repositories, list) or len(repositories) != 3
+                or any(not isinstance(repo, dict) or set(repo) != {'name', 'id'}
+                       or not isinstance(repo['id'], str) or not repo['id'] for repo in repositories)
+                or {repo['name'] for repo in repositories} != REPOSITORIES
+                or len({repo['id'] for repo in repositories}) != 3):
+            raise ValueError('Desktop must create three distinct real repository members')
         root = Path(snapshot['root'])
         if (not root.is_absolute() or root.resolve() != root or not root.is_relative_to(run_root)
                 or snapshot['shell'] != str(root / '.reqws/ide/goland') or snapshot['name'] != name):
@@ -102,12 +116,16 @@ def validate_transcript(run_root, session_id):
             created[name] = snapshot
         if name == 'selection':
             selections.append(expected)
+        if name == 'coverage':
+            coverage.append(expected)
     if request.get('operation') != 'finish' or selections != [
-            ['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]:
+            ['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]:
         raise ValueError('Missing live 2→1→0→2 or empty/nonempty cold-process selections')
-    if len({value['bindingId'] for value in created.values()}) != 4:
+    if coverage != [['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]:
+        raise ValueError('Missing unselected user-root coverage across empty and restored selections')
+    if len({value['bindingId'] for value in created.values()}) != len(NAMES):
         raise ValueError('Scenario workspaces must have independent Desktop bindings')
-    return {'requests': len(requests), 'workspaces': len(created), 'selections': selections}
+    return {'requests': len(requests), 'workspaces': len(created), 'selections': selections, 'coverageSelections': coverage}
 
 
 def validate_projection_evidence(run_root, process_ids):
@@ -120,22 +138,38 @@ def validate_projection_evidence(run_root, process_ids):
         response = read_message(path)
         if snapshot := response.get('snapshot'):
             snapshots[snapshot['name'], snapshot['revision']] = snapshot
-    if len(proofs) != 20 or {str(proof.get('pid')) for proof in proofs} != set(process_ids):
+    ordinary = validate_ordinary_evidence(run_root)
+    if len(proofs) != PROJECTION_PROOFS or {str(proof.get('pid')) for proof in proofs} | {str(ordinary['pid'])} != set(process_ids):
         raise ValueError('Missing per-step IDE model/Project-tree evidence')
+    if ordinary['pid'] in {proof.get('pid') for proof in proofs}:
+        raise ValueError('Unbound shell must use its own independent IDE process')
+    screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')]
+    if any(not isinstance(path, str) for path in screenshots) or len(set(screenshots)) != len(screenshots):
+        raise ValueError('Every IDE observation requires its own fresh screenshot')
     for name in NAMES:
         steps = [proof for proof in proofs if proof.get('scenario') == name]
-        expected = (['projection'] * 8 if name == 'selection' else ['safe-mode-blocked', 'projection']
-                    if name == 'trust' else ['projection', 'malformed', 'projection', 'mismatched', 'projection'])
+        expected = (['projection', 'excluded-off', 'excluded-on', 'late-files-on', 'late-files-off', 'excluded-restored'] +
+                    ['projection'] * 4 + ['cold-empty', 'user-root-selected', 'user-root-empty', 'reopened-empty', 'post-clear-cold-empty', 'projection', 'cold-selected']
+                    if name == 'selection' else ['safe-mode-blocked', 'projection'] if name == 'trust'
+                    else ['projection'] * 3 if name == 'coverage'
+                    else ['projection', 'malformed', 'projection', 'mismatched', 'projection'])
         if [step.get('phase') for step in steps] != expected:
             raise ValueError('A required IDE phase is missing or reordered')
         if name == 'selection':
-            if [step.get('revision') for step in steps] != [1, 2, 3, 4, 5, 5, 6, 6]:
+            if [step.get('revision') for step in steps] != [1] * 6 + [2, 3, 4, 5, 5, 6, 7, 7, 7, 8, 8]:
                 raise ValueError('Missing actual empty/nonempty cold-process observations')
             pids = [step['pid'] for step in steps]
-            if len(set(pids)) != 3 or len(set(pids[:5])) != 1 or pids[5] != pids[6]:
+            if (len(set(pids)) != 4 or len(set(pids[:10])) != 1 or len(set(pids[10:14])) != 1
+                    or len(set(pids[14:16])) != 1):
                 raise ValueError('Watcher/cold observations came from the wrong IDE processes')
+            if (steps[1].get('showExcludedFiles') is not False or steps[2].get('showExcludedFiles') is not True
+                    or steps[3].get('showExcludedFiles') is not True or steps[4].get('showExcludedFiles') is not False
+                    or steps[5].get('showExcludedFiles') != steps[0].get('showExcludedFiles')):
+                raise ValueError('Excluded Files did not exercise both states and restore the original setting')
         elif len({step.get('pid') for step in steps}) != 1:
             raise ValueError('A live IDE scenario restarted its process')
+        if name == 'coverage' and [step.get('revision') for step in steps] != [1, 2, 3]:
+            raise ValueError('User-root coverage did not survive actual selection changes')
         for index, step in enumerate(steps):
             snapshot = snapshots[name, step['revision']]
             if any(step.get(key) != snapshot.get(key) for key in ('workspaceId', 'bindingId', 'selected')):
@@ -147,22 +181,30 @@ def validate_projection_evidence(run_root, process_ids):
             tree = step.get('tree')
             if not isinstance(roots, list) or not isinstance(modules, dict) or not isinstance(pfi, dict) or not isinstance(tree, list):
                 raise ValueError('IDE proof is missing actual roots/modules/PFI/tree')
+            if (type(step.get('showExcludedFiles')) is not bool
+                    or step.get('managedUserRoot') is not (name == 'selection' and index >= 10)
+                    or step.get('lateFiles') is not (name == 'selection' and index >= 3)):
+                raise ValueError('The user-root/late-file/Project-view observation is incomplete')
+            validate_vcs_observation(step.get('vcsMappings'))
+            validate_screenshot(run_root, step.get('screenshot'))
             if step['phase'] == 'safe-mode-blocked':
                 if (step.get('trusted') is not False or step.get('lifecycle') != 'SAFE_MODE_BLOCKED'
                         or step.get('lastAppliedDigest') is not None or step.get('validatedProjectionDigest') is not None
-                        or any(module.lower().startswith('reqws-') for module in modules)):
+                        or any(module.lower().startswith('reqws-') for module in modules)
+                        or any(str(root / repo) in roots or pfi.get(str(root / repo), {}).get('inContent') is not False
+                               for repo in REPOSITORIES)):
                     raise ValueError('Safe Mode evidence bypassed real trust')
                 continue
             if step['phase'] in {'malformed', 'mismatched'}:
                 expected_error = 'MANIFEST_INVALID_JSON' if name == 'invalid-manifest' and step['phase'] == 'malformed' else 'BINDING_ERROR'
                 shell = snapshot['shell']
-                protected_pfi = {path: value for path, value in pfi.items() if path != shell}
-                previous_pfi = {path: value for path, value in steps[index - 1]['pfi'].items() if path != shell}
+                protected_pfi = {path: value for path, value in pfi.items() if path != shell and not path.startswith(shell + '/')}
+                previous_pfi = {path: value for path, value in steps[index - 1]['pfi'].items() if path != shell and not path.startswith(shell + '/')}
                 if step.get('lifecycle') != 'ERROR' or step.get('error') != expected_error or any(
                         step[key] != steps[index - 1][key] for key in ('roots', 'modules')) or protected_pfi != previous_pfi:
                     raise ValueError('Invalid input did not preserve the prior model')
-                if pfi.get(shell) != {'inContent': True, 'excluded': False} or not any(
-                        part.split(' [', 1)[0].split(' /', 1)[0] == 'goland' for entry in tree for part in entry):
+                if (any(pfi.get(path) != {'inContent': True, 'excluded': False} for path in [shell, shell + '/shell-probe.txt']) or not any(
+                        part.split(' [', 1)[0].split(' /', 1)[0] == 'goland' for entry in tree for part in entry)):
                     raise ValueError('Invalid input did not revoke the transient shell hiding capability')
                 continue
             loaded = {repo['id'] for repo in snapshot['repositories'] if repo['name'] in snapshot['selected']}
@@ -172,19 +214,174 @@ def validate_projection_evidence(run_root, process_ids):
                     or any(step.get(key) != step['loadingDigest'] for key in ('validatedProjectionDigest', 'lastAppliedDigest'))):
                 raise ValueError('IDE did not confirm the current live projection')
             normalized = [[part.split(' [', 1)[0].split(' /', 1)[0] for part in entry] for entry in tree]
-            for repo in ['repo-a', 'repo-b']:
-                selected = repo in snapshot['selected']
+            for repo in REPOSITORIES:
+                selected = repo in snapshot['selected'] or name == 'coverage' and repo == 'repo-c'
                 if ((str(root / repo) in roots) != selected
+                        or pfi.get(str(root / repo), {}).get('inContent') is not selected
                         or pfi.get(str(root / repo / 'docs/probe.txt'), {}).get('inContent') is not selected
+                        or any(repo in entry for entry in normalized) != selected
                         or any(entry[-3:] == [repo, 'docs', 'probe.txt'] for entry in normalized) != selected):
                     raise ValueError('Actual Project tree or PFI differs from the saved selection')
-            if any(part in {'.reqws', 'reqws-project.json', 'goland'} for entry in normalized for part in entry):
+            hidden = {'.reqws', 'reqws-project.json', 'goland', 'notes', 'outside.txt', 'shell-probe.txt', 'late-shell.txt'}
+            if any(part in hidden for entry in normalized for part in entry):
                 raise ValueError('The dedicated entry is visible in the normal Project tree')
-            if name != 'trust' and (modules.get('user') != [str(root / 'user-content')]
+            if (pfi.get(str(root / 'notes/outside.txt'), {}).get('inContent') is not False
+                    or pfi.get(snapshot['shell']) != {'inContent': False, 'excluded': True}
+                    or pfi.get(str(Path(snapshot['shell']) / 'shell-probe.txt')) != {'inContent': False, 'excluded': True}):
+                raise ValueError('Real notes/shell files leaked into the project content')
+            expected_user = sorted([str(root / 'user-content')] + ([str(root / 'repo-c')] if name == 'coverage' else []))
+            if name != 'trust' and (modules.get('user') != expected_user
                     or not any('user-content' in entry and entry[-1] == 'keep.txt' for entry in normalized)):
                 raise ValueError('User-owned model/tree content was not preserved')
+            expected_managed = {str(root / repo) for repo in snapshot['selected']}
+            if step['managedUserRoot']:
+                expected_managed.add(str(root / 'user-extra'))
+                if (pfi.get(str(root / 'user-extra/keep-extra.txt'), {}).get('inContent') is not True
+                        or not any('user-extra' in entry and entry[-1] == 'keep-extra.txt' for entry in normalized)):
+                    raise ValueError('The extra unclaimed root inside the managed module was lost')
+            if set(modules.get('ReqWS-' + snapshot['bindingId'], [])) != expected_managed:
+                raise ValueError('Managed module contains claimed or missing user roots')
+            covered = [repo['id'] for repo in snapshot['repositories'] if name == 'coverage' and repo['name'] == 'repo-c']
+            if step.get('userCoverage') != covered:
+                raise ValueError('ReqWS did not explain unselected user-root coverage')
+            if step['lateFiles']:
+                expected_late = 'repo-a' in snapshot['selected']
+                if (pfi.get(str(root / 'repo-a/docs/late-repo.txt'), {}).get('inContent') is not expected_late
+                        or any(entry[-3:] == ['repo-a', 'docs', 'late-repo.txt'] for entry in normalized) != expected_late
+                        or pfi.get(str(Path(snapshot['shell']) / 'late-shell.txt')) != {'inContent': False, 'excluded': True}):
+                    raise ValueError('Late files were not observed through real VFS/tree boundaries')
         validate_saved_projection(run_root, snapshots[name, steps[-1]['revision']])
     return len(proofs)
+
+
+def validate_vcs_observation(mappings):
+    if (not isinstance(mappings, list) or any(not isinstance(entry, dict) or set(entry) != {'directory', 'vcs'}
+            or any(not isinstance(value, str) for value in entry.values()) for entry in mappings)):
+        raise ValueError('Read-only native VCS mapping observation is missing')
+
+
+def validate_screenshot(run_root, filename):
+    if not isinstance(filename, str):
+        raise ValueError('Native Project-tree screenshot is missing')
+    path = Path(filename)
+    if (not path.is_absolute() or not path.is_relative_to(run_root) or path.resolve() != path
+            or not path.is_file() or path.is_symlink() or not 33 <= path.stat().st_size <= 50 * 1024 * 1024):
+        raise ValueError('Native Project-tree screenshot is unsafe or missing')
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or not 33 <= before.st_size <= 50 * 1024 * 1024:
+            raise ValueError('Native Project-tree screenshot is unsafe or oversized')
+        data = stream.read(50 * 1024 * 1024 + 1)
+        after = os.fstat(stream.fileno())
+    current = path.lstat()
+    if (len(data) != before.st_size or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
+            or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)):
+        raise ValueError('Native Project-tree screenshot changed during verification')
+    validate_png(data)
+
+
+def validate_png(data):
+    """Check the complete bounded PNG and its single image-data zlib stream, without external decoders."""
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('Native Project-tree screenshot is not a PNG')
+    position = 8
+    header = palette = ended = False
+    idat_started = idat_ended = False
+    compressed = bytearray()
+    rows = []
+    expected_size = 0
+    color = depth = 0
+    while position < len(data):
+        if len(data) - position < 12:
+            raise ValueError('Truncated PNG chunk')
+        size = struct.unpack_from('>I', data, position)[0]
+        kind = data[position + 4:position + 8]
+        if (size > len(data) - position - 12 or not re.fullmatch(b'[A-Za-z]{4}', kind)
+                or kind[2] & 32):
+            raise ValueError('Invalid PNG chunk boundary or type')
+        payload = data[position + 8:position + 8 + size]
+        crc = struct.unpack_from('>I', data, position + 8 + size)[0]
+        if zlib.crc32(payload, zlib.crc32(kind)) != crc:
+            raise ValueError('PNG chunk CRC mismatch')
+        position += size + 12
+        if not header and kind != b'IHDR':
+            raise ValueError('PNG does not start with IHDR')
+        if idat_started and kind != b'IDAT':
+            idat_ended = True
+        if kind == b'IHDR':
+            if header or size != 13:
+                raise ValueError('Duplicate or invalid PNG IHDR')
+            width, height, depth, color, compression, filtering, interlace = struct.unpack('>IIBBBBB', payload)
+            depths = {0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
+            if (not 0 < width <= 32768 or not 0 < height <= 32768 or depth not in depths.get(color, set())
+                    or compression != 0 or filtering != 0 or interlace not in {0, 1}):
+                raise ValueError('Invalid or oversized PNG image header')
+            bits = depth * {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+            passes = [(0, 0, 1, 1)] if not interlace else [
+                (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+                (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+            for x, y, dx, dy in passes:
+                columns = max(0, (width - x + dx - 1) // dx)
+                count = max(0, (height - y + dy - 1) // dy)
+                if columns and count:
+                    stride = (columns * bits + 7) // 8 + 1
+                    rows.append((stride, count))
+                    expected_size += stride * count
+            if expected_size > 256 * 1024 * 1024:
+                raise ValueError('PNG decompressed image exceeds the screenshot limit')
+            header = True
+        elif kind == b'PLTE':
+            if palette or idat_started or color in {0, 4} or not 0 < size <= 768 or size % 3:
+                raise ValueError('Invalid PNG palette')
+            if color == 3 and size // 3 > 1 << depth:
+                raise ValueError('PNG palette exceeds its bit depth')
+            palette = True
+        elif kind == b'IDAT':
+            if idat_ended or color == 3 and not palette:
+                raise ValueError('PNG image chunks are reordered or lack a palette')
+            idat_started = True
+            compressed.extend(payload)
+        elif kind == b'IEND':
+            if size or not idat_started or position != len(data):
+                raise ValueError('PNG IEND is missing image data or has trailing bytes')
+            ended = True
+            break
+        elif not kind[0] & 32:
+            raise ValueError('Unsupported critical PNG chunk')
+    if not header or not idat_started or not ended:
+        raise ValueError('Incomplete PNG image')
+    try:
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(compressed, expected_size + 1)
+    except zlib.error as error:
+        raise ValueError('Invalid PNG image-data stream') from error
+    if (len(pixels) != expected_size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail):
+        raise ValueError('PNG image data is truncated, oversized or contains extra streams')
+    offset = 0
+    for stride, count in rows:
+        if any(pixels[offset + row * stride] > 4 for row in range(count)):
+            raise ValueError('Invalid PNG scanline filter')
+        offset += stride * count
+
+
+def validate_ordinary_evidence(run_root):
+    value = read_message(run_root / 'desktop-ordinary.json')
+    project = Path(value.get('project', ''))
+    shell = project / '.reqws/ide/goland'
+    if (not project.is_absolute() or not project.is_relative_to(run_root) or project.resolve() != project
+            or not project.name.startswith('unbound-') or value.get('lifecycle') != 'INACTIVE'
+            or value.get('inContent') is not True or type(value.get('pid')) is not int
+            or not isinstance(value.get('tree'), list)
+            or not any(entry[-4:] == ['.reqws', 'ide', 'goland', 'shell-probe.txt'] for entry in value['tree'])
+            or shell.resolve() != shell or shell.joinpath('reqws-project.json').exists() or shell.joinpath('.idea/reqws-loaded-roots.json').exists()
+            or project.joinpath('.reqws/workspace.json').exists()
+            or not shell.joinpath('shell-probe.txt').is_file() or shell.joinpath('shell-probe.txt').is_symlink()
+            or shell.joinpath('shell-probe.txt').read_text() != 'unbound same-name shell\n'):
+        raise ValueError('Missing real unbound same-name shell visibility proof')
+    validate_vcs_observation(value.get('vcsMappings'))
+    validate_screenshot(run_root, value.get('screenshot'))
+    return value
 
 
 def native_directory_key(path):
@@ -272,17 +469,36 @@ def validate_saved_projection(run_root, snapshot):
         if [entry for entry in registrations if user_file in entry] != [(user_file, user_file)]:
             raise ValueError('The user module registration was not preserved on disk')
         user_roots = xml(user_file).findall('./component[@name="NewModuleRootManager"]/content')
-        if [native_path(content.get('url'), url=True, module_dir=user_file.parent) for content in user_roots] != [root / 'user-content']:
+        expected_user = [root / 'user-content'] + ([root / 'repo-c'] if snapshot['name'] == 'coverage' else [])
+        if set(native_path(content.get('url'), url=True, module_dir=user_file.parent) for content in user_roots) != set(expected_user) or len(user_roots) != len(expected_user):
             raise ValueError('The user content root was not preserved on disk')
     contents = xml(module_file).findall('./component[@name="NewModuleRootManager"]/content')
     paths = [native_path(content.get('url'), url=True) for content in contents]
-    if len(paths) != len(expected) or set(paths) != {root / name for name in expected}:
+    expected_paths = {root / name for name in expected} | ({root / 'user-extra'} if snapshot['name'] == 'selection' else set())
+    if len(paths) != len(expected_paths) or set(paths) != expected_paths:
         raise ValueError('Native .iml roots were not saved; IDE cache alone cannot certify cold recovery')
+    if snapshot['name'] == 'selection' and list(contents[paths.index(root / 'user-extra')]):
+        raise ValueError('The unclaimed user root acquired ownership metadata')
     for claim in claims:
         content = contents[paths.index(root / claim['relativePath'])]
         markers = [native_path(child.get('url'), url=True) for child in content.findall('excludeFolder')]
         if markers != [root / claim['relativePath'] / '.reqws-goland-ownership' / claim['nonce']]:
             raise ValueError('Native .iml ownership marker does not match the saved journal')
+    for repo in REPOSITORIES:
+        for suffix, content in [('docs/probe.txt', 'ordinary text fixture\n'), ('README.txt', f'ReqWS Git fixture: {repo}\n')]:
+            if regular(root / repo / suffix).read_text() != content:
+                raise ValueError('A real repository fixture file was not preserved')
+    for relative, content in [('notes/outside.txt', 'outside all project roots\n'),
+                              ('user-content/keep.txt', 'user owned\n'),
+                              ('user-extra/keep-extra.txt', 'unclaimed root in the managed module\n'),
+                              ('.reqws/ide/goland/shell-probe.txt', 'dedicated shell stays hidden\n')]:
+        if regular(root / relative).read_text() != content:
+            raise ValueError('An ordinary outside/user/shell fixture file was not preserved')
+    if snapshot['name'] == 'selection':
+        for relative, content in [('repo-a/docs/late-repo.txt', 'late repository file\n'),
+                                  ('.reqws/ide/goland/late-shell.txt', 'late shell remains hidden\n')]:
+            if regular(root / relative).read_text() != content:
+                raise ValueError('Late files were removed instead of proving the native visibility boundary')
 
 
 def stop_child(process):

@@ -1,6 +1,8 @@
 """Fail-closed local coordination/evidence checks without launching a licensed IDE."""
 
 import copy
+import struct
+import zlib
 import json
 from pathlib import Path
 import sys
@@ -11,10 +13,21 @@ import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from desktop_ide import initialize_link, publish, read_message, validate_transcript, validate_projection_evidence, validate_saved_projection, native_directory_key
+from desktop_ide import ACCEPTANCE_VERSION, PROJECTION_PROOFS, SAVED_PROJECTION_PROOFS, initialize_link, publish, read_message, validate_transcript, validate_projection_evidence, validate_saved_projection, validate_screenshot, native_directory_key
 from check_ide_test_reports import check_reports, DESKTOP_SCENARIOS, SCENARIOS
 from run_local_ide import verify_report, session_closed
 from ide_compatibility import digest, read_policy
+
+
+def png_chunk(kind, payload=b''):
+    return struct.pack('>I', len(payload)) + kind + payload + struct.pack('>I', zlib.crc32(kind + payload))
+
+
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+PNG_IHDR = png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+PNG_IDAT = png_chunk(b'IDAT', zlib.compress(b'\0\x11\x22\x33'))
+PNG_IEND = png_chunk(b'IEND')
+VALID_PNG = PNG_SIGNATURE + PNG_IHDR + PNG_IDAT + PNG_IEND
 
 
 class DesktopIdeTests(unittest.TestCase):
@@ -27,10 +40,12 @@ class DesktopIdeTests(unittest.TestCase):
 
     def transcript(self):
         sequence = 0
-        for name in ['selection', 'trust', 'invalid-binding', 'invalid-manifest']:
+        for name in ['selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage']:
             root = self.root / name
             root.mkdir()
-            values = [['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']] if name == 'selection' else [['repo-a', 'repo-b']]
+            values = ([['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]
+                      if name == 'selection' else [['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]
+                      if name == 'coverage' else [['repo-a', 'repo-b']])
             binding = str(uuid.uuid4())
             for revision, selected in enumerate(values, 1):
                 sequence += 1
@@ -39,7 +54,7 @@ class DesktopIdeTests(unittest.TestCase):
                 if revision != 1: request['selected'] = selected
                 snapshot = {'name': name, 'root': str(root), 'shell': str(root / '.reqws/ide/goland'),
                             'workspaceId': name, 'bindingId': binding, 'revision': revision,
-                            'selected': selected, 'repositories': [{'id': 'a', 'name': 'repo-a'}, {'id': 'b', 'name': 'repo-b'}]}
+                            'selected': selected, 'repositories': [{'id': 'a', 'name': 'repo-a'}, {'id': 'b', 'name': 'repo-b'}, {'id': 'c', 'name': 'repo-c'}]}
                 publish(self.directory / f'request-{sequence}.json', request)
                 publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed', 'snapshot': snapshot})
             self.write_saved_model(snapshot)
@@ -54,7 +69,20 @@ class DesktopIdeTests(unittest.TestCase):
         module_file = shell / '.idea/reqws' / (module_name + '.iml')
         module_file.parent.mkdir(parents=True)
         for repo in snapshot['repositories']:
-            (Path(snapshot['root']) / repo['name'] / '.git').mkdir(parents=True)
+            directory = Path(snapshot['root']) / repo['name']
+            (directory / '.git').mkdir(parents=True)
+            (directory / 'docs').mkdir()
+            (directory / 'docs/probe.txt').write_text('ordinary text fixture\n')
+            (directory / 'README.txt').write_text(f"ReqWS Git fixture: {repo['name']}\n")
+        for relative, content in [('notes/outside.txt', 'outside all project roots\n'), ('user-content/keep.txt', 'user owned\n'),
+                                  ('user-extra/keep-extra.txt', 'unclaimed root in the managed module\n'),
+                                  ('.reqws/ide/goland/shell-probe.txt', 'dedicated shell stays hidden\n')]:
+            file = Path(snapshot['root']) / relative
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(content)
+        if snapshot['name'] == 'selection':
+            (Path(snapshot['root']) / 'repo-a/docs/late-repo.txt').write_text('late repository file\n')
+            (shell / 'late-shell.txt').write_text('late shell remains hidden\n')
         claims = [{'relativePath': repo['name'], 'repositoryId': repo['id'], 'nonce': uuid.uuid4().hex,
                    'rootKey': native_directory_key(Path(snapshot['root']) / repo['name']),
                    'gitKey': native_directory_key(Path(snapshot['root']) / repo['name'] / '.git')}
@@ -70,6 +98,8 @@ class DesktopIdeTests(unittest.TestCase):
             url = 'file://$MODULE_DIR$/../../../../../' + claim['relativePath']
             content = ET.SubElement(component, 'content', url=url)
             ET.SubElement(content, 'excludeFolder', url=url + '/.reqws-goland-ownership/' + claim['nonce'])
+        if snapshot['name'] == 'selection':
+            ET.SubElement(component, 'content', url='file://$MODULE_DIR$/../../../../../user-extra')
         module_file.write_bytes(ET.tostring(model))
         project = ET.Element('project')
         modules = ET.SubElement(ET.SubElement(project, 'component', name='ProjectModuleManager'), 'modules')
@@ -81,12 +111,14 @@ class DesktopIdeTests(unittest.TestCase):
             user = ET.Element('module')
             component = ET.SubElement(user, 'component', name='NewModuleRootManager')
             ET.SubElement(component, 'content', url='file://$MODULE_DIR$/../../../../user-content')
+            if snapshot['name'] == 'coverage':
+                ET.SubElement(component, 'content', url='file://$MODULE_DIR$/../../../../repo-c')
             (shell / '.idea/user.iml').write_bytes(ET.tostring(user))
         (shell / '.idea/modules.xml').write_bytes(ET.tostring(project))
 
     def test_saved_model_rejects_cache_only_roots_markers_registration_and_foreign_binding(self):
         self.transcript()
-        snapshot = read_message(self.directory / 'response-6.json')['snapshot']
+        snapshot = read_message(self.directory / 'response-8.json')['snapshot']
         shell = Path(snapshot['shell'])
         module = next((shell / '.idea/reqws').glob('*.iml'))
         modules = shell / '.idea/modules.xml'
@@ -127,7 +159,7 @@ class DesktopIdeTests(unittest.TestCase):
 
     def test_complete_exchange_requires_live_and_cold_selections(self):
         self.transcript()
-        self.assertEqual(validate_transcript(self.root, self.session)['requests'], 10)
+        self.assertEqual(validate_transcript(self.root, self.session)['requests'], 15)
         path = self.directory / 'request-5.json'
         value = read_message(path)
         value['selected'] = ['repo-a']
@@ -162,10 +194,10 @@ class DesktopIdeTests(unittest.TestCase):
         xml = self.root / 'TEST-suite.xml'
         def write_cases(selectors, extra=''):
             xml.write_text('<testsuite>' + ''.join(f'<testcase name="{name}()">{extra}</testcase>' for name in selectors) + '</testsuite>')
-        events = ''.join(f'{pid}\tstarted\n{pid}\tpassed\n{pid}\texited\n' for pid in range(100, 106))
+        events = ''.join(f'{pid}\tstarted\n{pid}\tpassed\n{pid}\texited\n' for pid in range(100, 109))
         (self.root / 'processes.tsv').write_text(events)
         write_cases(DESKTOP_SCENARIOS)
-        self.assertEqual(check_reports(self.root, marker, 'desktop')['processes'], 6)
+        self.assertEqual(check_reports(self.root, marker, 'desktop')['processes'], 9)
         for selectors, extra in [(SCENARIOS, ''), (DESKTOP_SCENARIOS, '<skipped/>'),
                                  (list(DESKTOP_SCENARIOS) + [next(iter(DESKTOP_SCENARIOS))], '')]:
             write_cases(selectors, extra)
@@ -175,47 +207,144 @@ class DesktopIdeTests(unittest.TestCase):
         with self.assertRaises(ValueError): check_reports(self.root, marker, 'desktop')
 
     def write_proofs(self):
-        snapshots = {value['snapshot']['name']: value['snapshot'] for path in self.directory.glob('response-*.json')
+        snapshots = {(value['snapshot']['name'], value['snapshot']['revision']): value['snapshot'] for path in self.directory.glob('response-*.json')
                      if (value := read_message(path)).get('snapshot')}
         proofs = []
-        for name in ['selection', 'trust', 'invalid-binding', 'invalid-manifest']:
-            revisions = [1, 2, 3, 4, 5, 5, 6, 6] if name == 'selection' else [1] * (2 if name == 'trust' else 5)
-            phases = ['projection'] * 8 if name == 'selection' else ['safe-mode-blocked', 'projection'] if name == 'trust' else ['projection', 'malformed', 'projection', 'mismatched', 'projection']
+        for name in ['selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage']:
+            revisions = ([1] * 6 + [2, 3, 4, 5, 5, 6, 7, 7, 7, 8, 8] if name == 'selection' else [1, 2, 3]
+                         if name == 'coverage' else [1] * (2 if name == 'trust' else 5))
+            phases = (['projection', 'excluded-off', 'excluded-on', 'late-files-on', 'late-files-off', 'excluded-restored'] +
+                      ['projection'] * 4 + ['cold-empty', 'user-root-selected', 'user-root-empty', 'reopened-empty', 'post-clear-cold-empty', 'projection', 'cold-selected']
+                      if name == 'selection' else ['projection'] * 3 if name == 'coverage' else ['safe-mode-blocked', 'projection']
+                      if name == 'trust' else ['projection', 'malformed', 'projection', 'mismatched', 'projection'])
             for index, (revision, phase) in enumerate(zip(revisions, phases)):
-                snapshot = snapshots[name]
-                if name == 'selection': snapshot = read_message(self.directory / f'response-{revision}.json')['snapshot']
+                snapshot = snapshots[name, revision]
                 selected = snapshot['selected']
                 blocked = phase == 'safe-mode-blocked'
                 loaded = [] if blocked else selected
+                included = loaded + (['repo-c'] if name == 'coverage' else [])
                 root = Path(snapshot['root'])
-                roots = [str(root / repo) for repo in loaded]
-                modules = {} if blocked else {'ReqWS-' + snapshot['bindingId']: roots.copy()}
-                tree = [[repo, 'docs', 'probe.txt'] for repo in loaded]
+                roots = [str(root / repo) for repo in included]
+                modules = {} if blocked else {'ReqWS-' + snapshot['bindingId']: [str(root / repo) for repo in loaded]}
+                tree = [[repo, 'docs', 'probe.txt'] for repo in included]
                 invalid = phase in {'malformed', 'mismatched'}
                 if invalid: tree.append(['goland', 'reqws-project.json'])
                 if name != 'trust':
-                    roots.append(str(root / 'user-content')); modules['user'] = [str(root / 'user-content')]
+                    roots.append(str(root / 'user-content'))
+                    modules['user'] = sorted([str(root / 'user-content')] + ([str(root / 'repo-c')] if name == 'coverage' else []))
                     tree.append(['user-content', 'keep.txt'])
-                pid = (100 if index < 5 else 101 if index < 7 else 102) if name == 'selection' else {'trust': 103, 'invalid-binding': 104, 'invalid-manifest': 105}[name]
+                managed_user = name == 'selection' and index >= 10
+                late = name == 'selection' and index >= 3
+                if managed_user:
+                    roots.append(str(root / 'user-extra'))
+                    modules['ReqWS-' + snapshot['bindingId']].append(str(root / 'user-extra'))
+                    tree.append(['user-extra', 'keep-extra.txt'])
+                if late and 'repo-a' in loaded: tree.append(['repo-a', 'docs', 'late-repo.txt'])
+                pid = (100 if index < 10 else 101 if index < 14 else 102 if index < 16 else 103) if name == 'selection' else {'trust': 104, 'invalid-binding': 105, 'invalid-manifest': 106, 'coverage': 107}[name]
+                pfi = {str(root / repo / suffix): {'inContent': repo in included, 'excluded': False}
+                       for repo in ['repo-a', 'repo-b', 'repo-c'] for suffix in ['', 'docs/probe.txt']}
+                pfi[str(root / 'notes/outside.txt')] = {'inContent': False, 'excluded': False}
+                pfi[str(root / 'user-extra/keep-extra.txt')] = {'inContent': managed_user, 'excluded': False}
+                for path in [snapshot['shell'], str(Path(snapshot['shell']) / 'shell-probe.txt')]:
+                    pfi[path] = {'inContent': invalid, 'excluded': not invalid}
+                if late:
+                    pfi[str(root / 'repo-a/docs/late-repo.txt')] = {'inContent': 'repo-a' in loaded, 'excluded': False}
+                    pfi[str(Path(snapshot['shell']) / 'late-shell.txt')] = {'inContent': False, 'excluded': True}
                 proof = {'scenario': name, 'phase': phase, 'pid': pid, 'revision': revision, 'selected': selected,
                          'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId'], 'roots': roots,
-                         'modules': modules, 'pfi': {str(root / repo / 'docs/probe.txt'): {'inContent': repo in loaded} for repo in ['repo-a', 'repo-b']},
+                         'modules': modules, 'pfi': pfi, 'managedUserRoot': managed_user, 'lateFiles': late,
+                         'showExcludedFiles': not (name == 'selection' and index in [1, 4]), 'vcsMappings': [],
+                         'userCoverage': ['c'] if name == 'coverage' else [],
                          'tree': tree, 'trusted': not blocked, 'loadedIds': [repo['id'] for repo in snapshot['repositories'] if repo['name'] in loaded],
                          'lifecycle': 'SAFE_MODE_BLOCKED' if blocked else 'ERROR' if phase in {'malformed', 'mismatched'} else 'SYNCHRONIZED',
                          'error': 'MANIFEST_INVALID_JSON' if name == 'invalid-manifest' and phase == 'malformed' else 'BINDING_ERROR'}
+                proof['screenshot'] = self.screenshot(f'{name}-{index}')
                 for key in ['loadingDigest', 'validatedProjectionDigest', 'lastAppliedDigest']: proof[key] = None if blocked else '1' * 64
-                proof['pfi'][snapshot['shell']] = {'inContent': invalid, 'excluded': not invalid}
                 proofs.append(proof)
         (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in proofs))
+        ordinary = self.root / 'unbound-fixture'
+        shell = ordinary / '.reqws/ide/goland'
+        shell.mkdir(parents=True, exist_ok=True)
+        (shell / 'shell-probe.txt').write_text('unbound same-name shell\n')
+        (self.root / 'desktop-ordinary.json').write_text(json.dumps({'pid': 108, 'project': str(ordinary),
+            'tree': [['unbound-fixture', '.reqws', 'ide', 'goland', 'shell-probe.txt']], 'inContent': True,
+            'lifecycle': 'INACTIVE', 'vcsMappings': [], 'screenshot': self.screenshot('ordinary')}))
         return proofs
+
+    def screenshot(self, name):
+        file = self.root / f'{name}.png'
+        file.write_bytes(VALID_PNG)
+        return str(file)
+
+    def test_screenshots_require_complete_crc_checked_png_and_one_bounded_zlib_stream(self):
+        path = Path(self.screenshot('integrity'))
+        validate_screenshot(self.root, str(path))
+        compressed = zlib.compress(b'\0\x11\x22\x33')
+        # Multiple consecutive IDAT chunks are one legal PNG image stream.
+        prefix = PNG_SIGNATURE + PNG_IHDR
+        path.write_bytes(prefix + png_chunk(b'IDAT', compressed[:3]) + png_chunk(b'IDAT', compressed[3:]) + PNG_IEND)
+        validate_screenshot(self.root, str(path))
+        cases = {
+            'header-only': prefix,
+            'truncated-chunk': VALID_PNG[:-2],
+            'wrong-crc': prefix + PNG_IDAT[:-1] + bytes([PNG_IDAT[-1] ^ 1]) + PNG_IEND,
+            'duplicate-header': prefix + PNG_IHDR + PNG_IDAT + PNG_IEND,
+            'no-image-data': prefix + PNG_IEND,
+            'no-end': prefix + PNG_IDAT,
+            'duplicate-end': VALID_PNG + PNG_IEND,
+            'trailing-bytes': VALID_PNG + b'junk',
+            'truncated-zlib-with-valid-crc': prefix + png_chunk(b'IDAT', compressed[:-1]) + PNG_IEND,
+            'bad-zlib-with-valid-crc': prefix + png_chunk(b'IDAT', b'not zlib') + PNG_IEND,
+            'extra-zlib-stream': prefix + png_chunk(b'IDAT', compressed + compressed) + PNG_IEND,
+            'oversized-decoded-data': prefix + png_chunk(b'IDAT', zlib.compress(b'\0' * 1024)) + PNG_IEND,
+            'short-decoded-data': prefix + png_chunk(b'IDAT', zlib.compress(b'\0')) + PNG_IEND,
+            'invalid-filter': prefix + png_chunk(b'IDAT', zlib.compress(b'\x05\x11\x22\x33')) + PNG_IEND,
+            'nonconsecutive-idat': prefix + png_chunk(b'IDAT', compressed[:3]) + png_chunk(b'tEXt', b'key\0value') + png_chunk(b'IDAT', compressed[3:]) + PNG_IEND,
+            'unbounded-dimensions': PNG_SIGNATURE + png_chunk(b'IHDR', struct.pack('>IIBBBBB', 32769, 1, 8, 2, 0, 0, 0)) + PNG_IDAT + PNG_IEND,
+        }
+        for name, image in cases.items():
+            with self.subTest(name=name):
+                path.write_bytes(image)
+                with self.assertRaises(ValueError): validate_screenshot(self.root, str(path))
+
+    def test_g4_user_root_survives_two_to_empty_before_project_reopen_and_cold_recovery(self):
+        self.transcript()
+        proofs = self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual([(proofs[i]['phase'], proofs[i]['revision'], proofs[i]['selected']) for i in range(10, 15)], [
+            ('cold-empty', 5, []), ('user-root-selected', 6, ['repo-a', 'repo-b']),
+            ('user-root-empty', 7, []), ('reopened-empty', 7, []), ('post-clear-cold-empty', 7, [])])
+        self.assertNotEqual(proofs[13]['pid'], proofs[14]['pid'])
+        self.assertEqual(validate_projection_evidence(self.root, pids), 32)
+        variants = [proofs[:11] + proofs[13:], proofs[:14] + proofs[15:]]
+        changed = copy.deepcopy(proofs); changed[14]['pid'] = changed[13]['pid']; variants.append(changed)
+        changed = copy.deepcopy(proofs); changed[14]['revision'] = 8; variants.append(changed)
+        for field, value in [('managedUserRoot', False), ('revision', 6), ('pid', 102)]:
+            changed = copy.deepcopy(proofs); changed[12][field] = value; variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[12]['modules']['ReqWS-' + changed[12]['bindingId']] = []
+        variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[12]['pfi'][str(self.root / 'selection/user-extra/keep-extra.txt')]['inContent'] = False
+        variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[12]['tree'] = [entry for entry in changed[12]['tree'] if 'user-extra' not in entry]
+        variants.append(changed)
+        for changed in variants:
+            (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        request = self.directory / 'request-7.json'
+        message = read_message(request); message['selected'] = ['repo-a', 'repo-b']
+        request.write_text(json.dumps(message))
+        with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
 
     def test_missing_or_different_tree_model_trust_and_cold_evidence_fails(self):
         self.transcript()
         proofs = self.write_proofs()
-        pids = [str(pid) for pid in range(100, 106)]
-        self.assertEqual(validate_projection_evidence(self.root, pids), 20)
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual(validate_projection_evidence(self.root, pids), PROJECTION_PROOFS)
         variants = [proofs[:-1]]
-        for index, key, value in [(0, 'tree', []), (0, 'loadedIds', []), (8, 'trusted', True), (5, 'pid', 100),
+        for index, key, value in [(0, 'tree', []), (0, 'loadedIds', []), (17, 'trusted', True), (10, 'pid', 100),
                                   (0, 'validatedProjectionDigest', None)]:
             changed = copy.deepcopy(proofs); changed[index][key] = value; variants.append(changed)
         for changed in variants:
@@ -225,13 +354,57 @@ class DesktopIdeTests(unittest.TestCase):
     def test_invalid_inputs_may_revoke_shell_hiding_but_must_preserve_repository_pfi(self):
         self.transcript()
         proofs = self.write_proofs()
-        pids = [str(pid) for pid in range(100, 106)]
+        pids = [str(pid) for pid in range(100, 109)]
         for key in [str(self.root / 'invalid-binding/repo-a/docs/probe.txt'),
                     str(self.root / 'invalid-binding/.reqws/ide/goland')]:
             changed = copy.deepcopy(proofs)
-            changed[11]['pfi'][key] = {'inContent': False, 'excluded': True}
+            changed[20]['pfi'][key] = {'inContent': False, 'excluded': True}
             (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
             with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+
+    def test_v_visibility_extra_root_coverage_and_vcs_evidence_cannot_be_omitted(self):
+        self.transcript()
+        proofs = self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        variants = []
+        for index, key, value in [(1, 'showExcludedFiles', True), (2, 'showExcludedFiles', False),
+                                  (5, 'showExcludedFiles', False), (3, 'lateFiles', False),
+                                  (10, 'managedUserRoot', False), (0, 'vcsMappings', None),
+                                  (1, 'screenshot', None), (1, 'screenshot', proofs[0]['screenshot']),
+                                  (29, 'userCoverage', [])]:
+            changed = copy.deepcopy(proofs); changed[index][key] = value; variants.append(changed)
+        for index, file in [(0, 'notes'), (0, 'repo-c'), (3, 'late-shell.txt')]:
+            changed = copy.deepcopy(proofs); changed[index]['tree'].append([file]); variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[10]['modules']['ReqWS-' + changed[10]['bindingId']] = []
+        variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[29]['modules']['user'] = [str(self.root / 'coverage/user-content')]
+        variants.append(changed)
+        changed = copy.deepcopy(proofs)
+        changed[3]['tree'] = [entry for entry in changed[3]['tree'] if entry[-1] != 'late-repo.txt']
+        variants.append(changed)
+        for changed in variants:
+            (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+
+    def test_v_cannot_hide_missing_real_files_or_adopt_the_unbound_shell(self):
+        self.transcript()
+        self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        late = self.root / 'selection/.reqws/ide/goland/late-shell.txt'
+        original = late.read_text()
+        late.unlink()
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        late.write_text(original)
+        ordinary = self.root / 'unbound-fixture/.reqws/ide/goland/reqws-project.json'
+        ordinary.write_text('{}')
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        ordinary.unlink()
+        proof = self.root / 'desktop-ordinary.json'
+        value = json.loads(proof.read_text()); value['tree'] = []
+        proof.write_text(json.dumps(value))
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
 
     def test_legacy_report_cannot_certify_desktop_linked_suite(self):
         archive = self.root / 'candidate.zip'; archive.write_bytes(b'fixture')
@@ -245,10 +418,31 @@ class DesktopIdeTests(unittest.TestCase):
         report['suite'] = 'desktop'; path.write_text(json.dumps(report))
         with self.assertRaises(ValueError): verify_report(path, archive, '0.1.7', 'desktop')
         source = {'testedCommit': 'a' * 40, 'dirty': False}
-        report.update(desktop={'tests': {'passed': 1}, 'identity': source}, results={'suite': 'desktop', 'savedProjectionProofs': 4})
+        report.update(desktop={'tests': {'passed': 1}, 'identity': source}, results={'suite': 'desktop',
+            'savedProjectionProofs': SAVED_PROJECTION_PROOFS, 'projectionProofs': PROJECTION_PROOFS,
+            'acceptanceVersion': ACCEPTANCE_VERSION, 'tests': 4, 'processes': 9})
+        self.transcript()
+        self.write_proofs()
+        marker = self.root / 'run-root.txt'; marker.write_text(str(self.root))
+        junit = self.root / 'junit'; junit.mkdir()
+        (junit / 'TEST-suite.xml').write_text('<testsuite>' + ''.join(f'<testcase name="{name}()"/>' for name in DESKTOP_SCENARIOS) + '</testsuite>')
+        (self.root / 'processes.tsv').write_text(''.join(f'{pid}\tstarted\n{pid}\tpassed\n{pid}\texited\n' for pid in range(100, 109)))
+        report['results'] = check_reports(junit, marker, 'desktop')
+        report['desktop']['exchange'] = validate_transcript(self.root, self.session)
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
+        for field, value in [('acceptanceVersion', 1), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+                             ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
+            stale = copy.deepcopy(report); stale['results'][field] = value
+            path.write_text(json.dumps(stale))
+            with self.assertRaises(ValueError): verify_report(path, archive, '0.1.7', 'desktop')
+        path.write_text(json.dumps(report))
+        raw = self.root / 'desktop-projections.jsonl'; baseline = raw.read_text()
+        raw.write_text('')
+        with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']), self.assertRaises(ValueError):
+            verify_report(path, archive, '0.1.7', 'desktop')
+        raw.write_text(baseline)
         for outputs in [['b' * 40 + '\n', ''], ['a' * 40 + '\n', ' M src/renderer/App.tsx\n']]:
             with patch('desktop_ide.subprocess.check_output', side_effect=outputs), self.assertRaises(ValueError):
                 verify_report(path, archive, '0.1.7', 'desktop')

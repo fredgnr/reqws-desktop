@@ -39,10 +39,12 @@ describe('Desktop/IDE private message protocol', () => {
   });
 
   it('limits operations to fixed scenarios and repository selections, never paths or shell commands', () => {
+    expect(linkRequestSchema.parse({ ...request, name: 'coverage' })).toEqual({ ...request, name: 'coverage' });
     for (const invalid of [
       { ...request, path: '/another/workspace' }, { ...request, operation: 'exec' },
       { ...request, name: '../escape' }, { ...request, operation: 'select', selected: ['repo-a', 'repo-a'] },
       { ...request, operation: 'select', selected: ['other'] },
+      { ...request, operation: 'select', name: 'coverage', selected: ['repo-c'] },
     ]) expect(linkRequestSchema.safeParse(invalid).success).toBe(false);
   });
 

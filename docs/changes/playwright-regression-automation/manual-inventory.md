@@ -17,12 +17,15 @@ S0–S3 已有下表源码入口；本机候选的实际执行数、失败实验
 
 | 场景 | 实际测试文件 | 选择器 |
 |---|---|---|
-| D01 / S1 启动与退出 | [startup.spec.ts](../../../tests/e2e/desktop/startup.spec.ts) | `^D01` / `^S1` |
-| D02 冷进程持久化 | [settings.spec.ts](../../../tests/e2e/desktop/settings.spec.ts) | `^D02` |
-| D03 仓库配置与 HTTPS | [repositories.spec.ts](../../../tests/e2e/desktop/repositories.spec.ts) | `^D03` |
-| D04–D07 创建、成员、发布前后失败 | [workspaces.spec.ts](../../../tests/e2e/desktop/workspaces.spec.ts) | `^D0[4-7]` |
-| D08–D09 Desktop 加载选择与冲突 | [goland-selection.spec.ts](../../../tests/e2e/desktop/goland-selection.spec.ts) | `^D0[89]` |
-| D10–D12 OS 边界、安全与更新门禁 | [native-boundaries.spec.ts](../../../tests/e2e/desktop/native-boundaries.spec.ts) | `^D1[0-2]` |
+| D01 / S1 启动与退出 | [startup.spec.ts](../../../tests/e2e/desktop/startup.spec.ts) | `D01` / `S1` |
+| D02 冷进程持久化 | [settings.spec.ts](../../../tests/e2e/desktop/settings.spec.ts) | `D02` |
+| D03 仓库配置与 HTTPS | [repositories.spec.ts](../../../tests/e2e/desktop/repositories.spec.ts) | `D03` |
+| D04–D07 创建、成员、发布前后失败 | [workspaces.spec.ts](../../../tests/e2e/desktop/workspaces.spec.ts) | `D0[4-7]` |
+| D08–D09 Desktop 加载选择与冲突 | [goland-selection.spec.ts](../../../tests/e2e/desktop/goland-selection.spec.ts) | `D0[89]` |
+| D10–D12 OS 边界、安全与更新门禁 | [native-boundaries.spec.ts](../../../tests/e2e/desktop/native-boundaries.spec.ts) | `D1[0-2]` |
+| V 旧步骤补漏 | [acceptance.spec.ts](../../../tests/e2e/desktop/acceptance.spec.ts) | 直接传入该文件，实际 12 个完整标题保存在报告中。 |
+
+Playwright 完整名称带文件前缀，以上表达式不加开头锚点。V 已完成的补漏和故意失败见[V 验收记录](verification-v-2026-09-26.md)，整行替代仍以最终证据关闭为准。
 
 启动故障由独立 `npm run test:e2e:negative` 执行[断 preload](../../../tests/e2e/probes/disconnected-preload.spec.ts)和[早期 renderer 错误](../../../tests/e2e/probes/startup-error.spec.ts)；外层 runner 必须验证准确的失败原因和完整新鲜证据才成功。这些探针不作为普通套件的 expected-failure 注解。
 

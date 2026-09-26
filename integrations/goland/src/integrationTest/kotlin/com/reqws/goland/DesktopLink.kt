@@ -36,7 +36,7 @@ internal class DesktopLink(private val runRoot: Path) {
   }
 
   fun create(name: String, userModel: Boolean = true): DesktopProjectionFixture {
-    require(name in setOf("selection", "trust", "invalid-binding", "invalid-manifest") && name !in fixtures)
+    require(name in setOf("selection", "trust", "invalid-binding", "invalid-manifest", "coverage") && name !in fixtures)
     val response = exchange(mapOf("operation" to "create", "name" to name))
     val fixture = DesktopProjectionFixture(this, name, response, userModel)
     require(fixture.selected == setOf("repo-a", "repo-b") && fixture.revision == 1L)
@@ -114,7 +114,8 @@ internal class DesktopLink(private val runRoot: Path) {
       current = current.resolve(part)
       pinDirectory(current)
     }
-    for (relative in listOf("repo-a", "repo-a/.git", "repo-a/docs", "repo-b", "repo-b/.git", "repo-b/docs", "user-content")) {
+    for (relative in listOf("repo-a", "repo-a/.git", "repo-a/docs", "repo-b", "repo-b/.git", "repo-b/docs",
+      "repo-c", "repo-c/.git", "repo-c/docs", "user-content", "user-extra", "notes")) {
       pinDirectory(root.resolve(relative))
     }
   }
@@ -187,6 +188,21 @@ internal class DesktopProjectionFixture(
     private set
   override var selected: Set<String> = selection(snapshot)
     private set
+  override val userCoveredRepositories: Set<String> = if (name == "coverage") setOf("repo-c") else emptySet()
+  override var hasManagedUserRoot = false
+    private set
+  override var hasLateFiles = false
+    private set
+
+  fun markManagedUserRoot() { hasManagedUserRoot = true }
+
+  fun createLateFiles() {
+    require(name == "selection" && !hasLateFiles)
+    verifyInputs()
+    Files.writeString(root.resolve("repo-a/docs/late-repo.txt"), "late repository file\n", StandardOpenOption.CREATE_NEW)
+    Files.writeString(shell.resolve("late-shell.txt"), "late shell remains hidden\n", StandardOpenOption.CREATE_NEW)
+    hasLateFiles = true
+  }
 
   init {
     require(snapshot.fieldNames().asSequence().toSet() == setOf("name", "root", "shell", "workspaceId", "bindingId", "revision", "selected", "repositories"))
@@ -225,7 +241,7 @@ internal class DesktopProjectionFixture(
     require(workspaceFile == root.parent.parent.resolve("output/$name.code-workspace"))
     require(link.checkedAttributes(workspaceFile).isRegularFile)
     val members = manifest.path("repositories")
-    require(members.isArray && members.size() == 2)
+    require(members.isArray && members.size() == 3)
     val actual = members.associate { member ->
       val memberName = requiredText(member, "name")
       require(requiredText(member, "relativePath") == memberName)
@@ -244,16 +260,23 @@ internal class DesktopProjectionFixture(
       check(String(link.readBytes(root.resolve("$name/README.txt"))) == "ReqWS Git fixture: $name\n")
     }
     check(String(link.readBytes(root.resolve("user-content/keep.txt"))) == "user owned\n")
+    check(String(link.readBytes(root.resolve("user-extra/keep-extra.txt"))) == "unclaimed root in the managed module\n")
+    check(String(link.readBytes(root.resolve("notes/outside.txt"))) == "outside all project roots\n")
+    check(String(link.readBytes(shell.resolve("shell-probe.txt"))) == "dedicated shell stays hidden\n")
+    if (hasLateFiles) {
+      check(String(link.readBytes(root.resolve("repo-a/docs/late-repo.txt"))) == "late repository file\n")
+      check(String(link.readBytes(shell.resolve("late-shell.txt"))) == "late shell remains hidden\n")
+    }
   }
 
   private fun repositoryMap(node: JsonNode): Map<String, String> {
     val values = node.path("repositories")
-    require(values.isArray && values.size() == 2)
+    require(values.isArray && values.size() == 3)
     return values.associate {
       require(it.isObject && it.fieldNames().asSequence().toSet() == setOf("name", "id"))
       requiredText(it, "name") to requiredText(it, "id")
     }.also {
-      require(it.keys == setOf("repo-a", "repo-b") && it.values.toSet().size == 2)
+      require(it.keys == setOf("repo-a", "repo-b", "repo-c") && it.values.toSet().size == 3)
     }
   }
 
