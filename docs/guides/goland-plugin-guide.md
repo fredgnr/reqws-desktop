@@ -1,86 +1,131 @@
 ---
-title: ReqWS GoLand 插件使用指南
+title: ReqWS GoLand 插件图解
 type: guide
 status: active
-updated: 2026-09-22
+updated: 2026-09-26
 ---
 
-# ReqWS GoLand 插件使用指南
+# ReqWS GoLand 插件图解
 
-本指南说明当前源码中的独立 GoLand 入口、仓库加载选择、用户配置保护和排障方式。
+本指南以 **ReqWS v0.1.7 正式发布插件**为准，帮助你把工作区中的全部或部分仓库加载到 GoLand，并确认 IDE 中看到的目录与选择一致。
 
-实际检查及其候选范围见[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)。旧版本截图和 GO 不能证明另一候选已安装或已通过验收。
+先在 Desktop 中[创建一个“就绪”的工作区](user-guide.md#第一次创建工作区)。Desktop 负责下载代码和维护成员；独立插件负责把你选择的目录显示在 GoLand 中。**安装 Desktop 不会自动安装插件。**
 
-## 1. 安装条件与构建
+## 安装插件
 
-当前开发中的兼容声明从 GoLand **262 系列**开始，不设置上限；编译基线为 **2026.2**，固定自动集成环境为 **2026.2.1.1**。开发后的[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)区分已执行检查与本机 UI 授权阻塞，新范围尚未形成完整验收结论；使用已发布版本时以其真实描述文件和发布说明为准。见[兼容开发记录](../changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md)。源码构建使用 Node.js 24、JDK 25 和仓库锁定的 Gradle/Kotlin 工具链。
+### 先确认版本
 
-```bash
-npm run check:goland
-npm run package:goland
-```
+在 GoLand 的 **Help → About**（macOS 也可在应用菜单查看 About）确认版本和 `GO-…` build，再选择匹配的插件包。
 
-本地测试 ZIP 位于 `integrations/goland/build/distributions/`，普通构建未签名。正式 Release 的 `ReqWS-X.Y.Z-goland-plugin.zip` 要求作者签名；校验和见同一 Release 的 SHA256SUMS。Marketplace 是否可安装及可更新以实际审核结果为准，当前不得从源码的发布能力推断已上架。首次上架与模式切换见[发布操作](../changes/goland-plugin-marketplace/bootstrap-and-operations.md)。只有可信且能对应当前源码的工件才应安装。
+| 项目 | v0.1.7 的要求 |
+|---|---|
+| 插件包 | [ReqWS-0.1.7-goland-plugin.zip](https://github.com/fredgnr/reqws-desktop/releases/download/v0.1.7/ReqWS-0.1.7-goland-plugin.zip)，与 Desktop 独立安装。 |
+| IDE | **GoLand 2026.2（262 系列）起**；不支持 261 系列，也不承诺可安装到其他 JetBrains IDE。 |
+| 兼容上限 | v0.1.7 未设置描述符上限；这不代表所有未来版本都已实际验收。较新 GoLand 仍需通过 IDE 安装检查。 |
+| 普通使用 | 已安装的 GoLand 即可；不需要为了安装 ZIP 另装 JDK 或 Node.js。 |
 
-手动安装：GoLand **Settings → Plugins → 齿轮菜单 → Install Plugin from Disk**，选择 ZIP，确认 ReqWS，再按 IDE 提示保存工作并重启。更新也使用相同步骤。Agent 安装必须由用户显式调用 manual-only 的 `$reqws-goland-plugin-install` 并确认 exact 工件与目标；普通开发或构建请求不授权安装或重启日常 IDE。
+版本范围来自 [v0.1.7 的兼容政策](https://github.com/fredgnr/reqws-desktop/blob/v0.1.7/integrations/goland/compatibility.properties)和[构建描述](https://github.com/fredgnr/reqws-desktop/blob/v0.1.7/integrations/goland/build.gradle.kts)。固定的自动回归环境 2026.2.1.1 不是唯一可用版本，也不是最低版本。
 
-## 2. 在 Desktop 选择加载集合
+### 从 ZIP 安装
 
-工作区需要处于“就绪”状态。在详情的 **GoLand 工作加载** 中选择：
+1. 从 [v0.1.7 发布页](https://github.com/fredgnr/reqws-desktop/releases/tag/v0.1.7)下载 **`ReqWS-0.1.7-goland-plugin.zip`**，按同页校验信息核对资产。这个 ZIP 与 Desktop 的 `macos-arm64.zip` 是两个文件。
+2. 在 GoLand 打开 **Settings → Plugins**，点击齿轮菜单，选择 **Install Plugin from Disk**。
+3. 选择下载的插件 ZIP，确认插件为 **ReqWS**（ID：`com.reqws.workspace`），按 IDE 提示安装。
+4. 如果 IDE 要求重启，先保存工作，再重启 GoLand；回到 **Plugins → Installed**，确认 ReqWS 已启用。
 
-- **默认全部**：加载全部需求成员，未来新增成员也会加载。
-- **指定仓库**：仅加载勾选且仍属于需求的仓库，未来新增成员不会自动选中。
-- 指定模式下全部取消勾选：保存明确的空集合，不会恢复为全部。
+正式 Release 插件 ZIP 使用作者签名。若从 Marketplace 安装，是否可搜索、可安装或可更新以该版本实际审核结果为准；发布脚本支持自动提交并不等于已上架。磁盘安装路径不依赖市场审核。
 
-**保存选择**只写加载配置；**保存并打开 GoLand**先保存再打开。保存成功不代表 IDE 或插件已经同步，请在 GoLand 的 ReqWS 面板中确认。没有保存的编辑会显示提示，可取消；并发冲突会保留当前选择并要求重新加载已保存配置。
+已有插件需要更新时，也可用以上步骤安装对应版本 ZIP。只想使用插件，无需安装 JDK 或自行构建。需要从源码构建时准备 JDK 25，按[插件构建说明](../../integrations/goland/README.md#build-and-verify)操作；普通本地 ZIP 未签名。
 
-保存操作固定在详情底部；**加载规则**展开说明新增成员如何处理，**工作区文件**展开完整路径与文件维护说明。成员增删放在独立的**管理工作区**中。顶部 Cursor 菜单分别提供工作区文件与代码目录入口。
+## 在 Desktop 选择要加载的仓库
 
-未加载不会删除仓库、切换分支、改变需求成员或重写 VS Code/Cursor 的 `.code-workspace`。已移出需求的旧选中 ID 暂时不生效；同 ID 再加入时恢复意图。本次保存新选择时只提交当前成员并清理失效 ID。
+以退款工作区为例，它包含订单、支付和前端三个仓库。如果此时只在 GoLand 中写后端，可以只加载前两个。
 
-## 3. 唯一入口
+1. 在 ReqWS 的“工作区”页，点击 `FEAT-128-refund` 右侧 `…`。
+2. 找到 **GoLand 工作加载**。
+3. 选择 **指定仓库**，保留 `order-api` 与 `payment-api`，取消 `web-console`。
+4. 确认“已选择 **2 / 3** 个仓库”，点击 **保存并打开 GoLand**。
 
-Desktop 所有 GoLand 操作均打开：
+![Desktop 详情中选择两个后端仓库，未加载的前端仍是工作区成员](images/goland-loading-selection.png)
+
+*图 1：这是 Desktop 中的实际操作界面，数据为虚构示例。黄色“有未保存的更改”表示尚未写入配置；需要点底部保存按钮。*
+
+| 选择或按钮 | 作用 |
+|---|---|
+| **默认全部** | 加载当前全部成员；以后添加到该需求的仓库也自动纳入加载集合。 |
+| **指定仓库** | 只加载勾选成员；以后新增的成员不会自动勾选。 |
+| 指定模式下全部取消勾选 | 明确要求不加载任何受管仓库，不会自动恢复为“全部”。 |
+| **保存选择** | 写入加载配置；适合 GoLand 已打开或稍后再打开。 |
+| **保存并打开 GoLand** | 保存后打开对应 IDE 入口；仍需在 IDE 确认同步状态。 |
+| **重新加载已保存配置** | 重新读取磁盘上的选择；发生版本冲突时，先核对草稿再使用。 |
+
+取消加载不是移除需求成员，更不是删除仓库。`web-console` 仍留在磁盘上，也仍出现在 VS Code/Cursor 的 `.code-workspace` 中。真正增删成员使用详情里的**管理工作区**，不要混淆两个保存范围。
+
+## 第一次在 GoLand 中打开
+
+ReqWS 会准备并打开下面这个独立入口，而不是直接把工作区根目录当作插件项目：
 
 ```text
-<workspace>/.reqws/ide/goland/
-  reqws-project.json
-  .idea/
+FEAT-128-refund/
+├── order-api/                        # 业务代码
+├── payment-api/
+├── web-console/
+└── .reqws/
+    ├── workspace.json                # 成员清单
+    └── ide/goland/                   # Desktop 打开的 GoLand 入口
+        ├── reqws-project.json        # 工作区绑定和加载选择
+        └── .idea/
 ```
 
-原 workspace root 及普通无绑定目录不会触发 ReqWS 项目模型适配。不要手工预建 shell 或复制旧 `.idea`；首次创建由 Desktop 完成。未知、异工作区或中断后没有完整绑定的入口会报冲突并保留原内容，需要人工核对。ReqWS 不迁移或删除原 workspace 的 `.idea`。
+第一次打开，GoLand 可能询问是否信任项目。只在确认这些仓库可信时选择信任；处于 **Safe Mode** 时，插件只读展示，尚不应用受管目录。不要手工复制旧 `.idea` 或预先创建这个入口。
 
-Desktop 是 `.reqws/workspace.json` 成员清单和 `reqws-project.json` 绑定/选择的唯一 writer；插件只读业务配置。
+进入 GoLand 后，打开 **View → Tool Windows → ReqWS**。等待 ReqWS 面板完成读取和同步，再到左侧 **Project** 面板展开具体仓库。
 
-## 4. Project 面板与状态
+对于刚才的选择，普通 Project 视图应能看到两个后端目录。下面是**目录关系示意，并非 IDE 截图**；实际分组和图标可能随 GoLand 版本变化：
 
-信任项目后，插件把选择投影为一个 ReqWS module 下的多个 Content Roots。原生 shell module/root 保留；正常同步完成后，普通 Project 面板不显示 shell 或内部文件，Excluded Files 两态均应成立。初始读取和 Safe Mode 允许暂态入口展示。
+```text
+ReqWS 工作区成员                 GoLand 本次加载
+✓ order-api       ───────────→  order-api/
+✓ payment-api     ───────────→  payment-api/
+  web-console                    不在 ReqWS 受管加载集合中
+                                 （代码仍保留在磁盘）
+```
 
-用户另外添加的 roots 始终保留，即使位于 ReqWS module 内。因此空加载集合不保证整个 Project 空白；Libraries、Scratches 和用户额外内容可以继续显示。
+**完成标志：** ReqWS 面板中的选择/状态符合预期，且能在 Project 面板展开已选仓库中的实际文件。正常同步后，内部入口不会作为业务目录显示。“已同步”只表示 ReqWS 的目录适配完成，不代表 Go SDK、依赖、补全、运行配置或测试已经就绪。
 
-| 仓库状态 | 含义 |
+如果你另外手工添加过项目 roots，这些用户内容会保留。因此取消所有 ReqWS 仓库后，Project 面板不一定完全空白；Libraries、Scratches 等 IDE 内容也可继续显示。
+
+## 以后怎样调整加载范围
+
+在 Desktop 中修改勾选并**保存选择**，插件会读取新配置并同步。已打开的 IDE 中必要时点击 **立即同步 / Sync Now**，强制重新检查；这个按钮不会替你改变 Desktop 中的选择。
+
+| ReqWS 面板中的状态/动作 | 怎样理解或使用 |
 |---|---|
-| 已加载 | 当前选择中存在的仓库已进入验证后的项目内容范围；不代表语言服务就绪。 |
-| 未加载 | 仍是需求成员，但未请求加载，属于正常状态。 |
-| 目录缺失 | 请求加载的目录不存在；选择仍保留。 |
-| 仍被其他项目根包含 | 已退出 ReqWS 加载集合，但用户或其他 root 仍覆盖它；插件不会删除该用户条目。 |
-| 项目内容未生效 / 错误 | 当前投影未通过模型/PFI 或所有权检查。 |
+| 已加载 | 当前选择中的目录已进入验证后的项目内容范围。 |
+| 未加载 | 仍是需求成员，但未被本次选择，属于正常状态。 |
+| 目录缺失 | 请求加载的目录不存在；选择意图仍保留。 |
+| 仍被其他项目根包含 | 用户或其他配置仍覆盖该目录，插件会保留这些配置。 |
+| 项目内容未生效 / 错误 | 当前配置未通过模型、文件索引边界或所有权检查，先查看诊断。 |
+| 打开清单文件 / Open Manifest File | 查看 Desktop 维护的成员清单；不是推荐的手工编辑入口。 |
+| 复制诊断信息 / Copy Diagnostics | 收集插件版本、状态和错误，便于报告问题。 |
 
-**已同步**只证明当前配置的 ReqWS 契约收敛。插件不检查语言工具链、Go Modules、补全或运行配置。**立即同步**走同一条校验链并强制重核；**打开清单文件**查看成员清单；**复制诊断信息**提供脱敏版本/状态/错误信息。
+## Git Roots 需要单独确认
 
-## 5. Git 配置与保护
+插件只读检查已加载仓库的 Git Directory Mappings，不会自动增删它们。如果 GoLand 没有按你期望显示 Git 仓库，进入 **Settings → Version Control → Directory Mappings** 手动检查各仓库路径。
 
-插件只读检查已加载仓库的 Git Directory Mappings。需要时由用户在 **Settings → Version Control → Directory Mappings** 配置，随后等待更新或使用立即同步。未加载成员与额外 mappings 都是用户配置；插件不会要求删除它们，也不承诺 Git Log/Commit 自动缩小。
+“未加载”不会自动删除 Git mapping，也不保证 Git Log/Commit 视图缩小。插件不会 clone、fetch、checkout、访问仓库 URL 或修改语言/构建配置；Git 操作由 Desktop 创建流程或用户的原生 Git/IDE 操作承担。
 
-ReqWS 不执行 clone/fetch/checkout 等 Git 生命周期、不访问仓库 URL、不删除仓库、不写 VCS mappings 或语言/构建配置。IDE 自身对受信任项目的语言分析和原生行为由 IDE 与用户环境控制。
+## 看不到仓库时按这个顺序检查
 
-## 6. 故障处理
+1. **Desktop 是否“就绪”？** 先检查目录是否存在，以及成员是否属于这项需求。
+2. **选择是否已保存？** “有未保存的更改”只是草稿。核对计数和勾选，再保存。
+3. **插件是否启用且兼容？** 在 Plugins → Installed 中检查 ReqWS。
+4. **是否从 ReqWS 打开了正确入口？** 普通代码根目录和无绑定目录不会启用这一受管模型。回到 Desktop 用“保存并打开 GoLand”。
+5. **是否仍处于 Safe Mode？** 未信任时只展示，不写入受管项目模型。
+6. **面板有什么诊断？** 必要时立即同步并复制诊断。访问失败先检查权限；版本冲突先重新加载已保存配置；所有权/绑定冲突先保留现场并核对来源。
 
-- **绑定错误**：保留最后有效模型并冻结受管增删，撤销 shell 适配。检查当前入口与 Desktop 的工作区对应关系；恢复完整配置后自动重核。
-- **所有权冲突**：marker 丢失、root 替换或用户在受管 root 中新增子配置时，插件拒绝破坏性删除。先核对用户配置，不删除 ledger/module 来强行重试。
-- **读取或保存失败**：保存端保留原完整文件；已有绑定发生临时写入失败时，检查目录权限与空间后可直接重试当前草稿，无需先重载。绑定或版本冲突仍需重载。初次中断留下的 shell 不会被自动认领或清空，需保留现场并人工处理。
-- **Safe Mode**：首次未信任时仅只读展示；信任后才应用受管模型。
+临时写入失败时，已有绑定的选择草稿通常可以在权限或磁盘问题修复后直接重试；绑定或版本冲突则需要重新加载。未知或中断留下的入口不会被自动认领、清空；不要通过删除 `.idea`、ledger 或仓库来强行消除错误。
 
-不通过清空 `.idea`、删除仓库、重建绑定或强制重装来掩盖错误。旧 ownership 文件是惰性历史文件，不参与新删除权，也不会自动清理。
+本文的 Desktop 截图只解释交互位置，不是该插件 ZIP 的真实 IDE 验收证据。详细边界与按次验证范围见[技术方案](../changes/goland-workspace-loading/technical-design.md)、[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)；发布版兼容材料应查看对应 tag。
 
-完整技术边界见[技术方案](../changes/goland-workspace-loading/technical-design.md)，验收使用普通 Project 面板展开具体目录，见[测试计划](../changes/goland-workspace-loading/test-plan.md)。
+返回[Desktop 图解教程](user-guide.md) · [安装与更新](installation.md) · [指南目录](README.md)。
