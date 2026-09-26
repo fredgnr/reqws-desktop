@@ -14,8 +14,9 @@ test('D01 fresh built Electron starts with the real preload @smoke', async ({ de
     bridge: typeof window.reqws.workspaces.create,
     require: typeof (window as unknown as { require?: unknown }).require,
     process: typeof (window as unknown as { process?: unknown }).process,
+    buffer: typeof (window as unknown as { Buffer?: unknown }).Buffer,
     ipc: typeof (window as unknown as { ipcRenderer?: unknown }).ipcRenderer,
-  }))).toEqual({ bridge: 'function', require: 'undefined', process: 'undefined', ipc: 'undefined' });
+  }))).toEqual({ bridge: 'function', require: 'undefined', process: 'undefined', buffer: 'undefined', ipc: 'undefined' });
 });
 
 test('S1 isolated instances coexist and a shared userData contender exits', async ({ desktop }, info) => {
