@@ -63,6 +63,8 @@ export function App({
   const [repositorySearch, setRepositorySearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const dataLoadGeneration = useRef(0);
+  const mounted = useRef(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [repositoryDialog, setRepositoryDialog] = useState<Repository | 'new' | null>(null);
   const [testResult, setTestResult] = useState<TestRepositoryResult | null>(null);
@@ -114,6 +116,9 @@ export function App({
   }, [i18n, toast]);
 
   const loadData = useCallback(async (showRefresh = false): Promise<void> => {
+    if (!mounted.current) return;
+    const generation = ++dataLoadGeneration.current;
+    const isCurrent = (): boolean => mounted.current && generation === dataLoadGeneration.current;
     if (showRefresh) setRefreshing(true);
     try {
       const [nextRepositories, nextWorkspaces, nextAvailability] = await Promise.all([
@@ -121,20 +126,31 @@ export function App({
         api.workspaces.list(),
         api.editors.getAvailability(),
       ]);
+      if (!isCurrent()) return;
       setRepositories(nextRepositories);
       setWorkspaces(nextWorkspaces);
       setAvailability(nextAvailability);
     } catch (error) {
-      toastError(error);
+      if (isCurrent()) toastError(error);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [toastError]);
 
   useEffect(() => {
-    queueMicrotask(() => void loadData());
-    return api.operations.onProgress(setActiveOperation);
+    mounted.current = true;
+    let active = true;
+    queueMicrotask(() => { if (active) void loadData(); });
+    const unsubscribe = api.operations.onProgress(setActiveOperation);
+    return () => {
+      active = false;
+      mounted.current = false;
+      dataLoadGeneration.current++;
+      unsubscribe();
+    };
   }, [loadData]);
 
   useEffect(() => {
