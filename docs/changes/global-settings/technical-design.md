@@ -2,7 +2,7 @@
 title: ReqWS MVP 全局配置页面增量技术方案
 type: technical-design
 status: active
-updated: 2026-08-14
+updated: 2026-09-26
 ---
 
 # ReqWS MVP 全局配置页面增量技术方案
@@ -773,18 +773,18 @@ void bootstrap();
     ↓
 npm run i18n:scan
     ↓
-以 GPT-5.6 Sol/Pro、reasoning high 或更高调用翻译 subagent
+顶层 Main/Integrator 按翻译契约委派只读翻译 subagent
     ↓
 subagent 只返回结构化翻译，不直接改文件
     ↓
-主 Agent 校验 key、中文源文案、占位符、复数与术语并写入 en-US.json
+顶层 Main/Integrator 校验 key、中文源文案、占位符、复数与术语并写入 en-US.json
     ↓
 npm run i18n:apply
     ↓
 npm run i18n:check
 ```
 
-详细门禁和结构化输出契约以项目级 [`reqws-i18n` Skill](../../../.agents/skills/reqws-i18n/SKILL.md) 为准。翻译 subagent 必须显式使用 GPT-5.6 Sol 或 Pro，reasoning 不低于 `high`；模型或推理级别不可用时停止流程，不允许由主 Agent 自行翻译、降级到其他模型或更新同步基线。
+通过项目级 [`reqws-i18n` Skill](../../../.agents/skills/reqws-i18n/SKILL.md) 执行上述流程；模型选择、reasoning 下限、结构化输出和写回责任统一以[翻译契约](../../../.agents/skills/reqws-i18n/references/translation-contract.md)为准。本方案不再单独指定模型家族或版本，也不为实现 Worker 设置英文或基线写回例外。门禁未满足时保持英文与基线不变，不自行翻译或换用其他模型；独立的非翻译工作可以继续。
 
 `npm run i18n:apply` 会在 key、占位符和源码引用校验通过后更新同步基线；`npm run i18n:check` 确认提交内容与该基线一致。中文 key 已存在但源文案发生变化、复数形式变化或占位符变化，也必须重新触发翻译审查。
 
@@ -943,7 +943,8 @@ npm run i18n:check
 * 占位符保持一致。
 * 中文源文案修改后英文翻译会被标记为过期。
 * 缺失工件枚举和回滚原因枚举都有中英文映射。
-* 翻译审查由满足模型门禁的指定 subagent 产生结构化结果，再由主 Agent 写回英文资源。
+
+上述脚本只检查资源一致性，不证明翻译 subagent 已运行或模型/reasoning 门禁已满足。翻译审查仍须由满足契约的只读子代理返回结构化结果，顶层 Main/Integrator 校验并写回；交接时单独记录真实模型/reasoning 证据与审查结果。
 
 ---
 
