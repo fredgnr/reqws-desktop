@@ -2,7 +2,7 @@
 title: ReqWS 使用说明
 type: guide
 status: active
-updated: 2026-09-20
+updated: 2026-09-26
 ---
 
 # ReqWS 使用说明
@@ -135,10 +135,12 @@ git@example.com:team/repository.git
 
 ## 6. 管理仓库目录
 
+本页标注“整改候选”的行为对应 [Code Humanizer 整改](../changes/code-humanizer-review/remediation.md)，尚未作为新版本发布。
+
 进入“仓库”，选择“添加仓库”：
 
 1. 输入不含凭据的 HTTPS 或 SSH 地址。
-2. 名称会从地址自动推导，也可以在保存前修改；名称将成为工作区内的目录名。
+2. 名称会从地址自动推导，也可以在保存前修改；名称将成为工作区内的目录名。整改候选拒绝 `.reqws`、`.git` 及大小写变体，避免与内部元数据重叠。
 3. 确认默认分支，例如 `main`。这里的值必须与远端实际分支一致。
 4. 可选择“测试连接”。测试会执行只读远端查询并显示远端默认分支；失败不会清空表单，也不会阻止保存配置。
 5. 选择“添加仓库”保存。此时只写入仓库目录，不会立即 clone。
@@ -168,7 +170,7 @@ git@example.com:team/repository.git
 
 1. 使用已有的本地功能分支；
 2. 否则跟踪已有的远端功能分支；
-3. 否则从该仓库配置的远端默认分支新建功能分支。
+3. 否则从该仓库配置的远端默认分支新建功能分支；整改候选不为新 feature 设置默认分支 upstream，首次发布需要显式建立 feature upstream（例如 `git push -u origin <feature>`）。
 
 如果远端默认分支不存在、地址不可达或分支名非法，创建会失败。最终目录公开前的临时 staging 会被清理；如果完整目录或 workspace 文件已经公开后才发生 state 写入错误，ReqWS 会保留这些工件并在错误详情中给出恢复路径，不会冒险自动删除。
 
@@ -222,6 +224,7 @@ npm run package:goland
 
 - `GIT_NOT_FOUND`：安装 Git，确认从 Finder/LaunchServices 启动的应用也能访问 Git，再刷新。
 - `REPOSITORY_UNREACHABLE` 或 `CLONE_FAILED`：先在终端用相同 URL 验证凭据、网络和 host key。
+- `WORKSPACE_PATH_UNAVAILABLE`：整改候选会区分不可访问与路径缺失；检查文件权限或磁盘状态后刷新，不必重建目录。
 - `DEFAULT_BRANCH_NOT_FOUND`：修正仓库目录中的默认分支，再重新创建。
 - `WORKSPACE_ROOT_EXISTS` 或 `WORKSPACE_FILE_EXISTS`：选择新的名称或位置；ReqWS 不覆盖现有内容。若只是旧索引仍占用路径，先确认磁盘内容，再移除旧工作区记录。
 - 设置目录不可用：在“设置”中重新选择已经存在且可访问的目录。
@@ -249,7 +252,7 @@ macOS 上的典型全局状态位置是：
 ## 11. 当前限制
 
 - 仅支持 macOS，且没有 Windows/Linux 构建。
-- clone 不支持取消、并发、浅克隆或字节级进度。
+- clone 不支持用户取消、并发、浅克隆或界面字节级进度。整改候选在连续 15 分钟无 Git 输出后终止 clone；有进度会重置期限，持续传输无总时长上限。终止并确认进程关闭后才清理未公开的 staging。
 - 不提供 pull、merge、rebase、push、PR/MR、测试运行器或 Git worktree。
 - `.code-workspace` 由 ReqWS 整体维护，不合并手工 settings。
 - Cursor 正常路径会为每次打开操作新建一个 IDE 窗口；旧版或非标准 bundle 缺少内置 CLI 时只能降级为 LaunchServices 打开。

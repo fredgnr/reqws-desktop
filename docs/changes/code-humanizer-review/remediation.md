@@ -26,6 +26,26 @@ updated: 2026-09-26
 
 ## 执行记录
 
-实现和验证进行中，完成后填写真实命令、结果与剩余限制。
+R01–R06、C01/C02 已在整改分支实现，尚未合并或发布。实现分别使用独立提交，源代码身份通过 Git 历史追溯。
+
+| 条目 | 直接回归命令/选择器 | 结果 |
+|---|---|---|
+| R01 | `npx vitest run tests/unit/repository-service.test.ts tests/unit/schemas.test.ts tests/unit/workspace-file-writer.test.ts tests/unit/workspace-manifest-contract.test.ts tests/integration/workspace-service.test.ts` | 初始修复候选 5 文件、80 项通过；真实 Git 源文件及目录、索引均保持 |
+| R02 | `npx vitest run tests/unit/git-runner.test.ts tests/integration/workspace-service.test.ts` | 当步 54 项通过；SSH URI 身份查询使用真实 Git，remove→add fixture 仅替换后续网络 fetch |
+| R03 | `npx vitest run tests/integration/git-branches.test.ts` | 6 项通过；含 `branch.autoSetupMerge=always`、本地 bare origin 的显式 feature 发布及 main 引用保持 |
+| R04 | `npx vitest run tests/unit/git-runner.test.ts tests/integration/workspace-service.test.ts` | 当步 56 项通过；`kills a stalled clone process group before cleaning staging and continuing the queue` 使用真实 Node 父/子进程模拟挂起 clone，确认两者退出、staging 清理及下一操作成功；fake timers 另覆盖持续进度和终止升级 |
+| R05 | `npx vitest run tests/integration/workspace-service.test.ts -t 'inspection failure\|parent stat failure'` | 8 项选中通过；36 项未选中不计通过。ENOENT、EACCES、EPERM、EIO 覆盖 access 与两处 parent stat；双语诊断纳入最终 renderer 回归 |
+| R06、C02 | `npx vitest run tests/renderer/app-refresh-order.test.tsx tests/renderer/app-toasts.test.tsx` | 7 项通过；旧成功/错误、刷新标志、卸载、语言切换、独立 3200ms 过期和 dismiss 清理 |
+| C01 | `npx vitest run tests/unit/path-service.test.ts tests/unit/workspace-file-writer.test.ts tests/integration/workspace-service.test.ts` | 61 项通过；空白、相对路径、NFC/raw 路径、错误 stage、symlink/canonical 边界保持 |
+
+最终本机环境为 macOS arm64、Node.js 24.20.0、npm 11.19.0。`npm ci` 按 lockfile 安装；未修改依赖或 lockfile。完整 `npm run check` 在允许原生安全服务访问的本机权限下通过：TypeScript、ESLint、338 个 i18n key、文档检查、**47 个测试文件，495 项通过、1 项跳过**。跳过项是仅真实 GitHub-hosted macOS runner 可执行的管理员信任回归，不记为通过。
+
+首次沙箱内完整检查的 4 项原生签名测试失败（证书抽取无输出、临时钥匙串导入与离线信任命令受限）；随后完整本机权限检查通过。签名测试仅使用现有套件的一次性身份和临时材料，没有操作发布凭据、安装应用或更改真实信任。
+
+两个翻译 delta 为 `errors.codes.INVALID_REPOSITORY_NAME` 与 `errors.codes.WORKSPACE_PATH_UNAVAILABLE`。按 reqws-i18n 契约分别经过只读翻译 subagent 审查；运行时继承主 agent 模型，reasoning 明确设为 high，主 agent 校验 source/key/占位符及术语后写回，再执行 `i18n:apply`、`i18n:check`。没有主 agent 翻译回退。
+
+使用 Vite 加虚构内存 API 在本机浏览器检查 renderer：工作区显示异常状态，打开详情显示 `WORKSPACE_PATH_UNAVAILABLE` 中文提示，未见布局遮挡；截图保存在本次任务临时产物中。这是 renderer fixture smoke，不是 Electron 安装验收、真实 macOS TCC 测试或 GoLand GUI GO。原生 IDE、Gradle、发布验证不在本次变更范围；U01–U03 未作新结论。
+
+`git diff --check` 通过；最终差异审阅确认没有修改 Kotlin、manifest 读取接受集合、preload 安全边界、发布工作流或凭据。用户指南同步保留目录、upstream、无输出超时与不可访问诊断；原报告保留历史基线，局部及父级索引指向整改记录。
 
 返回[审查与整改索引](README.md)。
