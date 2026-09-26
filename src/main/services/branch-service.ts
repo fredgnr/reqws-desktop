@@ -79,6 +79,7 @@ export class BranchService {
     }
 
     await this.switchBranch(repositoryPath, [
+      '--no-track',
       '-c',
       featureBranch,
       `origin/${defaultBranch}`,
