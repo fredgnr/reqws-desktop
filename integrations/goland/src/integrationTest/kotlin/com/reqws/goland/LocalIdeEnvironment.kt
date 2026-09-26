@@ -143,7 +143,11 @@ internal class LocalIdeEnvironment {
     }.newDocumentBuilder()
     val plistRoot = Files.newInputStream(plist).use { plistParser.parse(it).documentElement }
     val executableKeys = plistRoot.getElementsByTagName("key").let { keys ->
-      (0 until keys.length).map { keys.item(it) }.filter { it.textContent == "CFBundleExecutable" }
+      (0 until keys.length).map { keys.item(it) }.onEach {
+        check(it.childNodes.length == 1 && it.firstChild.nodeType == org.w3c.dom.Node.TEXT_NODE) {
+          "Local SDK plist contains an ambiguous key"
+        }
+      }.filter { it.textContent == "CFBundleExecutable" }
     }
     val executableKey = executableKeys.singleOrNull()
     val executableValue = executableKey?.let { key ->
@@ -151,6 +155,7 @@ internal class LocalIdeEnvironment {
     }
     check(plistRoot.tagName == "plist" && executableKey?.parentNode?.nodeName == "dict" &&
       executableKey.parentNode.parentNode == plistRoot && executableValue?.tagName == "string" &&
+      executableValue.childNodes.length == 1 && executableValue.firstChild.nodeType == org.w3c.dom.Node.TEXT_NODE &&
       executableValue.textContent == ideInfo.executableFileName) { "Local SDK plist selects an unexpected executable" }
     val info = json.readTree(productInfo.toFile())
     check(info.path("productCode").asText() == expected["product"] &&
