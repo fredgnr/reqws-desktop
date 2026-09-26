@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-22
+updated: 2026-09-26
 ---
 
 # ReqWS 开发指南
@@ -65,6 +65,13 @@ npm run test:integration
 npm run test:renderer
 npm run test:watch
 
+# 隔离 Electron 真实链路：每次重建 Main/preload/renderer，单 worker、无重试
+npm run test:e2e
+npm run test:e2e:smoke
+npm run test:e2e -- tests/e2e/desktop/workspaces.spec.ts
+# 两项故意失败及证据必须被严格识别，wrapper 本身才返回成功
+npm run test:e2e:negative
+
 # 专项一致性检查
 npm run i18n:check
 npm run docs:check
@@ -78,6 +85,12 @@ npm run package:goland
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
+`test:e2e` 使用现有 Electron runtime、built renderer 和真实 IPC/Git/磁盘；需要图形会话及 loopback HTTPS 监听权限，数据仅在新建临时目录。不要用 `npm start` 或真实用户目录代替该入口。可用 `npm run test:e2e:smoke -- --repeat-each=20` 做独立进程稳定性检查；不得通过增加自动 retries、跳过失败测试或空选择制造通过。运行期间冻结相关源码，待进程与 trace 归档完成后再编辑。
+
+`test-results/<mode>-result.json` 记录源码身份、环境、实际选择器和计数，Playwright JSON/HTML、逐进程 trace/截图及 Main/Git/renderer/磁盘证据在 `test-results/` 和 `playwright-report/`。它们是诊断输出，不提交、不缓存成通过结果；故障探针的失败由外层 runner 核实后才计作门禁通过。进程清理只对本轮登记且 PID/进程组/内核启动时间仍一致的实例执行，确认退出后才清理拥有的临时目录。
+
+`test:e2e:packaged -- --app out/ReqWS-darwin-arm64/ReqWS.app` 仅允许真实 GitHub-hosted 一次性 macOS runner，消费同次构建的 ad-hoc 包，不重建或替换 Main，也不改变 fuse/签名。本机账户和已有 ReqWS 数据会被拒绝，禁止伪造 CI 环境绕过。source E2E、CI ad-hoc 包、personal-release 签名包及真实更新证据分别报告；S4/V 和旧手工门槛见[迁移需求包](../changes/playwright-regression-automation/README.md)。
+
 ## 3. 代码结构与进程边界
 
 ```text
@@ -86,7 +99,8 @@ src/
     ipc/                 handler、输入校验和依赖装配
     services/            state、Git、branch、workspace、path、editor、settings
     create-window.ts     BrowserWindow 安全配置
-    index.ts             Electron 生命周期与 single-instance
+    bootstrap.ts         共用生命周期、锁前实例目录与 single-instance
+    index.ts             生产启动入口，无测试环境开关
   preload/               窄化的 contextBridge API
   renderer/              React 页面、组件、本地化资源和样式
   shared/                跨进程类型、Zod schema、channel、错误和纯函数
@@ -94,6 +108,7 @@ tests/
   unit/                  服务、schema、安全与跨进程契约
   integration/           真实临时 Git remote、workspace 和安装脚本
   renderer/              jsdom + Testing Library 用户交互
+  e2e/                   Playwright Electron/候选包与外置隔离 fixture
 scripts/                 i18n/docs 检查和 macOS package/install 脚手架
 integrations/goland/     独立 Kotlin/Gradle GoLand 插件、资源与平台测试
 docs/                    指南、需求包、规范和冻结历史资料

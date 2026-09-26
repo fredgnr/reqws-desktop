@@ -1,8 +1,8 @@
 ---
 title: ReqWS Playwright 回归自动化方案与改造流程
 type: technical-design
-status: draft
-updated: 2026-09-22
+status: active
+updated: 2026-09-26
 ---
 
 # ReqWS 回归自动化方案与改造流程
@@ -10,10 +10,10 @@ updated: 2026-09-22
 本方案补齐 Electron 真实操作链路，并与现有本机 GoLand 自动化对接，逐项替代重复的 Computer Use 回归。
 
 - 调研日期：2026-09-22。
-- 状态：待评审方案；新增 Electron E2E、跨进程联动和替代验收尚未实施。已有插件自动化入口不属于本次新增能力。
+- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据及待验项见[实施记录](implementation-2026-09-26.md)。S4 跨进程联动和 V 替代验收仍为后续目标。
 - 入库基线：`fredgnr/reqws-desktop`，`main` 提交 `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`，应用版本 `0.1.6`。初次方案审阅基于 `7f9dc8b3a17d11339cfed5d7d770f90df659fe3b`；本次已核对两提交差异并同步新的插件与 CI 边界。
 - 关联工作：PR #20 是早期设计来源；插件兼容性与本机自动化已随 PR #21 合入上述 main。现行执行边界以[插件需求包](../ide-plugin-compatibility-automation/README.md)和[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)为准，完整 V 验收仍未完成。
-- 本次入库范围：方案与最近一级索引；不修改生产代码、依赖、工作流、兼容性下限或发布配置，不把文档提交当作自动化实现或 GUI 通过证据。
+- 初次入库仅包含方案与索引；2026-09-26 的 S0–S3 实现单独以分支 diff 和执行报告定位，不改兼容性下限或发布配置，不将本机源码测试当作 CI/精确包证据。
 
 ## 1. 目标与非目标
 
@@ -23,7 +23,7 @@ updated: 2026-09-22
 
 不迁移 Electron Forge，不为测试改用 electron-builder；不把 Vitest/JUnit 全量改写为 Playwright；不引入与 macOS Electron 产品无关的三浏览器矩阵；不扩大插件到语言工具链或 IDE 原生 Git 功能测试；不为测试降低 sandbox、IPC 输入校验、路径保护、签名或发布安全要求。[R1][R3][R4]
 
-## 2. 当前基线与主要缺口
+## 2. 初始基线与主要缺口
 
 | 当前内容 | 已有基础 | 本次应补的缺口 |
 |---|---|---|
@@ -34,7 +34,7 @@ updated: 2026-09-22
 | CI | 已有 impact/docs-only 分流、project-checks、macos-package、固定名称聚合检查，以及 plugin-targets/build/verification | 新增 Electron E2E 与候选包启动证据；保留现有分流；完整 IDE 与 Desktop→IDE 联动仅本机执行 |
 | 插件兼容性与 GUI | 最低 262、无上限；最低 SDK GO 2026.2、固定本机 GO 2026.2.1.1、自动 API 矩阵及显式 ZIP 本机入口 | 扩展真实 Desktop 写入驱动的本机联动，不重复搭建 Driver，不把已有正向报告当作完整替代验收 |
 
-以上现状按入库基线更新。Desktop 源码和已审阅的工作区集成测试在两基线之间没有变化；新增插件基础设施与仍未完成的 V 验收分别记录，不混为一谈。[R1]–[R8][R11][R15]
+以上表格保留初始入库基线的缺口定义，当前实现进度见[实施记录](implementation-2026-09-26.md)。Desktop 源码和已审阅的工作区集成测试在两个初始基线之间没有变化；新增插件基础设施与仍未完成的 V 验收分别记录，不混为一谈。[R1]–[R8][R11][R15]
 
 ## 3. 测试分层与真实性边界
 
@@ -235,6 +235,14 @@ Electron 失败证据包括测试断言／步骤报告、Main stdout/stderr、re
 
 ## 9. 分阶段实施
 
+2026-09-26 开始在 `feat/playwright-automation` 实施 S0–S3。以下实现约束先行确定，实际执行结果另记，不把开发中状态视为阶段通过：
+
+- 共用 bootstrap 在申请实例锁前设置外置测试入口传入的绝对 userData、sessionData 和 logs 路径；生产入口不读取测试控制变量。测试入口与生产入口共享真实生命周期、服务装配、IPC 和窗口安全。
+- 测试只注入 native dialog、editor OS spawn、Git OS spawn 和 updater adapter 边界；Git wrapper 在生产环境清理后设置固定 `GIT_CONFIG_NOSYSTEM=1`，使用独占 HOME/XDG 和 CA，禁用继承凭据、代理及 hooks。URL 校验及 TLS 验证保持原样。
+- 源码 E2E 每次重建独占 `.vite/e2e` 下的 Main/preload/built renderer，单 worker、零重试；生产包沿用 Forge。精确包 smoke 只接受 CI 一次性用户环境中的显式 `.app`，不提供本机真实账户启动捷径。
+- S3 初步稳定性门槛定为核心 smoke 连续 20 次独立新进程运行、首次失败为零，并完成故意失败及证据完整性检查；此门槛不宣称 99% 可靠，也不代表 S4/V 通过。
+- 本次不改插件 API、SDK、schema 或最低版本：仍为整个 262 系列，无兼容上限。S4/V 和旧手工门槛保持待验。
+
 阶段是工作拆分，不要求每阶段单独 PR；可以在一个集成分支交付，最后统一验收。
 
 | 阶段 | 范围 | 完成条件 |
@@ -286,7 +294,7 @@ AGENTS.md
 docs/guides/development-guide.md
 ```
 
-拟议新增 `test:e2e`、`test:e2e:smoke`、`test:e2e:packaged`；这些 Electron 命令目前不存在。插件复用现有 `check:goland:integration` 与 `prepare:goland:authorization`，不把它们写成待新增能力，也不以裸 Gradle 入口绕过本机保护。入口需要生成或验证本次源码对应的构建产物，不能静默使用陈旧 `.vite` 输出。Vitest 与 Playwright discovery 要显式分开，TS／ESLint 都覆盖测试代码，避免某一套 runner 收集另一套的测试。
+已新增 `test:e2e`、`test:e2e:smoke`、`test:e2e:negative`、`test:e2e:packaged`，当前调用方式见[开发指南](../../guides/development-guide.md#2-启动与日常命令)。前三者重建源码产物；packaged 仅消费真实托管 CI 中已有的精确 `.app`，不运行外置测试 Main。插件复用现有 `check:goland:integration` 与 `prepare:goland:authorization`，不以裸 Gradle 入口绕过本机保护。Vitest 与 Playwright discovery 显式分开，TS／ESLint 覆盖测试代码；运行期间不得编辑 trace 所收集的源码，以免归档读到变化中的文件。
 
 ## 11. 手工用例替代登记
 

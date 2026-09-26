@@ -235,11 +235,14 @@ class CacheWorkflowTests(unittest.TestCase):
         gate = ci['jobs']['checks']
         self.assertEqual(gate['name'], 'Checks and macOS package smoke')
         self.assertEqual(gate['if'], '${{ always() }}')
-        self.assertEqual(set(gate['needs']), {'impact', 'docs', 'project-checks', 'macos-package'})
+        self.assertEqual(set(gate['needs']), {'impact', 'docs', 'project-checks', 'macos-package', 'desktop-e2e'})
         run = gate['steps'][-1]['run']
         for left in ['success', 'failure', 'cancelled', 'skipped']:
             for right in ['success', 'failure', 'cancelled', 'skipped']:
-                result = subprocess.run(['bash', '-e', '-c', run], env={**os.environ, 'CHECK_RESULT': left, 'PACKAGE_RESULT': right, 'IMPACT_RESULT': 'success', 'DOCS_ONLY': 'false', 'DOCS_RESULT': 'skipped'})
+                result = subprocess.run(['bash', '-e', '-c', run], cwd=ROOT, capture_output=True,
+                                        env={**os.environ, 'CHECK_RESULT': left, 'PACKAGE_RESULT': right,
+                                             'IMPACT_RESULT': 'success', 'DOCS_ONLY': 'false', 'DOCS_RESULT': 'skipped',
+                                             'DESKTOP_REQUIRED': 'true', 'E2E_RESULT': 'success'})
                 self.assertEqual(result.returncode == 0, left == right == 'success')
         self.assertNotIn('secrets.', json.dumps(ci))
 

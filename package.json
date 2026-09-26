@@ -27,7 +27,11 @@
     "prepare:goland:authorization": "python3 scripts/run_local_ide.py prepare",
     "package:goland": "./integrations/goland/gradlew -p integrations/goland verifyForbiddenProductionSymbols buildPlugin",
     "package:macos": "node scripts/run-install-macos.mjs --package-only",
-    "install:macos": "node scripts/run-install-macos.mjs"
+    "install:macos": "node scripts/run-install-macos.mjs",
+    "test:e2e": "python3 scripts/desktop_e2e.py --mode source",
+    "test:e2e:smoke": "python3 scripts/desktop_e2e.py --mode smoke",
+    "test:e2e:negative": "python3 scripts/desktop_e2e.py --mode negative",
+    "test:e2e:packaged": "python3 scripts/desktop_e2e.py --mode packaged"
   },
   "keywords": [
     "electron",
@@ -56,6 +60,7 @@
     "@electron-forge/plugin-vite": "7.11.2",
     "@electron-forge/shared-types": "7.11.2",
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.2",
