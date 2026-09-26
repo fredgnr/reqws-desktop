@@ -65,6 +65,14 @@ class DesktopIdeTests(unittest.TestCase):
                     'shell': False, 'boundary': 'os-spawn-only'}
                 publish(self.directory / f'request-{sequence}.json', request)
                 publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed', 'snapshot': snapshot})
+                if name == 'selection' and revision == 1:
+                    sequence += 1
+                    envelope = {'schemaVersion': 1, 'sessionId': self.session, 'sequence': sequence}
+                    publish(self.directory / f'request-{sequence}.json', {**envelope,
+                        'operation': 'focus-external-edit', 'name': 'selection', 'phase': 'late-files', 'revision': 1})
+                    publish(self.directory / f'response-{sequence}.json', {**envelope, 'status': 'passed', 'focus': {
+                        'name': 'selection', 'phase': 'late-files', 'revision': 1, 'workspaceId': name,
+                        'bindingId': binding, 'desktopPid': 999, 'windowId': 1, 'focused': True}})
             self.write_saved_model(snapshot)
         sequence += 1
         envelope = {'schemaVersion': 1, 'sessionId': self.session, 'sequence': sequence}
@@ -126,7 +134,7 @@ class DesktopIdeTests(unittest.TestCase):
 
     def test_saved_model_rejects_cache_only_roots_markers_registration_and_foreign_binding(self):
         self.transcript()
-        snapshot = read_message(self.directory / 'response-8.json')['snapshot']
+        snapshot = read_message(self.directory / 'response-9.json')['snapshot']
         shell = Path(snapshot['shell'])
         module = next((shell / '.idea/reqws').glob('*.iml'))
         modules = shell / '.idea/modules.xml'
@@ -167,16 +175,59 @@ class DesktopIdeTests(unittest.TestCase):
 
     def test_complete_exchange_requires_live_and_cold_selections(self):
         self.transcript()
-        self.assertEqual(validate_transcript(self.root, self.session)['requests'], 15)
-        path = self.directory / 'request-5.json'
+        self.assertEqual(validate_transcript(self.root, self.session)['requests'], 16)
+        path = self.directory / 'request-6.json'
         value = read_message(path)
         value['selected'] = ['repo-a']
         path.write_text(json.dumps(value))
         with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
 
+    def test_external_edit_focus_requires_one_bound_native_window_and_actual_inactive_to_active_stages(self):
+        self.transcript()
+        self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual(validate_projection_evidence(self.root, pids), PROJECTION_PROOFS)
+        path = self.root / 'desktop-external-edit.json'
+        original = read_message(path)
+        variants = []
+        for key, value in [('desktopPid', 998), ('idePid', 101), ('windowId', 2), ('requestSequence', 3),
+                           ('bindingId', 'foreign'), ('sessionId', str(uuid.uuid4())), ('phase', 'projection')]:
+            variants.append({**original, key: value})
+        changed = copy.deepcopy(original); changed['stages'] = list(reversed(changed['stages'])); variants.append(changed)
+        for index, key, value in [(0, 'frameActive', True), (1, 'frameFocused', True),
+                                   (1, 'repoDiskExists', False), (2, 'frameActive', False), (0, 'frameFocused', 0)]:
+            changed = copy.deepcopy(original); changed['stages'][index][key] = value; variants.append(changed)
+        for changed in variants:
+            path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        path.write_text(json.dumps(original))
+        request = self.directory / 'request-2.json'
+        before = read_message(request)
+        for key, value in [('name', 'coverage'), ('phase', 'projection'), ('revision', 2)]:
+            request.write_text(json.dumps({**before, key: value}))
+            with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
+        request.write_text(json.dumps(before))
+        response = self.directory / 'response-2.json'
+        before = read_message(response)
+        for key, value in [('schemaVersion', True), ('sequence', 2.0)]:
+            response.write_text(json.dumps({**before, key: value}))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        changed = copy.deepcopy(before); changed['focus']['focused'] = False
+        response.write_text(json.dumps(changed))
+        with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
+
+    def test_host_focus_gate_completes_before_coordinator_publishes_finish(self):
+        self.transcript()
+        self.write_proofs()
+        (self.directory / 'request-16.json').unlink()
+        (self.directory / 'response-16.json').unlink()
+        self.assertEqual(validate_projection_evidence(self.root, [str(pid) for pid in range(100, 109)]), PROJECTION_PROOFS)
+        with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
+
     def test_missing_failed_stale_or_mismatched_responses_never_pass(self):
         self.transcript()
-        path = self.directory / 'response-2.json'
+        path = self.directory / 'response-3.json'
         original = read_message(path)
         variants = [dict(original, status='failed'), dict(original, sessionId=str(uuid.uuid4())), dict(original, sequence=1)]
         for field, value in [('revision', 1), ('bindingId', str(uuid.uuid4())), ('root', '/tmp/foreign')]:
@@ -388,6 +439,14 @@ class DesktopIdeTests(unittest.TestCase):
                 'screenshot': self.screenshot(f"error-{proof['scenario']}-{proof['phase']}",
                     snapshots[proof['scenario'], proof['revision']]['shell'], proof['pid'])})
         (self.root / 'desktop-error-ui.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in errors))
+        snapshot = snapshots['selection', 1]
+        (self.root / 'desktop-external-edit.json').write_text(json.dumps({
+            'schemaVersion': 1, 'sessionId': self.session, 'scenario': 'selection', 'phase': 'late-files-on',
+            'revision': 1, 'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId'],
+            'project': snapshot['shell'], 'idePid': 100, 'desktopPid': 999, 'windowId': 1, 'requestSequence': 2,
+            'stages': [{'stage': stage, 'frameFocused': active, 'frameActive': active,
+                'repoDiskExists': exists, 'shellDiskExists': exists} for stage, active, exists in [
+                    ('desktop-focused', False, False), ('files-created', False, True), ('ide-returned', True, True)]]}))
         return proofs
 
     def screenshot(self, name, project=None, pid=100):
@@ -489,7 +548,7 @@ class DesktopIdeTests(unittest.TestCase):
         for changed in variants:
             (self.root / 'desktop-projections.jsonl').write_text(''.join(json.dumps(value) + '\n' for value in changed))
             with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
-        request = self.directory / 'request-7.json'
+        request = self.directory / 'request-8.json'
         message = read_message(request); message['selected'] = ['repo-a', 'repo-b']
         request.write_text(json.dumps(message))
         with self.assertRaises(ValueError): validate_transcript(self.root, self.session)
@@ -588,7 +647,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))

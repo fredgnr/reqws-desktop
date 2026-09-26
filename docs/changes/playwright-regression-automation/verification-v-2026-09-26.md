@@ -11,7 +11,7 @@ updated: 2026-09-27
 
 ## 当前结论与候选
 
-V 尚未完成，后续 GUI 等待用户确认固定 SDK 的失败诊断采集条件，旧门槛未撤销。用户已授权测试、脚本和验收文档修改，必要本地提交，以及隔离 Electron、固定 GoLand 正负向验收；本轮不推送、不发布，不接触日常 IDE 或真实用户工作区。
+V 尚未完成，旧门槛未撤销。用户已明确允许固定 SDK 在异常/超时时将可能包含其他窗口的全屏诊断图仅保存在私有测试目录；这些图不上传、不作为通过证据。用户已授权测试、脚本和验收文档修改，必要本地提交，以及隔离 Electron、固定 GoLand 正负向验收；本轮不推送、不发布，不接触日常 IDE 或真实用户工作区。
 
 正向插件沿用 `16ffce1` 的原始 CI `0.1.7` ZIP，来源为 [CI 36243622124](https://github.com/fredgnr/reqws-desktop/actions/runs/36243622124)。已重新读取七份原始 API 结果并执行严格汇总，确认属于同一 ZIP 和冻结矩阵。本机重建 ZIP 与它字节不同，不混用报告。最低仍为整个 `262` 系列、无上限；生产插件、SDK、API 例外和产品代码未因本轮测试扩展而改变。
 
@@ -23,8 +23,8 @@ V 尚未完成，后续 GUI 等待用户确认固定 SDK 的失败诊断采集�
 |---|---|
 | 新增 Desktop 验收 | [acceptance.spec.ts](../../../tests/e2e/desktop/acceptance.spec.ts) 首次 12/12 通过，零跳过、零重试，约 60 秒；涵盖预占冲突、缺默认分支、三类 Missing/Sync/遗忘、设置兼容/默认目录/错误恢复及独立权限检查。 |
 | 映射补漏 | English 再次冷启动、遗忘后删除 catalog 仍保留 clone，两项受影响用例 2/2 通过；D05 已补为真实 `2→3→2`，移除后独立核对 `.git`、HEAD 和用户文件。 |
-| Desktop 全检 | `npm run check`：50 个文件、519 项通过、1 项既有 hosted-only 系统信任检查跳过；类型、lint、i18n 和当时文档检查通过。跳过不计入通过。 |
-| 完整 workflow 回归 | `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`：223/223 通过；复用已有 OpenSSL 3、Java 25 和固定 ZIP Signer 缓存，没有真实签名身份操作。 |
+| Desktop 全检 | `npm run check`：50 个文件、520 项通过、1 项既有 hosted-only 系统信任检查跳过；类型、lint、i18n 和当时文档检查通过。跳过不计入通过。 |
+| 完整 workflow 回归 | `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`：225/225 通过；复用已有 OpenSSL 3、Java 25 和固定 ZIP Signer 缓存，没有真实签名身份操作。 |
 | 宿主/协议 | 原三场景之外新增 `desktopUserCoverageAndUnboundShell`；初轮 Java 21 自动寻找 Java 25 遇 Foojay TLS 失败，后使用已有 Java 25 编译成功，没有修改 TLS 或安装系统工具。G1/G6 的后续补证另通过 25 项 Python 检查及 Java 25 宿主编译，集成 Vitest 包含新增协议拒绝用例；真实 GUI 仍待下节验收。 |
 
 冻结 `4cd76ae` 的全套 source 30/30、两项精确负向启动门禁和核心 smoke 20 次共 80 项通过。D05 补齐后，干净 `c2013ad` 的全套 30 项各执行两次，共 60/60，零跳过、零重试、零 flaky，约 304 秒。G1/G6 补证宿主冻结为 `41b3db2`；其普通 Desktop 输入仅比 `c2013ad` 多一项 English 即时三页导航断言，该 D02 又独立重复 20 次，全部通过。其余差异限本机联动协议和宿主，不把早期报告改写成新提交的实跑。
@@ -52,7 +52,7 @@ V 尚未完成，后续 GUI 等待用户确认固定 SDK 的失败诊断采集�
 
 G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓，不能证明清空时保留该 root。因此新增“额外 root 已存在时，由 Desktop 执行 `2→0`”的过程证明；同 PID 重开后完整退出，新 PID 先只读恢复这个实际清空结果，再恢复两仓并再次冷启动，不用离线构造空输入代替保存链覆盖。
 
-当前新报告使用 `acceptanceVersion=4`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、37 张独立 IDE Swing 内容图、五个 Desktop 工作区和 15 个请求。五个工作区初建必须由真实 Desktop“保存并打开 GoLand”走 Main/EditorLauncher 到最终 OS spawn 边界，Starter 使用该次观测的合法 shell 参数；只有最后 OS spawn 由隔离 adapter 记录，不证明系统 LaunchServices。四次非法输入必须实际读取 ReqWS 面板中的 Error 和稳定码，并保存独立原始 UI 记录及截图，不能只检查服务状态。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。G1/G6 的独立只读审查和 25 项直接 Python 检查已通过；后续 v4 采集/清理修复的直接检查见下节。完整正向实跑、重复运行及最终复核尚待完成。
+当前新报告使用 `acceptanceVersion=5`，要求四项 JUnit、九个独立 IDE 进程、32 条投影、五份原生落盘证明、37 张独立 IDE Swing 内容图、五个 Desktop 工作区和 16 个请求。五个工作区初建必须由真实 Desktop“保存并打开 GoLand”走 Main/EditorLauncher 到最终 OS spawn 边界，Starter 使用该次观测的合法 shell 参数；只有最后 OS spawn 由隔离 adapter 记录，不证明系统 LaunchServices。四次非法输入必须实际读取 ReqWS 面板中的 Error 和稳定码，并保存独立原始 UI 记录及截图，不能只检查服务状态。`verify-report` 重新读取 JUnit、进程、逐步投影、原生文件及协议记录；PNG 检查完整 chunk/CRC、结束块和有界解压，不接受只有正确文件头的截断图。旧 S4 的 20 条投影报告仍是历史证据，不满足新增契约。G1/G6 的独立只读审查和 25 项直接 Python 检查已通过；后续 v4 采集/清理修复的直接检查见下节。完整正向实跑、重复运行及最终复核尚待完成。
 
 ### 首轮 GUI 证据拒绝
 
@@ -62,13 +62,21 @@ G4 的只读审查发现，仅在空集合下加入额外 root，再恢复两仓
 
 ### 可审查的采集/清理修复与运行条件
 
-组件采集仅使用公开 Driver 和标准 JDK API，在实际 IDE JVM 的 EDT 上将当前 `JFrame` 的真实 Swing root pane 通过 `printAll` 渲染为 PNG；不读取显示器、不裁剪全屏，也不根据状态重建界面。逐图侧车绑定采集方式、规范项目路径、frame 项目/标题、实际远程 JVM PID 和解码尺寸，v4 严格门禁继续校验完整 PNG 并拒绝旧 v3/无侧车证据。它不证明 macOS 窗口装饰、焦点或遮挡，组件实际渲染仍未执行验证。
+组件采集仅使用公开 Driver 和标准 JDK API，在实际 IDE JVM 的 EDT 上将当前 `JFrame` 的真实 Swing root pane 通过 `printAll` 渲染为 PNG；不读取显示器、不裁剪全屏，也不根据状态重建界面。逐图侧车绑定采集方式、规范项目路径、frame 项目/标题、实际远程 JVM PID 和解码尺寸，v4 严格门禁继续校验完整 PNG 并拒绝旧 v3/无侧车证据。它不证明 macOS 窗口装饰、焦点或遮挡。`bb01aa5` 新轮首张 1400×918 内容图已实际查看，清楚呈现普通 Project 层级及 ReqWS 状态，项目/PID/尺寸侧车一致；图像修复已实跑，整套验收仍须分别判定。
 
 相同 session 的合法 abort 标记可幂等读取；标记写入失败仍逐个处理宿主/Desktop 子进程和原有 PID/签名登记，任何清理未确认都会保留失败，不发布成功。正常退出的 SDK 截图已通过公开 `takeScreenshot=false` 关闭，周期全屏抓图通过最终 VM patch 清除 `ide.performance.screenshot`。这不屏蔽 IDE 异常或超时门禁。
 
 固定 Starter/Driver `262.9437.185` 的缓存字节码已由独立只读调查确认两项剩余限制：`DriverWithDetailedLogging.withContext` 遇异常无条件生成 `driverError` 全屏图；`IDERunContext.captureDiagnosticOnKill` 在真实本机 GUI 模式下调用全屏 Robot helper，早于 `expectedKill`/`collectNativeThreads` 条件。公开入口没有找到可保留真实 GUI 且关闭这两种诊断的设置。不能宣称全部 SDK 截图已关闭，不能用 headless 或替换 SDK 来伪装该验收。
 
-修复已通过 22 项 Desktop workflow、10 项 launcher 回归、Java 25 宿主编译及独立只读复审；随后主 Agent 完整 workflow 回归 223/223 通过，文档检查通过。初轮编译的 Driver 调用签名错误保留在日志，修正后实际执行编译通过；未启动新 GUI、未修改生产插件或最低 262。后续 GUI 须在用户确认采集条件后，先核对首张实际组件图，再按预定两轮正向、legacy 和独立 watcher 负向重新执行；SDK 诊断全屏图不能用作 IDE 通过证据。
+修复已通过 22 项 Desktop workflow、10 项 launcher 回归、Java 25 宿主编译及独立只读复审；随后主 Agent 完整 workflow 回归 223/223 通过，文档检查通过。初轮编译的 Driver 调用签名错误保留在日志，修正后实际执行编译通过；未启动新 GUI、未修改生产插件或最低 262。用户已明确确认私有诊断采集条件，后续按预定两轮正向、legacy 和独立 watcher 负向继续；SDK 诊断全屏图不能用作 IDE 通过证据。
+
+### 组件实跑后的宿主问题定位
+
+`bb01aa5` 的 `reqws-local-ide-fsamuaxl` 四项全部执行，两项通过、两项失败，五个 IDE 进程退出，Desktop 闭环确认和 profile 释放正常。组件图有效；选择场景在 late-file VFS 等待失败，用户覆盖场景则错误地把 JList 组合绘制文字当作单个组件精确匹配。实际 UI hierarchy 已有 `Included via User Project Root` 和 repo-c，修正为在真实列表中读取绘制文字，并保留模型/PFI/树检查。
+
+随后 `104a8cf` 的一次有界诊断 `reqws-local-ide-9e28axs1` 仍为两项通过、两项失败，六个 IDE 进程全部退出。用户 root 的三次投影已通过，普通无绑定项目的记录器漏了 PFI 访问所需 read action，已定位为测试宿主调用问题。late 诊断分别读取两路径：磁盘两文件始终存在，shell 文件约一秒进入 VFS，repo 文件在 60 秒内仍未进入；frame 始终 focused/active。两轮原失败均保留，不计为稳定通过。
+
+固定 SDK 源码/字节码显示 native watcher 周期任务主要把路径标为 dirty；实际刷新由空闲 debounce、平台 configuration 和 applicationActivated 等普通机制触发，不能把持续前台的读取轮询当作刷新保证。G3 将还原外部编辑后的观察流程：仅一次切换到自有 Desktop 窗口，确认测试 IDE inactive 后创建两个普通文件，再通过公开 Driver 返回同一 IDE，记录真实激活。保留原 60 秒、VFS/PFI/树门禁；该动作不进入 G2 的任何 revision 转换，也不调用 Refresh/Sync。新增受限 `focus-external-edit` 协议和三段原始证据，版本升为 v5、请求增加为 16，其余门禁计数不变。34 项直接 Python 检查、8 项协议 Vitest、TypeScript/lint、宿主编译及独立复审通过；随后完整集成检查为 Vitest 520 项通过、1 项既有跳过及 workflow 225/225。后续新冻结候选仍待实跑。
 
 ## 预先固定的成本样本
 

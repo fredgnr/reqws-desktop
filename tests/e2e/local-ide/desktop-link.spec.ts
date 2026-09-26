@@ -6,7 +6,7 @@ import { Desktop } from '../fixtures/desktop';
 import { createIsolation } from '../fixtures/isolation';
 import { createGitOrigin } from '../fixtures/git-origin';
 import { addRepository, createWorkspace, navigate } from '../fixtures/ui';
-import { editorLaunchSchema, openDesktopLink, publishLinkJson, waitLinkRequest, type EditorLaunch, type LinkRequest } from '../fixtures/desktop-link';
+import { desktopFocusSchema, editorLaunchSchema, openDesktopLink, publishLinkJson, waitLinkRequest, type EditorLaunch, type LinkRequest } from '../fixtures/desktop-link';
 
 const members = ['repo-a', 'repo-b', 'repo-c'];
 type Workspace = { root: string; manifest: string; codeWorkspace: string; workspaceFilePath: string; workspaceId: string; bindingId?: string; revision: number; gitHeads: string[]; editorLaunch?: EditorLaunch };
@@ -20,6 +20,7 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
   const desktop = new Desktop(isolation, origin, info);
   const applicationPath = path.join(isolation.home, 'Applications', 'GoLand.app');
   const workspaces = new Map<string, Workspace>();
+  let externalEditFocused = false;
   const openSelection = async (name: string): Promise<Locator> => {
     const dialog = desktop.page.getByRole('dialog');
     if (await dialog.count()) await dialog.getByRole('button', { name: 'Close', exact: true }).click();
@@ -70,7 +71,7 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
     return { name, root: workspace.root, shell, workspaceId: project.workspaceId, bindingId: project.bindingId,
       revision: project.revision, selected, repositories, editorLaunch: workspace.editorLaunch };
   };
-  const execute = async (request: Exclude<LinkRequest, { operation: 'finish' }>) => {
+  const execute = async (request: Exclude<LinkRequest, { operation: 'finish' | 'focus-external-edit' }>) => {
     if (request.operation === 'create') {
       if (workspaces.has(request.name)) throw new Error('A linked workspace cannot be reused by another scenario.');
       const dialog = desktop.page.getByRole('dialog');
@@ -124,6 +125,29 @@ test('S4 Desktop UI drives the local IDE through an isolated session', async ({}
           expect(desktop.errors).toEqual([]);
           await publishLinkJson(path.join(link.directory, `response-${sequence}.json`), { ...response, status: 'passed' });
           break;
+        }
+        if (request.operation === 'focus-external-edit') {
+          const workspace = workspaces.get('selection');
+          if (!workspace?.bindingId || workspace.revision !== 1 || externalEditFocused) {
+            throw new Error('External editing may focus Desktop only once before the first selection change.');
+          }
+          const bindingPath = path.join(workspace.root, '.reqws/ide/goland/reqws-project.json');
+          const binding = await readFile(bindingPath, 'utf8');
+          const window = await desktop.app.browserWindow(desktop.page);
+          await desktop.app.evaluate(({ app }) => app.focus({ steal: true }));
+          await window.evaluate((value) => value.focus());
+          await expect.poll(() => window.evaluate((value) => value.isFocused())).toBe(true);
+          const focus = desktopFocusSchema.parse({ name: request.name, phase: request.phase, revision: request.revision,
+            workspaceId: workspace.workspaceId, bindingId: workspace.bindingId,
+            desktopPid: await desktop.app.evaluate(() => process.pid),
+            ...await window.evaluate((value) => ({ windowId: value.id, focused: value.isFocused() })),
+          });
+          expect(focus.desktopPid).toBe(desktop.app.process().pid);
+          expect(await readFile(bindingPath, 'utf8')).toBe(binding);
+          expect(await readFile(path.join(workspace.root, '.reqws/workspace.json'), 'utf8')).toBe(workspace.manifest);
+          externalEditFocused = true;
+          await publishLinkJson(path.join(link.directory, `response-${sequence}.json`), { ...response, status: 'passed', focus });
+          continue;
         }
         const snapshot = await execute(request);
         await publishLinkJson(path.join(link.directory, `response-${sequence}.json`), { ...response, status: 'passed', snapshot });

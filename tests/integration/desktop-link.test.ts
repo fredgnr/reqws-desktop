@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { editorLaunchSchema, linkRequestSchema, publishLinkJson, readLinkJson, waitLinkRequest } from '../e2e/fixtures/desktop-link';
+import { desktopFocusSchema, editorLaunchSchema, linkRequestSchema, publishLinkJson, readLinkJson, waitLinkRequest } from '../e2e/fixtures/desktop-link';
 import { assertProcessRegistryPath } from '../e2e/fixtures/process-registry';
 
 describe('Desktop/IDE private message protocol', () => {
@@ -62,6 +62,21 @@ describe('Desktop/IDE private message protocol', () => {
       { ...launch, args: ['-a', launch.args[1]] }, { ...launch, args: ['-R', launch.args[1], launch.args[2]] },
       { ...launch, boundary: 'real-native-launch' }]) {
       expect(editorLaunchSchema.safeParse(invalid).success).toBe(false);
+    }
+  });
+
+  it('restricts external-edit focus to the first selection revision and requires observed native focus', () => {
+    const focusRequest = { ...request, operation: 'focus-external-edit', phase: 'late-files', revision: 1 };
+    expect(linkRequestSchema.parse(focusRequest)).toEqual(focusRequest);
+    for (const invalid of [{ ...focusRequest, name: 'coverage' }, { ...focusRequest, phase: 'projection' },
+      { ...focusRequest, revision: 2 }, { ...focusRequest, target: '/another/app' },
+      { ...focusRequest, selected: ['repo-a'] }]) expect(linkRequestSchema.safeParse(invalid).success).toBe(false);
+    const focus = { name: 'selection', phase: 'late-files', revision: 1, workspaceId: 'workspace',
+      bindingId: randomUUID(), desktopPid: 99, windowId: 1, focused: true };
+    expect(desktopFocusSchema.parse(focus)).toEqual(focus);
+    for (const invalid of [{ ...focus, focused: false }, { ...focus, desktopPid: 0 },
+      { ...focus, desktopPid: true }, { ...focus, windowId: -1 }, { ...focus, revision: 2 }]) {
+      expect(desktopFocusSchema.safeParse(invalid).success).toBe(false);
     }
   });
 

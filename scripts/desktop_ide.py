@@ -19,7 +19,7 @@ from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 4
+ACCEPTANCE_VERSION = 5
 CAPTURE_KIND = 'swing-root-pane-print-all'
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
@@ -71,6 +71,7 @@ def validate_transcript(run_root, session_id):
     created = {}
     selections = []
     coverage = []
+    external_focus = None
     for sequence in range(1, len(requests) + 1):
         request = read_message(directory / f'request-{sequence}.json')
         response = read_message(directory / f'response-{sequence}.json')
@@ -81,6 +82,14 @@ def validate_transcript(run_root, session_id):
         if response.get('status') != 'passed':
             raise ValueError('A Desktop operation failed')
         operation = request.get('operation')
+        if operation == 'focus-external-edit':
+            before = created.get('selection')
+            if (external_focus is not None or before is None or before['revision'] != 1
+                    or read_message(directory / f'request-{sequence - 1}.json').get('operation') != 'create'
+                    or read_message(directory / f'request-{sequence - 1}.json').get('name') != 'selection'):
+                raise ValueError('External edit may focus Desktop only once immediately after selection creation')
+            external_focus = validate_focus_response(request, response, before)
+            continue
         if operation == 'finish':
             if sequence != len(requests) or set(created) != NAMES:
                 raise ValueError('Desktop session finished before all scenarios')
@@ -116,6 +125,8 @@ def validate_transcript(run_root, session_id):
                 raise ValueError('Reused workspace or invalid first revision')
             created[name] = snapshot
         else:
+            if name == 'selection' and external_focus is None:
+                raise ValueError('Selection changed before the required external-edit focus transition')
             before = created[name]
             if (any(snapshot.get(key) != before.get(key) for key in
                     ('root', 'shell', 'workspaceId', 'bindingId', 'repositories', 'editorLaunch'))
@@ -126,7 +137,7 @@ def validate_transcript(run_root, session_id):
             selections.append(expected)
         if name == 'coverage':
             coverage.append(expected)
-    if request.get('operation') != 'finish' or selections != [
+    if external_focus is None or len(requests) != 16 or request.get('operation') != 'finish' or selections != [
             ['repo-a', 'repo-b'], ['repo-a'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]:
         raise ValueError('Missing live 2→1→0→2 or empty/nonempty cold-process selections')
     if coverage != [['repo-a', 'repo-b'], [], ['repo-a', 'repo-b']]:
@@ -134,7 +145,29 @@ def validate_transcript(run_root, session_id):
     if len({value['bindingId'] for value in created.values()}) != len(NAMES):
         raise ValueError('Scenario workspaces must have independent Desktop bindings')
     return {'requests': len(requests), 'workspaces': len(created), 'selections': selections, 'coverageSelections': coverage,
-            'editorLaunches': len(created), 'editorLaunchBoundary': 'os-spawn-only'}
+            'editorLaunches': len(created), 'editorLaunchBoundary': 'os-spawn-only', 'externalEditFocuses': 1}
+
+
+def validate_focus_response(request, response, snapshot):
+    envelope = {key: request.get(key) for key in ('schemaVersion', 'sessionId', 'sequence')}
+    if (envelope['schemaVersion'] != 1 or type(envelope['schemaVersion']) is not int
+            or type(envelope['sequence']) is not int or envelope['sequence'] <= 1
+            or not isinstance(envelope['sessionId'], str) or not envelope['sessionId']
+            or type(response.get('schemaVersion')) is not int or type(response.get('sequence')) is not int
+            or request != {**envelope, 'operation': 'focus-external-edit', 'name': 'selection', 'phase': 'late-files', 'revision': 1}
+            or type(request.get('revision')) is not int or response.get('status') != 'passed'
+            or any(response.get(key) != value for key, value in envelope.items())
+            or set(response) != {*envelope, 'status', 'focus'}):
+        raise ValueError('Invalid external-edit focus exchange')
+    focus = response['focus']
+    if (not isinstance(focus, dict)
+            or set(focus) != {'name', 'phase', 'revision', 'workspaceId', 'bindingId', 'desktopPid', 'windowId', 'focused'}
+            or any(focus.get(key) != value for key, value in {'name': 'selection', 'phase': 'late-files', 'revision': 1,
+                'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId']}.items())
+            or type(focus.get('revision')) is not int or focus.get('focused') is not True
+            or any(type(focus.get(key)) is not int or focus[key] <= 0 for key in ('desktopPid', 'windowId'))):
+        raise ValueError('Desktop did not prove the owned window was focused for external editing')
+    return focus
 
 
 def validate_projection_evidence(run_root, process_ids):
@@ -153,6 +186,7 @@ def validate_projection_evidence(run_root, process_ids):
     if ordinary['pid'] in {proof.get('pid') for proof in proofs}:
         raise ValueError('Unbound shell must use its own independent IDE process')
     screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')] + validate_error_ui_evidence(run_root, proofs, snapshots)
+    validate_external_edit_evidence(run_root, proofs, snapshots)
     if any(not isinstance(path, str) for path in screenshots) or len(set(screenshots)) != len(screenshots):
         raise ValueError('Every IDE observation requires its own fresh screenshot')
     for name in NAMES:
@@ -261,6 +295,44 @@ def validate_projection_evidence(run_root, process_ids):
                     raise ValueError('Late files were not observed through real VFS/tree boundaries')
         validate_saved_projection(run_root, snapshots[name, steps[-1]['revision']])
     return len(proofs)
+
+
+def validate_external_edit_evidence(run_root, proofs, snapshots):
+    session = read_message(run_root / 'desktop-link/session.json')['sessionId']
+    value = read_message(run_root / 'desktop-external-edit.json')
+    snapshot = snapshots['selection', 1]
+    if (set(value) != {'schemaVersion', 'sessionId', 'scenario', 'phase', 'revision', 'workspaceId', 'bindingId',
+                      'project', 'idePid', 'desktopPid', 'windowId', 'requestSequence', 'stages'}
+            or type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 1
+            or type(value.get('revision')) is not int or value['revision'] != 1
+            or value.get('sessionId') != session or value.get('scenario') != 'selection' or value.get('phase') != 'late-files-on'
+            or any(value.get(key) != snapshot[key] for key in ('workspaceId', 'bindingId'))
+            or value.get('project') != snapshot['shell']
+            or any(type(value.get(key)) is not int or value[key] <= 0 for key in ('idePid', 'desktopPid', 'windowId', 'requestSequence'))
+            or value['idePid'] == value['desktopPid']):
+        raise ValueError('Missing bound external-edit focus evidence')
+    sequence = value['requestSequence']
+    request = read_message(run_root / f'desktop-link/request-{sequence}.json')
+    response = read_message(run_root / f'desktop-link/response-{sequence}.json')
+    focus_requests = [read_message(path) for path in (run_root / 'desktop-link').glob('request-*.json')
+                      if read_message(path).get('operation') == 'focus-external-edit']
+    previous = read_message(run_root / f'desktop-link/request-{sequence - 1}.json')
+    if (focus_requests != [request] or request.get('sessionId') != session or request.get('sequence') != sequence
+            or previous.get('operation') != 'create' or previous.get('name') != 'selection'):
+        raise ValueError('External focus was not the single G3 action after workspace creation')
+    focus = validate_focus_response(request, response, snapshot)
+    if any(value[key] != focus[key] for key in ('desktopPid', 'windowId')):
+        raise ValueError('External edit used a different Desktop process/window')
+    selection = [proof for proof in proofs if proof.get('scenario') == 'selection']
+    if (len(selection) < 4 or any(proof.get('pid') != value['idePid'] for proof in selection[:4])
+            or selection[2].get('phase') != 'excluded-on' or selection[3].get('phase') != 'late-files-on'):
+        raise ValueError('Focus transition does not surround the G3 file creation in the same IDE')
+    expected = [{'stage': stage, 'frameFocused': active, 'frameActive': active,
+                 'repoDiskExists': files, 'shellDiskExists': files} for stage, active, files in [
+                    ('desktop-focused', False, False), ('files-created', False, True), ('ide-returned', True, True)]]
+    if value.get('stages') != expected or any(type(item.get(key)) is not bool for item in value['stages']
+            for key in ('frameFocused', 'frameActive', 'repoDiskExists', 'shellDiskExists')):
+        raise ValueError('External files were not created while the IDE was inactive and observed after returning')
 
 
 def validate_error_ui_evidence(run_root, projections, snapshots):

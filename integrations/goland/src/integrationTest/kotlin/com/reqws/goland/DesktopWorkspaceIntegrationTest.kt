@@ -49,7 +49,7 @@ class DesktopWorkspaceIntegrationTest {
         host.assertProjection(this, fixture, phase = "excluded-off")
         host.setExcludedFiles(this, true)
         host.assertProjection(this, fixture, phase = "excluded-on")
-        fixture.createLateFiles()
+        host.createLateFilesThroughExternalEdit(this, fixture, desktop)
         host.assertProjection(this, fixture, phase = "late-files-on")
         host.setExcludedFiles(this, false)
         host.assertProjection(this, fixture, phase = "late-files-off")

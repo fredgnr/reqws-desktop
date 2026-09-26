@@ -254,6 +254,50 @@ internal class IdeScenarioHost {
     }
   }
 
+  fun createLateFilesThroughExternalEdit(driver: Driver, fixture: DesktopProjectionFixture, desktop: DesktopLink) = with(driver) {
+    require(fixture.name == "selection" && fixture.revision == 1L && !fixture.hasLateFiles)
+    val previous = json.readTree(Files.readAllLines(root.resolve("desktop-projections.jsonl")).last())
+    check(previous.path("scenario").asText() == "selection" && previous.path("phase").asText() == "excluded-on" &&
+      previous.path("pid").asLong() == processes.last() && previous.path("revision").asLong() == 1L)
+    val ide = ideFrame()
+    check(requireNotNull(ide.project).getBasePath() == fixture.shell.toString())
+    val frame = cast(ide.component, RemoteCaptureFrame::class)
+    val focus = desktop.focusForExternalEdit(fixture)
+    check(focus.desktopPid != processes.last())
+    waitFor("owned Desktop window has deactivated the test IDE", 30.seconds) {
+      desktop.checkAbort()
+      !frame.isFocused() && !frame.isActive()
+    }
+    val stages = mutableListOf<Map<String, Any>>()
+    fun observe(stage: String, active: Boolean, filesExist: Boolean) {
+      val value = mapOf("stage" to stage, "frameFocused" to frame.isFocused(), "frameActive" to frame.isActive(),
+        "repoDiskExists" to Files.exists(fixture.root.resolve("repo-a/docs/late-repo.txt")),
+        "shellDiskExists" to Files.exists(fixture.shell.resolve("late-shell.txt")))
+      check(value["frameFocused"] == active && value["frameActive"] == active &&
+        value["repoDiskExists"] == filesExist && value["shellDiskExists"] == filesExist) { "External edit focus/file boundary changed" }
+      stages += value
+    }
+    observe("desktop-focused", active = false, filesExist = false)
+    fixture.createLateFiles()
+    observe("files-created", active = false, filesExist = true)
+    // Only G3 models returning from an external file edit. G2 selection changes
+    // never use activation or refresh as a substitute for the manifest watcher.
+    ide.ensureFocused()
+    waitFor("returned to the same test IDE after the external file edit", 30.seconds) {
+      desktop.checkAbort()
+      frame.isFocused() && frame.isActive()
+    }
+    check(requireNotNull(ide.project).getBasePath() == fixture.shell.toString())
+    observe("ide-returned", active = true, filesExist = true)
+    Files.writeString(root.resolve("desktop-external-edit.json"), json.writeValueAsString(mapOf(
+      "schemaVersion" to 1, "sessionId" to System.getProperty("reqws.desktop.session"),
+      "scenario" to fixture.name, "phase" to "late-files-on", "revision" to fixture.revision,
+      "workspaceId" to fixture.workspaceId, "bindingId" to fixture.bindingId, "project" to fixture.shell.toString(),
+      "idePid" to processes.last(), "desktopPid" to focus.desktopPid, "windowId" to focus.windowId,
+      "requestSequence" to focus.requestSequence, "stages" to stages,
+    )), StandardOpenOption.CREATE_NEW)
+  }
+
   fun modelEvidence(driver: Driver, fixture: ProjectionFixture): ModelEvidence = with(driver) {
     withReadAction {
       val roots = service<ProjectRootManager>(singleProject()).getContentRoots().map { it.getPath() }.sorted()
@@ -359,8 +403,10 @@ internal class IdeScenarioHost {
       tree = component.collectExpandedPaths().map { it.path }
       tree.any { it.takeLast(4) == listOf(".reqws", "ide", "goland", "shell-probe.txt") }
     }
-    val file = requireNotNull(utility<RemoteLocalFileSystem>().getInstance().findFileByPath(shell.resolve("shell-probe.txt").toString()))
-    val inContent = service<RemoteProjectFileIndex>(singleProject()).isInContent(file)
+    val inContent = withReadAction {
+      val file = requireNotNull(utility<RemoteLocalFileSystem>().getInstance().findFileByPath(shell.resolve("shell-probe.txt").toString()))
+      service<RemoteProjectFileIndex>(singleProject()).isInContent(file)
+    }
     assertTrue(inContent)
     check(Files.readString(shell.resolve("shell-probe.txt")) == "unbound same-name shell\n")
     assertFalse(Files.exists(shell.resolve("reqws-project.json")))

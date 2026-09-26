@@ -22,6 +22,7 @@ internal class DesktopLink(private val runRoot: Path) {
   private val identities = linkedMapOf<Path, String>()
   private var sequence = 0
   private val fixtures = mutableMapOf<String, DesktopProjectionFixture>()
+  private var externalEditFocused = false
 
   init {
     require(UUID.fromString(sessionId).toString() == sessionId)
@@ -65,7 +66,25 @@ internal class DesktopLink(private val runRoot: Path) {
     }
   }
 
-  private fun exchange(command: Map<String, Any>): JsonNode {
+  fun focusForExternalEdit(fixture: DesktopProjectionFixture): DesktopFocusEvidence {
+    require(fixtures[fixture.name] === fixture && fixture.name == "selection" && fixture.revision == 1L)
+    require(!fixture.hasLateFiles && !externalEditFocused)
+    fixture.verifyInputs()
+    val focus = exchange(mapOf("operation" to "focus-external-edit", "name" to "selection",
+      "phase" to "late-files", "revision" to 1), "focus")
+    require(focus.fieldNames().asSequence().toSet() == setOf("name", "phase", "revision", "workspaceId", "bindingId", "desktopPid", "windowId", "focused"))
+    require(focus.path("name").textValue() == "selection" && focus.path("phase").textValue() == "late-files")
+    require(focus.path("revision").isInt && focus.path("revision").intValue() == 1)
+    require(focus.path("workspaceId").textValue() == fixture.workspaceId && focus.path("bindingId").textValue() == fixture.bindingId)
+    require(focus.path("focused").isBoolean && focus.path("focused").booleanValue())
+    require(focus.path("desktopPid").isIntegralNumber && focus.path("desktopPid").longValue() > 0)
+    require(focus.path("windowId").isInt && focus.path("windowId").intValue() > 0)
+    externalEditFocused = true
+    fixture.verifyInputs()
+    return DesktopFocusEvidence(sequence, focus.path("desktopPid").longValue(), focus.path("windowId").intValue())
+  }
+
+  private fun exchange(command: Map<String, Any>, payload: String = "snapshot"): JsonNode {
     checkAbort()
     sequence += 1
     val request = directory.resolve("request-$sequence.json")
@@ -85,8 +104,8 @@ internal class DesktopLink(private val runRoot: Path) {
     require(answer.path("sessionId").textValue() == sessionId)
     require(answer.path("sequence").isInt && answer.path("sequence").intValue() == sequence)
     check(answer.path("status").textValue() == "passed") { "Desktop request $sequence failed; inspect the private response" }
-    require(answer.fieldNames().asSequence().toSet() == setOf("schemaVersion", "sessionId", "sequence", "status", "snapshot"))
-    return answer.path("snapshot").also { require(it.isObject) }
+    require(answer.fieldNames().asSequence().toSet() == setOf("schemaVersion", "sessionId", "sequence", "status", payload))
+    return answer.path(payload).also { require(it.isObject) }
   }
 
   private fun publish(path: Path, bytes: ByteArray) {
@@ -172,6 +191,8 @@ internal class DesktopLink(private val runRoot: Path) {
     Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
   }
 }
+
+internal data class DesktopFocusEvidence(val requestSequence: Int, val desktopPid: Long, val windowId: Int)
 
 internal class DesktopProjectionFixture(
   private val link: DesktopLink,

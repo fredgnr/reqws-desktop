@@ -15,6 +15,9 @@ export const linkRequestSchema = z.discriminatedUnion('operation', [
   z.object({ ...envelope, operation: z.literal('select'), name: z.enum(linkNames),
     selected: z.array(z.enum(['repo-a', 'repo-b'])).max(2).refine((items) => new Set(items).size === items.length),
   }).strict(),
+  z.object({ ...envelope, operation: z.literal('focus-external-edit'), name: z.literal('selection'),
+    phase: z.literal('late-files'), revision: z.literal(1),
+  }).strict(),
   z.object({ ...envelope, operation: z.literal('finish') }).strict(),
 ]);
 export type LinkRequest = z.infer<typeof linkRequestSchema>;
@@ -25,6 +28,11 @@ export const editorLaunchSchema = z.object({
   boundary: z.literal('os-spawn-only'),
 }).strict();
 export type EditorLaunch = z.infer<typeof editorLaunchSchema>;
+export const desktopFocusSchema = z.object({
+  name: z.literal('selection'), phase: z.literal('late-files'), revision: z.literal(1),
+  workspaceId: z.string().min(1), bindingId: z.uuid(), desktopPid: z.number().int().positive(),
+  windowId: z.number().int().positive(), focused: z.literal(true),
+}).strict();
 
 export async function readLinkJson(filename: string): Promise<unknown> {
   const file = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
