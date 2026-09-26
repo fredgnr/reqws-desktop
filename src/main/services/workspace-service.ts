@@ -7,7 +7,7 @@ import {
   type ReqwsErrorPayload,
 } from '../../shared/errors';
 import {
-  isValidRepositoryName,
+  isUsableRepositoryName,
   repositoryNameKey,
 } from '../../shared/repository-utils';
 import type {
@@ -32,7 +32,9 @@ import {
 } from '../../shared/workspace-utils';
 import type { BranchService } from './branch-service';
 import type { GitRunner } from './git-runner';
+import { workspaceManifestPath as manifestPathFor } from './workspace-file-writer';
 import {
+  assertAbsolutePathSyntax,
   assertCanonicalParentPath,
   assertContainedPath,
   assertIndependentGitRepository,
@@ -68,16 +70,13 @@ export interface OperationProgressPort {
 
 const noProgress: OperationProgressPort = { report: () => undefined };
 
-function manifestPathFor(rootPath: string): string {
-  return path.join(rootPath, '.reqws', 'workspace.json');
-}
-
 async function pathExists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return false;
+    throw workspacePathError(error);
   }
 }
 
@@ -87,6 +86,25 @@ function isNodeError(error: unknown, code: string): boolean {
     'code' in error &&
     (error as NodeJS.ErrnoException).code === code
   );
+}
+
+function workspacePathError(error: unknown): ReqwsError {
+  const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
+  return new ReqwsError({
+    code: 'WORKSPACE_PATH_UNAVAILABLE',
+    message: 'Unable to inspect workspace path.',
+    detail: error instanceof Error ? [code, error.message].filter(Boolean).join(': ') : undefined,
+    stage: 'validating',
+  }, { cause: error });
+}
+
+async function statIfExists(target: string): Promise<Awaited<ReturnType<typeof fs.stat>> | null> {
+  try {
+    return await fs.stat(target);
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return null;
+    throw workspacePathError(error);
+  }
 }
 
 function localPathIdentity(target: string): string {
@@ -99,17 +117,7 @@ async function pathEntryExists(target: string): Promise<boolean> {
     return true;
   } catch (error) {
     if (isNodeError(error, 'ENOENT')) return false;
-    throw error;
-  }
-}
-
-function assertAbsolutePath(target: string, label: string): void {
-  if (!path.isAbsolute(target)) {
-    throw new ReqwsError({
-      code: 'INVALID_INPUT',
-      message: `${label} must be an absolute path.`,
-      stage: 'validating',
-    });
+    throw workspacePathError(error);
   }
 }
 
@@ -639,8 +647,8 @@ export class WorkspaceService {
     rootPath: string;
     workspaceFilePath: string;
   }> {
-    assertAbsolutePath(input.rootPath, 'Workspace root');
-    assertAbsolutePath(input.workspaceFileDirectory, 'Workspace file directory');
+    assertAbsolutePathSyntax(input.rootPath, 'Workspace root', 'validating');
+    assertAbsolutePathSyntax(input.workspaceFileDirectory, 'Workspace file directory', 'validating');
     if (new Set(input.repositoryIds).size !== input.repositoryIds.length) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -663,7 +671,7 @@ export class WorkspaceService {
         stage: 'validating',
       });
     }
-    const rootParent = await fs.stat(path.dirname(rootPath)).catch(() => null);
+    const rootParent = await statIfExists(path.dirname(rootPath));
     if (!rootParent?.isDirectory()) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -674,7 +682,7 @@ export class WorkspaceService {
     const workspaceFileDirectory = await resolveProspectiveRealPath(
       input.workspaceFileDirectory,
     );
-    const fileDirectory = await fs.stat(workspaceFileDirectory).catch(() => null);
+    const fileDirectory = await statIfExists(workspaceFileDirectory);
     if (!fileDirectory?.isDirectory()) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -730,7 +738,7 @@ export class WorkspaceService {
       });
     }
     for (const repository of repositories) {
-      if (!repository || !isValidRepositoryName(repository.name)) {
+      if (!repository || !isUsableRepositoryName(repository.name)) {
         throw new ReqwsError({
           code: 'INVALID_REPOSITORY_NAME',
           message: 'Repository name is unsafe for a local directory.',
@@ -804,8 +812,8 @@ export class WorkspaceService {
   private async readBoundManifest(
     summary: WorkspaceSummary,
   ): Promise<WorkspaceManifest> {
-    assertAbsolutePath(summary.rootPath, 'Workspace root');
-    assertAbsolutePath(summary.workspaceFilePath, 'Workspace file path');
+    assertAbsolutePathSyntax(summary.rootPath, 'Workspace root', 'validating');
+    assertAbsolutePathSyntax(summary.workspaceFilePath, 'Workspace file path', 'validating');
     await this.assertWorkspaceFileDestination(summary.workspaceFilePath);
     const rootStat = await fs.lstat(summary.rootPath);
     const realRoot = await resolveProspectiveRealPath(summary.rootPath);
@@ -859,7 +867,7 @@ export class WorkspaceService {
     const seenCatalogIds = new Set<string>();
     for (const repository of manifest.repositories) {
       if (
-        !isValidRepositoryName(repository.name) ||
+        !isUsableRepositoryName(repository.name) ||
         repository.relativePath !== repository.name
       ) {
         throw new ReqwsError({
@@ -902,14 +910,25 @@ export class WorkspaceService {
     summary: WorkspaceSummary,
   ): Promise<WorkspaceSummary> {
     const missingArtifacts: WorkspaceArtifact[] = [];
-    if (!(await pathExists(summary.rootPath))) {
-      missingArtifacts.push('workspace-root');
-    }
-    if (!(await pathExists(manifestPathFor(summary.rootPath)))) {
-      missingArtifacts.push('manifest');
-    }
-    if (!(await pathExists(summary.workspaceFilePath))) {
-      missingArtifacts.push('workspace-file');
+    try {
+      if (!(await pathExists(summary.rootPath))) {
+        missingArtifacts.push('workspace-root');
+      }
+      if (!(await pathExists(manifestPathFor(summary.rootPath)))) {
+        missingArtifacts.push('manifest');
+      }
+      if (!(await pathExists(summary.workspaceFilePath))) {
+        missingArtifacts.push('workspace-file');
+      }
+    } catch (error) {
+      const failed: WorkspaceSummary = {
+        ...summary,
+        status: 'error',
+        lastError: toReqwsError(error).toPayload(),
+      };
+      delete failed.missingArtifacts;
+      delete failed.statusDetail;
+      return failed;
     }
     if (missingArtifacts.length > 0) {
       const legacyLabels: Record<WorkspaceArtifact, string> = {
@@ -928,7 +947,7 @@ export class WorkspaceService {
     }
     const evaluated = { ...summary };
     delete evaluated.missingArtifacts;
-    if (evaluated.status === 'error') return evaluated;
+    if (evaluated.status === 'error' && evaluated.lastError?.code !== 'WORKSPACE_PATH_UNAVAILABLE') return evaluated;
     const ready: WorkspaceSummary = { ...evaluated, status: 'ready' };
     delete ready.statusDetail;
     delete ready.lastError;
@@ -937,6 +956,9 @@ export class WorkspaceService {
 
   private async loadDetail(summary: WorkspaceSummary): Promise<WorkspaceDetail> {
     const evaluated = await this.evaluateSummary(summary);
+    if (evaluated.lastError?.code === 'WORKSPACE_PATH_UNAVAILABLE') {
+      throw new ReqwsError(evaluated.lastError);
+    }
     if (evaluated.status === 'missing') {
       const manifestFile = manifestPathFor(summary.rootPath);
       if (await pathExists(manifestFile)) {

@@ -34,6 +34,11 @@ export function isValidRepositoryName(name: string): boolean {
   );
 }
 
+/** Writer policy; legacy state/manifest readers retain their v1 acceptance. */
+export function isUsableRepositoryName(name: string): boolean {
+  return isValidRepositoryName(name) && !['.reqws', '.git'].includes(repositoryNameKey(name));
+}
+
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;

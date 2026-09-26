@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { ReqwsError } from '../../shared/errors';
+import { isUsableRepositoryName } from '../../shared/repository-utils';
 import {
   workspaceManifestSchema,
   workspaceRepositorySchema,
@@ -15,7 +16,7 @@ import {
   writeJsonAtomically,
   writeJsonAtomicallyIfAbsent,
 } from './atomic-json-store';
-import { assertCanonicalParentPath } from './path-service';
+import { assertAbsolutePathSyntax, assertCanonicalParentPath } from './path-service';
 
 export interface CodeWorkspaceWriteOptions {
   /** Creation uses false so a concurrent user-created file is never replaced. */
@@ -37,12 +38,7 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 function assertAbsolute(inputPath: string, description: string): string {
-  if (!path.isAbsolute(inputPath)) {
-    throw new ReqwsError({
-      code: 'INVALID_INPUT',
-      message: `${description} must be an absolute path.`,
-    });
-  }
+  assertAbsolutePathSyntax(inputPath, description);
   return path.resolve(inputPath);
 }
 
@@ -88,6 +84,11 @@ export class WorkspaceFileWriter {
       targetPath = assertAbsolute(manifestPath, 'Manifest path');
       await assertCanonicalParentPath(targetPath, 'Manifest path');
       parsed = parseManifest(manifest);
+      for (const repository of parsed.repositories) {
+        if (!isUsableRepositoryName(repository.name) || !isUsableRepositoryName(repository.relativePath)) {
+          throw new Error('Repository path overlaps reserved workspace metadata.');
+        }
+      }
     } catch (error) {
       if (error instanceof ReqwsError && error.code === 'INVALID_INPUT') {
         throw new ReqwsError({

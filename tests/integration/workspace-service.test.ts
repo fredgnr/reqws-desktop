@@ -1,11 +1,14 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApplicationActivityGate } from '../../src/main/services/application-activity-gate';
 import { BranchService } from '../../src/main/services/branch-service';
 import { GitRunner } from '../../src/main/services/git-runner';
 import {
   WorkspaceService,
+  WorkspaceMutationCoordinator,
   manifestPathFor,
   type AppStatePort,
   type WorkspaceFilePort,
@@ -127,10 +130,134 @@ describe('WorkspaceService integration', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all([
       fs.rm(root, { recursive: true, force: true }),
       origin.cleanup(),
     ]);
+  });
+
+  it.each(['.reqws', '.REQWS', '.git', '.GIT'])('rejects reserved repository %s before cloning or writing', async (name) => {
+    const source = path.join(origin.seedPath, 'workspace.json');
+    await fs.writeFile(source, '{"userOwned":true}');
+    expect((await git.run(['add', 'workspace.json'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    expect((await git.run(['commit', '-m', 'user workspace file'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    expect((await git.run(['push'], { cwd: origin.seedPath })).exitCode).toBe(0);
+    stateStore.state.repositories[0]!.name = name;
+    const clone = vi.spyOn(git, 'clone');
+    const write = vi.spyOn(files, 'writeManifest');
+    await expect(createWorkspace()).rejects.toMatchObject({ code: 'INVALID_REPOSITORY_NAME', stage: 'validating' });
+    expect(clone).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(await fs.readFile(source, 'utf8')).toBe('{"userOwned":true}');
+    expect((await git.run(['status', '--porcelain'], { cwd: origin.seedPath })).stdout).toBe('');
+    expect(await fs.readdir(path.join(root, 'features'))).toEqual([]);
+    expect(await fs.readdir(path.join(root, 'workspaces'))).toEqual([]);
+    expect(stateStore.state.workspaces).toEqual([]);
+  });
+
+  it('reuses a logically removed repository with a safe SSH URI origin', async () => {
+    const created = await createWorkspace();
+    const target = path.join(created.rootPath, 'order-api');
+    const url = 'ssh://git@example.invalid/team/order-api.git';
+    expect((await git.run(['remote', 'set-url', 'origin', url], { cwd: target })).exitCode).toBe(0);
+    await service.removeRepository({ workspaceId: created.id, catalogRepositoryId: 'repo-order' });
+    stateStore.state.repositories[0]!.url = url;
+    // The identity check uses real Git. Branch network work is outside this local fixture.
+    vi.spyOn(git, 'fetch').mockResolvedValue(undefined);
+    const clone = vi.spyOn(git, 'clone');
+    const added = await service.addRepository({ workspaceId: created.id, repositoryId: 'repo-order' });
+    expect(added.repositories.map((repo) => repo.name)).toEqual(['order-api']);
+    expect(clone).not.toHaveBeenCalled();
+    expect(await git.originUrlMatches(target, url)).toBe(true);
+  });
+
+  it('kills a stalled clone process group before cleaning staging and continuing the queue', async () => {
+    const gate = new ApplicationActivityGate();
+    let firstClone = true;
+    let cloneChild: ChildProcessWithoutNullStreams | undefined;
+    let staging: string | undefined;
+    let descendantPid: number | undefined;
+    let closed = false;
+    const stalledGit = await GitRunner.fromPath(git.gitPath, (command, args, options) => {
+      if (args[0] !== 'clone' || !firstClone) return spawn(command, args, options);
+      firstClone = false;
+      staging = path.dirname(args.at(-1)!);
+      cloneChild = spawn(process.execPath, ['--eval', `
+        const { spawn } = require('node:child_process');
+        const worker = spawn(process.execPath, ['--eval', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"], { stdio: ['ignore', 'pipe', 'inherit'] });
+        process.on('SIGTERM', () => {});
+        worker.stdout.once('data', () => console.log(worker.pid));
+        setInterval(() => {}, 1000);
+      `], options);
+      cloneChild.stdout.on('data', (chunk) => { descendantPid = Number(String(chunk).trim()); });
+      cloneChild.once('close', () => { closed = true; });
+      return cloneChild;
+    }, { allowLocalRepositoryPaths: true, cloneIdleTimeoutMs: 1_000, activityGate: gate });
+    service = new WorkspaceService(stateStore, files, stalledGit, new BranchService(stalledGit), undefined, new WorkspaceMutationCoordinator(gate));
+    const first = createWorkspace();
+    const failure = expect(first).rejects.toMatchObject({ code: 'GIT_PROCESS_TIMEOUT', stage: 'cloning' });
+    try {
+      await vi.waitFor(() => expect(descendantPid).toBeGreaterThan(0));
+      expect(() => gate.acquireShutdown()).toThrow();
+      expect(closed).toBe(false);
+      expect(await fs.stat(staging!)).toBeTruthy();
+      const next = createWorkspace();
+      await failure;
+      expect(closed).toBe(true);
+      expect(() => process.kill(cloneChild!.pid!, 0)).toThrow();
+      await vi.waitFor(() => expect(() => process.kill(descendantPid!, 0)).toThrow());
+      await expect(fs.stat(staging!)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await next).status).toBe('ready');
+      gate.acquireShutdown()();
+      expect(stateStore.state.workspaces).toHaveLength(1);
+    } finally {
+      if (!closed && cloneChild?.pid) process.kill(-cloneChild.pid, 'SIGKILL');
+      await first.catch(() => undefined);
+    }
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM', 'EIO'])('distinguishes path inspection failure %s from missing files', async (code) => {
+    const created = await createWorkspace();
+    const originalAccess = fs.access.bind(fs);
+    const failure = Object.assign(new Error('injected inspection failure'), { code });
+    vi.spyOn(fs, 'access').mockImplementation(async (target, mode) => {
+      if (target === created.rootPath) throw failure;
+      return originalAccess(target, mode);
+    });
+    const listed = await service.list();
+    expect(listed).toHaveLength(1);
+    if (code === 'ENOENT') {
+      expect(listed[0]).toMatchObject({ status: 'missing', missingArtifacts: ['workspace-root'] });
+    } else {
+      expect(listed[0]).toMatchObject({ status: 'error', lastError: { code: 'WORKSPACE_PATH_UNAVAILABLE', detail: expect.stringContaining(code) } });
+      expect(listed[0]?.missingArtifacts).toBeUndefined();
+      await expect(service.get(created.id)).rejects.toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE' });
+      await expect(service.sync(created.id)).rejects.toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE' });
+    }
+    vi.restoreAllMocks();
+    expect((await service.list())[0]?.status).toBe('ready');
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM', 'EIO'])('preserves parent stat failure %s before workspace writes', async (code) => {
+    const clone = vi.spyOn(git, 'clone');
+    for (const directory of [path.join(root, 'features'), path.join(root, 'workspaces')]) {
+      const failure = Object.assign(new Error('injected stat failure'), { code });
+      const originalStat = fs.stat.bind(fs);
+      const inspection = vi.spyOn(fs, 'stat').mockImplementation(async (target, options) => {
+        if (target === directory) throw failure;
+        return originalStat(target, options);
+      });
+      const error = await createWorkspace().catch((reason: unknown) => reason);
+      if (code === 'ENOENT') {
+        expect(error).toMatchObject({ code: 'INVALID_INPUT', stage: 'validating' });
+      } else {
+        expect(error).toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE', stage: 'validating', detail: expect.stringContaining(code), cause: failure });
+      }
+      expect(clone).not.toHaveBeenCalled();
+      expect(await fs.readdir(path.join(root, 'features'))).toEqual([]);
+      inspection.mockRestore();
+    }
   });
 
   async function createWorkspace() {

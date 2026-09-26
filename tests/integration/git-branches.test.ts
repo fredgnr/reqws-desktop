@@ -38,6 +38,7 @@ describe('local Git branch integration', () => {
     const clonePath = path.join(source.rootPath, 'workspace-repo');
     await git.clone(source.originPath, clonePath);
 
+    await gitOutput(git, clonePath, ['config', 'branch.autoSetupMerge', 'always']);
     const result = await new BranchService(git).checkoutFeatureBranch(
       clonePath,
       'main',
@@ -51,6 +52,14 @@ describe('local Git branch integration', () => {
     expect(await gitOutput(git, clonePath, ['rev-parse', 'HEAD'])).toBe(
       await gitOutput(git, clonePath, ['rev-parse', 'origin/main']),
     );
+    for (const field of ['remote', 'merge']) {
+      expect((await git.run(['config', '--get', `branch.feature/new-work.${field}`], { cwd: clonePath })).exitCode).toBe(1);
+    }
+    const mainBefore = await gitOutput(git, source.originPath, ['rev-parse', 'refs/heads/main']);
+    await gitOutput(git, clonePath, ['push', '-u', 'origin', 'feature/new-work']);
+    expect(await gitOutput(git, clonePath, ['rev-parse', '--abbrev-ref', '@{upstream}'])).toBe('origin/feature/new-work');
+    expect(await gitOutput(git, source.originPath, ['rev-parse', 'refs/heads/main'])).toBe(mainBefore);
+    expect(await gitOutput(git, source.originPath, ['for-each-ref', '--format=%(refname)', 'refs/heads/'])).toBe('refs/heads/feature/new-work\nrefs/heads/main');
   });
 
   it('tracks an existing remote feature branch', async () => {
@@ -98,6 +107,7 @@ describe('local Git branch integration', () => {
     expect(await gitOutput(git, clonePath, ['branch', '--show-current'])).toBe(
       'feature/local-existing',
     );
+    expect(await gitOutput(git, clonePath, ['rev-parse', '--abbrev-ref', '@{upstream}'])).toBe('origin/main');
   });
 
   it('maps a missing remote default branch to a stable error', async () => {

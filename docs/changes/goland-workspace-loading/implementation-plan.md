@@ -2,12 +2,14 @@
 title: GoLand 工作加载集合任务拆分与 Agent 协作
 type: technical-design
 status: active
-updated: 2026-09-19
+updated: 2026-09-26
 ---
 
 # GoLand 工作加载集合任务拆分与 Agent 协作
 
 本计划把共享契约先串行冻结，再将独立实现并行推进，最后统一接线和验收，避免多个 agent 争写同一模型或 GUI。用户已决定直接替换历史实现；所有任务都不承担新旧共存、迁移、回退和多版本兼容。
+
+本文保留工作加载改造的阶段背景；当前 IDE 兼容与回归范围以[兼容性与自动化计划](../ide-plugin-compatibility-automation/README.md)为准，下文历史单目标安排不覆盖后续政策。本次子代理职责澄清不改变产品、API 或验收范围。
 
 ## 1. 依赖与并行结论
 
@@ -29,11 +31,11 @@ S1、S2、S3 可以在接口冻结后使用不同文件范围并行；S3 的生�
 
 | 角色 | 权限与交付 |
 |---|---|
-| Main / Integrator | 契约和状态的最终责任人；分配精确文件、整合补丁、运行最终检查；独占远端提交/推送和候选状态发布。 |
+| Main / Integrator | 当前用户任务的顶层主 Agent，对契约和状态最终负责；分配精确文件、整合补丁、运行最终检查；独占翻译委派/校验、英文写回与基线确认，以及远端提交/推送和候选状态发布。 |
 | Explorer | 只读指定目录/SDK/source；返回路径、事实与风险；不改代码或规范。 |
 | Worker | 仅写任务授权文件；可以在独立 checkout 中改实现/直接测试；不得自改 API 门禁、其他 worker 文件或远端状态。 |
 | Reviewer | 与实现 worker 分离，按 diff 审阅契约、安全/所有权和测试有效性；只读报告，不以 worker 自评代替。 |
-| Translation subagent | 仅 UI 文案变化时按 reqws-i18n 执行，同主 agent 模型、reasoning 至少 high；只返回结构化 JSON，由 owner 校验写回。 |
+| Translation subagent | 仅真实 UI 翻译 delta 时由顶层 Main/Integrator 委派；模型、reasoning 和输出以[翻译契约](../../../.agents/skills/reqws-i18n/references/translation-contract.md)为准，始终只读，只返回结构化 JSON，不获得写入权。 |
 | GUI operator | 单独获准的隔离环境内操作 Desktop/GoLand；按 Project 面板取证，明确人机协作和阻塞。 |
 
 编程 subagent 同样优先继承主 agent 实际配置、reasoning 至少 high，不从显示名猜 API 模型 ID。运行时不能验证模型/权限时停止该受限代理操作，主 agent 可以继续已获授权的独立工作；不能谎报启动了不可用的 subagent。协作与翻译沿用[Agent 指南](../../guides/agent-workflow.md)及其链接的技能。
@@ -68,7 +70,7 @@ S1、S2、S3 可以在接口冻结后使用不同文件范围并行；S3 的生�
 
 写入范围：`src/main/services/` 中本任务新增服务及必要的 editor-launcher/workspace 接线、`src/main/ipc/`、`src/preload/`、相关 renderer 页面/组件、Desktop tests；S0 中的 shared contract 只能提交变更建议，由 Main 处理。Main 在分派时明确上述目录内的具体文件，不授予整个仓库写权。
 
-文案仅在本任务真正改变 catalog 时启动只读翻译子代理；由本 Worker 校验和写入各 locale，其他 worker 不改同一 catalog。
+文案仅在本任务真正改变 catalog 时进入翻译流程。Worker 只修改明确分配的中文源文案及调用方，交回 key、当前 source 和必要上下文；`src/renderer/locales/en-US.json` 与 `scripts/i18n-baseline.json` 不在其写入范围。顶层 Main/Integrator 整合中文变更并收回相关源文案写权后，执行 scan、委派只读翻译子代理、校验结果、写回英文并执行 apply/check；后续源文案变化需要重新审查。其他 worker 不改同一 catalog。翻译门禁未满足时保持英文与基线不变，记录受影响的完成条件和测试缺口，不把它们标为通过；独立工作可继续。
 
 最小回归：初次准备与同绑定复用、foreign/partial shell 不覆盖、expectedRevision 冲突、原子写失败、all/selected/empty、成员增删求交规则、UI 错误/取消、启动参数及活动门禁；VS Code/Cursor 与成员 manifest 不因选择变化而改写。新读写路径的安全回归当步执行。
 
@@ -125,6 +127,7 @@ S1、S2、S3 可以在接口冻结后使用不同文件范围并行；S3 的生�
 必读：本任务段、需求、技术方案相关章节、当前 AGENTS。
 模型：继承主 agent 实际模型配置；reasoning 至少 high；不可确认就停止代理操作。
 允许写：<精确路径列表>；禁止写：<共享/其他 owner 文件>。
+文案：只交回获分配的中文源文案及上下文；不自行翻译、不写 en-US.json 或 i18n-baseline.json、不运行 i18n:apply，由顶层 Main/Integrator 按翻译契约处理。
 共享接口：<S0 冻结的本版接口>；允许破坏历史接口；跨当前子任务改签名仍先报告 Main，不能并发覆盖。
 历史清理：不保留旧模式/迁移/回退/旧版本支持；旧文件删除按 Main 的依赖清单执行，不能删除用户数据。
 实现真实功能及直接回归；不做 Git 生命周期/语言功能，不改 VCS mappings。
@@ -132,4 +135,4 @@ S1、S2、S3 可以在接口冻结后使用不同文件范围并行；S3 的生�
 返回：变更文件/实现摘要、实际检查及命中用例、风险与阻塞、给 Main 的接线需求。
 ```
 
-任务模板是分工工具，不构成后台执行承诺。没有 subagent 能力时由主 agent 按相同依赖串行完成，保持独立审查缺口的真实标记。
+任务模板是本需求的分工工具，不构成后台执行承诺，也不要求所有仓库任务都启动多个代理。没有编程 subagent 能力时，主 agent 可按相同依赖串行完成已授权的独立开发工作，并如实保留独立审查缺口；缺少满足门禁的翻译子代理时，仍须停止英文与基线写回，不能借串行执行自行翻译。

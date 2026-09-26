@@ -4,6 +4,10 @@ Use this contract only for a ReqWS catalog translation delta; [SKILL.md](../SKIL
 
 ## Model and ownership gate
 
+In this contract, `main agent` means the top-level Main/Integrator responsible for the user's task, not an implementation worker or a nested delegator. It is the model reference and the sole owner of translator delegation, output validation, `en-US.json` writeback, and `i18n:apply` baseline acknowledgement. Worker ownership of UI files or Chinese source copy does not include these responsibilities. Workers hand off their assigned source changes, requested keys, and relevant context; they must not generate translations, write English, or acknowledge the baseline themselves.
+
+Before translation delegation, the Main/Integrator integrates the source changes and takes back write ownership of the affected source copy. A subsequent source change requires a new gated review; do not reuse a response from a worker's older checkout.
+
 Use a designated translation subagent with the same model as the main agent. Prefer runtime-supported inheritance of the main agent's model; when an explicit model is required, use the main agent's current configured model identifier. Do not hard-code a model family or version, invent an API model ID from a display name, or substitute a different default model. Keep reasoning at `high` or above; sharing the model does not lower that floor.
 
 Give the subagent read-only access and bounded context: repository path, requested keys in catalog order, current source/target values, relevant neighboring copy, terminology, and this output contract. Do not grant repository write ownership. Runtime configuration/metadata, including confirmed model inheritance, is the evidence for model matching and reasoning level; the subagent's prose assertion alone does not establish it.

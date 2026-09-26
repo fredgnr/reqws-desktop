@@ -10,6 +10,7 @@ import { isSafeRepositoryUrl } from '../../shared/repository-utils';
 export const GIT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 export const GIT_LS_REMOTE_TIMEOUT_MS = 30_000;
 export const GIT_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+export const GIT_CLONE_IDLE_TIMEOUT_MS = 15 * 60_000;
 
 const GIT_RESOLUTION_TIMEOUT_MS = 5_000;
 const OUTPUT_TRUNCATION_MARKER = Buffer.from(
@@ -56,6 +57,7 @@ export type GitErrorCode =
 export interface GitRunOptions {
   cwd?: string;
   timeoutMs?: number;
+  idleTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
@@ -65,6 +67,9 @@ export interface GitRunnerOptions {
   activityGate?: import('./application-activity-gate').ApplicationActivityGate;
   /** Test-only escape hatch for isolated local bare-repository fixtures. */
   allowLocalRepositoryPaths?: boolean;
+  /** Test seams for termination and long clone inactivity windows. */
+  cloneIdleTimeoutMs?: number;
+  signalProcess?: (child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) => void;
 }
 
 export interface GitRunResult {
@@ -287,6 +292,12 @@ export class GitRunner {
   }
 
   async run(args: readonly string[], options: GitRunOptions = {}): Promise<GitRunResult> {
+    const result = await this.runProcess(args, options);
+    return { ...result, stdout: redactGitOutput(result.stdout) };
+  }
+
+  /** Raw stdout stays inside this service, before command-specific validation. */
+  private async runProcess(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
     const release = this.options.activityGate?.enter();
     let childStarted = false;
     let childClosed = false;
@@ -297,6 +308,9 @@ export class GitRunner {
       let settled = false;
       let killTimer: NodeJS.Timeout | undefined;
       let timeout: NodeJS.Timeout | undefined;
+      let idleTimer: NodeJS.Timeout | undefined;
+      let terminating = false;
+      let processFailure: unknown;
       let child: ChildProcessWithoutNullStreams;
 
       try {
@@ -306,6 +320,7 @@ export class GitRunner {
           shell: false,
           stdio: 'pipe',
           windowsHide: true,
+          detached: process.platform !== 'win32',
         });
         childStarted = child.pid !== undefined;
       } catch (error) {
@@ -320,6 +335,7 @@ export class GitRunner {
       const cleanupTimers = (): void => {
         if (timeout) clearTimeout(timeout);
         if (killTimer) clearTimeout(killTimer);
+        if (idleTimer) clearTimeout(idleTimer);
       };
 
       const rejectOnce = (error: unknown): void => {
@@ -335,28 +351,71 @@ export class GitRunner {
         );
       };
 
+      const signal = (value: NodeJS.Signals): void => {
+        try {
+          if (this.options.signalProcess) this.options.signalProcess(child, value);
+          else if (process.platform !== 'win32' && child.pid !== undefined) process.kill(-child.pid, value);
+          else child.kill(value);
+        } catch (error) {
+          processFailure ??= error;
+        }
+      };
+
+      const terminate = (): void => {
+        if (terminating || childClosed) return;
+        terminating = true;
+        if (timeout) clearTimeout(timeout);
+        if (idleTimer) clearTimeout(idleTimer);
+        killTimer = setTimeout(() => signal('SIGKILL'), 2_000);
+        killTimer.unref();
+        signal('SIGTERM');
+      };
+
+      const resetIdleTimeout = (): void => {
+        if (options.idleTimeoutMs === undefined || terminating || childClosed) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          timedOut = true;
+          terminate();
+        }, options.idleTimeoutMs);
+        idleTimer.unref();
+      };
+
       child.stdout.on('data', (chunk: Buffer | string) => {
+        resetIdleTimeout();
         const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         stdout.append(value);
         options.onStdout?.(redactGitOutput(value.toString('utf8')));
       });
 
       child.stderr.on('data', (chunk: Buffer | string) => {
+        resetIdleTimeout();
         const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         stderr.append(value);
         options.onStderr?.(redactGitOutput(value.toString('utf8')));
       });
 
-      child.once('error', rejectOnce);
+      child.on('error', (error) => {
+        if (!childStarted) {
+          rejectOnce(error);
+          return;
+        }
+        processFailure ??= error;
+        terminate();
+      });
       child.once('close', (code) => {
         childClosed = true;
         release?.();
         if (settled) return;
+        if (processFailure && !timedOut) {
+          rejectOnce(processFailure);
+          return;
+        }
         settled = true;
         cleanupTimers();
         resolve({
           exitCode: code ?? (timedOut ? 124 : 1),
-          stdout: redactGitOutput(stdout.toString()),
+          stdout: stdout.toString(),
           stderr: redactGitOutput(stderr.toString()),
           timedOut,
         });
@@ -365,12 +424,11 @@ export class GitRunner {
       if (options.timeoutMs !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill('SIGTERM');
-          killTimer = setTimeout(() => child.kill('SIGKILL'), 2_000);
-          killTimer.unref();
+          terminate();
         }, options.timeoutMs);
         timeout.unref();
       }
+      resetIdleTimeout();
     }).finally(() => {
       // A failed kill/send can emit error while Git is still alive. Keep its
       // lease until close; only failed spawns have no child left to protect.
@@ -414,11 +472,18 @@ export class GitRunner {
     const result = await this.run([
       'clone',
       '--no-hardlinks',
+      '--progress',
       '--',
       url,
       destination,
-    ]);
-    if (result.timedOut || result.exitCode !== 0) {
+    ], { idleTimeoutMs: this.options.cloneIdleTimeoutMs ?? GIT_CLONE_IDLE_TIMEOUT_MS });
+    if (result.timedOut) {
+      throw new GitServiceError('GIT_PROCESS_TIMEOUT', 'Repository clone stopped after prolonged inactivity.', {
+        detail: resultDetail(result),
+        stage: 'cloning',
+      });
+    }
+    if (result.exitCode !== 0) {
       throw new GitServiceError('CLONE_FAILED', 'Repository clone failed.', {
         detail: resultDetail(result),
         stage: 'cloning',
@@ -462,13 +527,17 @@ export class GitRunner {
     return result.exitCode === 0;
   }
 
-  async getOriginUrl(repositoryPath: string): Promise<string | null> {
-    const result = await this.run(['remote', 'get-url', 'origin'], {
+  private async getOriginUrl(repositoryPath: string): Promise<string | null> {
+    const result = await this.runProcess(['remote', 'get-url', 'origin'], {
       cwd: repositoryPath,
       timeoutMs: GIT_DEFAULT_TIMEOUT_MS,
     });
     if (result.timedOut || result.exitCode !== 0) return null;
-    return result.stdout.trim();
+    const url = result.stdout.trim();
+    return isSafeRepositoryUrl(url)
+      || (this.options.allowLocalRepositoryPaths === true && isSafeLocalRepositoryPath(url))
+      ? url
+      : null;
   }
 
   /** Intentionally conservative: no URL rewriting, canonicalization, or guessing. */

@@ -6,7 +6,7 @@
 
 | 分类 | 状态 | 说明 |
 |---|---|---|
-| [使用与开发指南](guides/README.md) | active | 提供当前版本的安装使用、开发验证、Agent 协作和维护流程。 |
+| [使用与开发指南](guides/README.md) | active | 提供图解入门、安装更新、GoLand 加载指南，以及开发验证、Agent 协作和维护流程。 |
 | [需求与变更](changes/README.md) | active | 按需求聚合需求说明、技术方案、测试材料和交付记录。 |
 | [项目规范](standards/README.md) | active | 约定文档治理、IDE 插件开发与测试边界，并提供精简模板。 |
 | [历史参考](reference/README.md) | archived | 保存冻结的原始方案和交接资产，不代表当前实现。 |
