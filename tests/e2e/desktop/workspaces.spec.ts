@@ -108,32 +108,33 @@ test('D04 creates a real two-repository workspace with independent Git and disk 
   await expect(desktop.page.getByRole('row').filter({ has: desktop.page.getByText('two-repositories', { exact: true }) })).toContainText('Ready');
 });
 
-test('D05 adds and logically removes a repository while preserving its Git directory and user files', async ({ desktop }) => {
+test('D05 adds a third repository and logically removes it while preserving its Git directory and user files', async ({ desktop }) => {
   await addRepository(desktop, 'members-alpha');
   await addRepository(desktop, 'members-beta');
-  const root = await createWorkspace(desktop, 'membership', ['members-alpha']);
+  await addRepository(desktop, 'members-gamma');
+  const root = await createWorkspace(desktop, 'membership', ['members-alpha', 'members-beta']);
   await desktop.page.getByRole('button', { name: 'View details for membership', exact: true }).click();
   const detail = desktop.page.getByRole('dialog', { name: 'membership', exact: true });
   await detail.getByText('Manage workspace', { exact: true }).click();
-  const added = (await desktop.state()).repositories.find((repository) => repository.name === 'members-beta')!;
+  const added = (await desktop.state()).repositories.find((repository) => repository.name === 'members-gamma')!;
   await detail.getByLabel('Choose a repository to add', { exact: true }).selectOption(added.id);
   await detail.getByRole('button', { name: 'Add', exact: true }).click();
   await closeOperation(desktop, 'Adding repository');
-  await expectMembers(desktop, root, 'membership', ['members-alpha', 'members-beta']);
-  const userFile = path.join(root, 'members-beta', 'user-notes.txt');
+  await expectMembers(desktop, root, 'membership', ['members-alpha', 'members-beta', 'members-gamma']);
+  const userFile = path.join(root, 'members-gamma', 'user-notes.txt');
   await writeFile(userFile, 'User work must survive logical removal.\n', { flag: 'wx' });
-  const head = await git(desktop, path.join(root, 'members-beta'), ['rev-parse', 'HEAD']);
-  const row = detail.locator('.repo-manage-row').filter({ hasText: 'members-beta' });
+  const head = await git(desktop, path.join(root, 'members-gamma'), ['rev-parse', 'HEAD']);
+  const row = detail.locator('.repo-manage-row').filter({ hasText: 'members-gamma' });
   await row.getByRole('button', { name: 'Remove', exact: true }).click();
-  const confirmation = desktop.page.getByRole('dialog', { name: 'Remove “members-beta” from the workspace?', exact: true });
+  const confirmation = desktop.page.getByRole('dialog', { name: 'Remove “members-gamma” from the workspace?', exact: true });
   await expect(confirmation).toContainText('does not delete the local repository folder');
   await confirmation.getByRole('button', { name: 'Remove repository', exact: true }).click();
   await closeOperation(desktop, 'Removing repository');
-  await expectMembers(desktop, root, 'membership', ['members-alpha']);
-  expect((await lstat(path.join(root, 'members-beta/.git'))).isDirectory()).toBe(true);
+  await expectMembers(desktop, root, 'membership', ['members-alpha', 'members-beta']);
+  expect((await lstat(path.join(root, 'members-gamma/.git'))).isDirectory()).toBe(true);
   expect(await readFile(userFile, 'utf8')).toBe('User work must survive logical removal.\n');
-  expect(await git(desktop, path.join(root, 'members-beta'), ['rev-parse', 'HEAD'])).toBe(head);
-  expect((await desktop.state()).repositories.map((repository) => repository.name)).toEqual(['members-alpha', 'members-beta']);
+  expect(await git(desktop, path.join(root, 'members-gamma'), ['rev-parse', 'HEAD'])).toBe(head);
+  expect((await desktop.state()).repositories.map((repository) => repository.name)).toEqual(['members-alpha', 'members-beta', 'members-gamma']);
 });
 
 test('D06 transport failure before publication cleans staging and permits a real retry', async ({ desktop }) => {
