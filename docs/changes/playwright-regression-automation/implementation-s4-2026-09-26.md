@@ -115,7 +115,7 @@ Desktop 全检在授权环境为五百一十八项通过、一项原有 hosted-o
 S4 私有运行目录标识 `reqws-local-ide-0n2gb5n4`，2026-09-26 13:35–13:38 UTC：
 
 - 三个必需 JUnit selector 全部执行并通过，零跳过、零失败；六个不同 IDE PID 均通过并正常退出。
-- 二十条逐步投影证据通过；退出后的四个工作区均通过原生 `modules.xml`、`.iml`、根/marker、journal 和用户模块保留门禁，`savedProjectionProofs=4`。
+- 二十条逐步投影证据通过；退出后的四个工作区均通过原生 `modules.xml`、`.iml`、根/marker 和 journal 保存门禁，`savedProjectionProofs=4`。selection 和两个 invalid 场景另验证用户模块保留；Trust 场景没有用户模块 fixture，不计入该项覆盖。
 - Desktop Playwright 1/1 通过，零跳过、零 flaky；十个请求创建四个工作区并完成全部选择转换，Desktop 正常退出。
 - 只读 `verify-report --suite desktop` 在同一干净宿主提交核验通过；原始 ZIP 与安装副本保持一致。专用 profile 已释放后才开始后续 legacy 回归。
 - Trust 结果保留第 4 节的限定：仅该 context 禁用固定 IDE 自带的可选 Go Linter；实际 Safe Mode/Trust Project 流程与所有 IDE 错误门禁均保留。
