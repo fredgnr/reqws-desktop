@@ -60,6 +60,18 @@
       "prompt": "翻译子代理自称与 main agent 同模型，但运行时显示实际模型不同，或既无法确认继承关系也无法取得主 Agent 的配置。候选译文和占位符看起来正确。可以写回吗？只回答判断。",
       "expected_output": "Rejects mismatched or unestablished same-model configuration despite plausible output or self-identification, preserves English and baseline, reports the blocker, and does not translate in the main agent or silently select another model.",
       "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "顶层 Main/Integrator 将创建工作区 UI 和 zh-CN.json 的指定 key 分配给 Desktop Worker。Worker 想在自己的 checkout 中委派翻译、校验并写入 en-US.json，然后运行 i18n:apply，认为自己是该子任务的 main agent。按翻译契约说明谁负责委派、校验和写回，以及源文案怎样交接；不要实际调用代理或改文件。",
+      "expected_output": "Reserves translator delegation, output validation, English writeback, and baseline acknowledgement for the top-level Main/Integrator. The worker only hands off assigned Chinese source/caller changes, keys, and context. The Main/Integrator integrates the source and takes back affected source write ownership before scan/delegation, validates against current source, then alone writes reviewed English and runs apply/check. UI/source ownership does not confer translation or baseline authority; subsequent source changes require a new gated review.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "运行时确认顶层 Main/Integrator 使用模型 A，而实现 Worker 使用模型 B。Worker 声称嵌套 translator 继承了 B 且 reasoning=high，所以满足“同主 Agent 模型”；候选 JSON 正确。顶层 Main 能否写回？若无法启动与 A 相同模型的翻译子代理，能否由 Main 串行翻译完成？只说明判断，不执行。",
+      "expected_output": "Uses the top-level Main/Integrator model A as the reference, not the worker or immediate delegator model B. Rejects the mismatched translation despite high reasoning and valid-looking JSON; the Main/Integrator must arrange a gated read-only translator matching A and validate its result. If that translator is unavailable, preserves English/baseline, reports the blocked translation and affected completion gaps, and continues only independent authorized non-translation work. Serial coding fallback never authorizes main-agent translation.",
+      "files": []
     }
   ]
 }
