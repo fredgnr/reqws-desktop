@@ -4,6 +4,8 @@
 
 以下 build 和通过状态描述本需求原候选；后续最低 262、无上限及固定环境自动化开发见[兼容需求包](../ide-plugin-compatibility-automation/README.md)，未验证的新候选不能继承本包的通过结论。
 
+2026-09-26 的 [Playwright S4 实跑](../playwright-regression-automation/implementation-s4-2026-09-26.md)发现初始 JPS 加载与原生落盘竞态；当前技术方案补充了用户单独批准的 JPS 等待接口例外。原候选验收结论保留为历史记录，不代表该后续修复候选通过。
+
 - 状态：active（S0–S4 原候选开发、自动化、独立复核及 G1–G7 隔离 GUI 验收完成；后续详情展示改版另经浏览器设计与交互验证，尚未发布）。
 - 更新日期：2026-09-26。
 - 设计源码基线：`cb25cbba2b58fc767d48cbbc001004082e7de390`；本批实现以 `589b26a` 为起点，源码身份以本需求提交的 Git diff 为准。Desktop 与插件版本统一为 0.1.4。

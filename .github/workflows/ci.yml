@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       docsOnly: ${{ steps.impact.outputs.docsOnly }}
+      desktop: ${{ steps.impact.outputs.desktop }}
       plugin: ${{ steps.impact.outputs.plugin }}
       localIntegrationRecommended: ${{ steps.impact.outputs.localIntegrationRecommended }}
     steps:
@@ -112,6 +113,42 @@ jobs:
       - name: Run project checks
         run: npm run check
 
+  desktop-e2e:
+    name: Desktop Electron regression
+    needs: impact
+    if: ${{ needs.impact.outputs.desktop == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      REQWS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Desktop dependencies
+        uses: ./.github/actions/setup-desktop
+        with:
+          electron: 'true'
+          electron-cache-write: 'true'
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run one-worker Electron regression without retries
+        run: python3 scripts/desktop_e2e.py --mode source
+      - name: Verify deliberate preload failure and complete evidence
+        run: python3 scripts/desktop_e2e.py --mode negative
+      - name: Preserve Electron reports and failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-desktop-e2e
+          path: |
+            test-results
+            playwright-report
+          if-no-files-found: error
+          retention-days: 7
+
   macos-package:
     needs: impact
     if: ${{ needs.impact.outputs.docsOnly != 'true' }}
@@ -120,6 +157,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI: 'true'
+      REQWS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
     steps:
       - name: Check out source
@@ -139,17 +177,33 @@ jobs:
       - name: Package and verify the arm64 app
         run: npm run package:macos -- --skip-ci --skip-check --arch arm64
 
+      - name: Smoke the same verified app on the disposable hosted runner
+        run: python3 scripts/desktop_e2e.py --mode packaged --app out/ReqWS-darwin-arm64/ReqWS.app
+
+      - name: Preserve packaged startup reports and failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-desktop-packaged
+          path: test-results
+          if-no-files-found: error
+          retention-days: 7
+
   # Preserve the existing required check name. Neither a failed nor a cancelled
   # dependency may become a green aggregate; all original checks still run.
   checks:
     name: Checks and macOS package smoke
     if: ${{ always() }}
-    needs: [impact, docs, project-checks, macos-package]
+    needs: [impact, docs, project-checks, macos-package, desktop-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: read
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Report repository cache usage
         continue-on-error: true
         env:
@@ -170,23 +224,29 @@ jobs:
               print(f"| {ref} | {key} | {entry['size_in_bytes'] / 1024**2:.1f} |")
           PY
 
-      - name: Require both Desktop gates
+      - name: Require all applicable Desktop gates
         env:
           IMPACT_RESULT: ${{ needs.impact.result }}
           DOCS_ONLY: ${{ needs.impact.outputs.docsOnly }}
+          DESKTOP_REQUIRED: ${{ needs.impact.outputs.desktop }}
           DOCS_RESULT: ${{ needs.docs.result }}
           CHECK_RESULT: ${{ needs.project-checks.result }}
           PACKAGE_RESULT: ${{ needs.macos-package.result }}
+          E2E_RESULT: ${{ needs.desktop-e2e.result }}
         run: |
-          test "$IMPACT_RESULT" = success
-          if [[ "$DOCS_ONLY" == true ]]; then
-            test "$DOCS_RESULT" = success
-            test "$CHECK_RESULT" = skipped
-            test "$PACKAGE_RESULT" = skipped
-          else
-            test "$CHECK_RESULT" = success
-            test "$PACKAGE_RESULT" = success
-          fi
+          python3 - <<'PYTHON'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from ide_ci import aggregate_desktop
+          def boolean(name):
+              value = os.environ.get(name)
+              if value not in ('true', 'false'):
+                  raise ValueError(f'Missing or invalid impact output: {name}')
+              return value == 'true'
+          print(aggregate_desktop({'docsOnly': boolean('DOCS_ONLY'), 'desktop': boolean('DESKTOP_REQUIRED')},
+            {key: os.environ.get(name) for key, name in [('impact', 'IMPACT_RESULT'), ('docs', 'DOCS_RESULT'),
+              ('checks', 'CHECK_RESULT'), ('package', 'PACKAGE_RESULT'), ('e2e', 'E2E_RESULT')]}))
+          PYTHON
 
   plugin-targets:
     name: Freeze official GoLand targets
@@ -235,7 +295,9 @@ jobs:
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: |
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
-            verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+            verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+          python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
+            --version "$PLUGIN_VERSION" --output integrations/goland/build/reports/api-baseline
           python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
           python3 scripts/stage_ide_candidate.py --input "dist/release/ReqWS-${PLUGIN_VERSION}-goland-plugin.zip" --version "$PLUGIN_VERSION"
       - name: Verify versioned download cache paths

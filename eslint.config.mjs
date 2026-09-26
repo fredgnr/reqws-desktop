@@ -8,6 +8,8 @@ export default tseslint.config(
     ignores: [
       '.vite/**',
       'coverage/**',
+      'test-results/**',
+      'playwright-report/**',
       'integrations/goland/**',
       'node_modules/**',
       'out/**',

@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ from urllib.parse import urlsplit
 from check_ide_test_reports import check_reports
 from ide_compatibility import ROOT, digest, read_policy, write_json
 from plugin_release import validate_plugin
+from desktop_ide import assert_desktop_source, execute_linked, initialize_link
 
 PROFILE_MARKER = '.reqws-ide-profile.json'
 PROJECT_STATE = ('workspace', 'projects', 'options/recentProjects.xml', 'options/recentProjectDirectories.xml',
@@ -45,6 +48,25 @@ def checked_path(path):
         if item.is_symlink() and str(item) not in {'/tmp', '/var'}:
             raise EnvironmentBlocked('UNSAFE_PATH', 'Local run/profile paths must not traverse user symlinks.')
     return path.resolve()
+
+
+def stage_candidate(archive, run_root, expected_digest):
+    # Starter's ZIP reader opens archives read/write and may remove its input on
+    # unpack failure. It must never receive the caller's original candidate.
+    archive = checked_path(archive)
+    directory = checked_path(run_root) / 'candidate'
+    directory.mkdir(mode=0o700)
+    target = directory / 'plugin.zip'
+    source_fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(source_fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError('The candidate is not a regular archive')
+        target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(target_fd, 'wb') as output:
+            shutil.copyfileobj(source, output)
+    if digest(archive) != expected_digest or digest(target) != expected_digest:
+        raise ValueError('Candidate bytes changed while staging the private installer copy')
+    return target
 
 
 def initialize_profile(path, policy):
@@ -106,7 +128,16 @@ def isolate_project_state(profile, run_root):
     checked_path(config / 'migrate.config').write_text('properties intellij.first.ide.session\n')
 
 
-def session_closed(run_root, mode):
+def session_closed(run_root, mode, suite='legacy'):
+    if suite == 'desktop':
+        try:
+            session = json.loads((run_root / 'desktop-link/session.json').read_text())
+            closed = json.loads((run_root / 'desktop-session-closed.json').read_text())
+            if closed != {'schemaVersion': 1, 'sessionId': session['sessionId'],
+                          'processesStopped': True, 'ownedRegistryChecked': True}:
+                return False
+        except (OSError, ValueError, KeyError):
+            return False
     if not (run_root / 'ide-launch-requested').exists():
         return True  # e.g. dependency/compilation failure before any IDE launch
     if mode == 'prepare':
@@ -154,15 +185,24 @@ def execute(command, log_path, timeout, environment):
             raise
 
 
-def verify_report(path, archive, version):
+def verify_report(path, archive, version, suite='legacy'):
     report = json.loads(Path(path).read_text())
     policy = read_policy()
     if (report.get('scope') != 'local-ide-integration' or report.get('status') != 'passed'
+            or report.get('suite', 'legacy') != suite
+            or suite == 'desktop' and (report.get('desktop', {}).get('tests', {}).get('passed') != 1
+                                      or report.get('results', {}).get('suite') != 'desktop'
+                                      or report.get('results', {}).get('savedProjectionProofs') != 4)
             or report.get('candidate', {}).get('sha256') != digest(archive)
             or report['candidate'].get('version') != version
             or report.get('actualIde') != report.get('ide')
             or report.get('ide') != {'product': 'GO', 'version': policy['uiTestIdeVersion'], 'build': policy['uiTestIdeBuild']}):
         raise ValueError('No passing local UI evidence for these exact bytes, plugin version and representative IDE.')
+    if suite == 'desktop':
+        source = report['desktop'].get('identity')
+        if not isinstance(source, dict):
+            raise ValueError('Desktop source identity is missing from the linked report.')
+        assert_desktop_source(source)
     return report
 
 
@@ -173,13 +213,16 @@ def main():
     parser.add_argument('--archive', type=Path)
     parser.add_argument('--version')
     parser.add_argument('--report', type=Path)
+    parser.add_argument('--suite', choices=['legacy', 'desktop'], default='legacy')
     args = parser.parse_args()
+    if args.command == 'prepare' and args.suite != 'legacy':
+        parser.error('--suite applies only to run or verify-report')
     if args.command in {'run', 'verify-report'} and (not args.archive or not args.version):
         parser.error('--archive and --version are required for the exact candidate')
     if args.command == 'verify-report':
         if not args.report:
             parser.error('--report is required')
-        verify_report(args.report, args.archive, args.version)
+        verify_report(args.report, args.archive, args.version, args.suite)
         print('Local integration report matches the exact candidate; no IDE was started.')
         return 0
     if not args.profile:
@@ -193,11 +236,16 @@ def main():
               'status': 'not-run', 'startedAt': datetime.now(timezone.utc).isoformat(),
               'ide': {'product': 'GO', 'version': policy['uiTestIdeVersion'], 'build': policy['uiTestIdeBuild']},
               'starterVersion': policy['starterVersion'], 'execution': 'local-only',
-              'authorization': 'unverified', 'actualIde': None, 'results': None}
+              'authorization': 'unverified', 'actualIde': None, 'results': None, 'suite': args.suite}
     report_path = run_root / 'report.json'
     write_json(report_path, report)
     try:
         local_only()
+        if args.command == 'run' and args.suite == 'desktop':
+            try:
+                assert_desktop_source()
+            except ValueError as error:
+                raise EnvironmentBlocked('DESKTOP_SOURCE_NOT_FROZEN', str(error)) from error
         server = optional_license_server()
         report['licenseServerConfigured'] = server
         profile, metadata = initialize_profile(args.profile, policy)
@@ -214,6 +262,8 @@ def main():
                 report['candidate'] = {'path': str(archive), 'sha256': candidate['sha256'], 'version': args.version}
                 if not server and not (profile / 'preparation-session.json').is_file():
                     raise EnvironmentBlocked('AUTHORIZATION_PREPARATION_REQUIRED', 'Run prepare with this profile and sign in in the dedicated IDE, or use an optional authorized License Server.')
+                installation_archive = stage_candidate(archive, run_root, candidate['sha256'])
+                report['installationArchive'] = {'path': str(installation_archive), 'sha256': candidate['sha256']}
             isolate_project_state(profile, run_root)
             write_json(report_path, report)
             command = [str(ROOT / 'integrations/goland/gradlew'), '-p', str(ROOT / 'integrations/goland'),
@@ -221,20 +271,33 @@ def main():
                        '--no-daemon', '--no-configuration-cache', '--console=plain',
                        f'-PreqwsLocalIdeProfile={profile}', f'-PreqwsLocalIdeRunRoot={run_root}']
             if args.command == 'run':
-                command += [f'-PreqwsPluginArchive={archive}', f'-PreleaseVersion={args.version}',
-                            f"-PreqwsPluginSha256={candidate['sha256']}"]
+                command += [f'-PreqwsPluginArchive={installation_archive}', f'-PreleaseVersion={args.version}',
+                            f"-PreqwsPluginSha256={candidate['sha256']}", f'-PreqwsLocalIdeSuite={args.suite}']
+                if args.suite == 'desktop':
+                    session_id = initialize_link(run_root)
+                    command += [f'-PreqwsDesktopSession={session_id}']
             print(f'Local {args.command}; private report: {report_path}', flush=True)
             if args.command == 'prepare':
                 print('Use JetBrains Account in the dedicated GoLand window, then quit that test IDE normally. Do not import/sync personal settings or open real projects.', flush=True)
             write_json(active, {'runRoot': str(run_root), 'mode': args.command})
             try:
-                code = execute(command, run_root / 'host.log', 3900, {**os.environ,
-                    'REQWS_LOCAL_IDE_RUN_ROOT': str(run_root), 'REQWS_LOCAL_IDE_PROFILE': str(profile)})
+                environment = {**os.environ, 'REQWS_LOCAL_IDE_RUN_ROOT': str(run_root), 'REQWS_LOCAL_IDE_PROFILE': str(profile)}
+                if args.command == 'run' and args.suite == 'desktop':
+                    report['desktop'] = execute_linked(command, run_root, 3500, environment)
+                    code = 0
+                else:
+                    code = execute(command, run_root / 'host.log', 3900, environment)
+            except Exception:
+                blocked = run_root / 'environment-blocked.json'
+                if blocked.is_file():
+                    detail = json.loads(blocked.read_text())
+                    raise EnvironmentBlocked(detail['code'], detail['message']) from None
+                raise
             finally:
-                if session_closed(run_root, args.command):
+                if session_closed(run_root, args.command, args.suite):
                     active.unlink()
             report['exitCode'] = code
-            if args.command == 'run' and digest(archive) != candidate['sha256']:
+            if args.command == 'run' and any(digest(path) != candidate['sha256'] for path in (archive, installation_archive)):
                 raise ValueError('Candidate bytes changed; signed and unsigned artifacts cannot share evidence.')
             blocked = run_root / 'environment-blocked.json'
             if blocked.is_file():
@@ -249,7 +312,7 @@ def main():
                 write_json(profile / 'preparation-session.json', {'status': 'session-closed-not-verified', 'ide': report['ide']})
                 report['status'] = 'preparation-closed'
             else:
-                report['results'] = check_reports(run_root / 'junit', marker)
+                report['results'] = check_reports(run_root / 'junit', marker, args.suite)
                 actual = json.loads((run_root / 'actual-ide.json').read_text())
                 if actual != report['ide']:
                     raise ValueError('Actual IDE differs from the fixed representative.')

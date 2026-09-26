@@ -17,8 +17,10 @@ def main():
     subprocess.run([str(ROOT / 'integrations/goland/gradlew'), '-p', str(ROOT / 'integrations/goland'),
                     '--no-configuration-cache',
                     'compileIntegrationTestKotlin', 'test', 'verifyBaselineTestReports', 'verifyForbiddenProductionSymbols', 'verifyPluginProjectConfiguration',
-                    'verifyPluginStructure', 'verifyPlugin', 'exportPluginArchivePath', f'-PreleaseVersion={version}'], check=True)
+                    'verifyPluginStructure', 'exportPluginArchivePath', f'-PreleaseVersion={version}'], check=True)
     archive = (ROOT / 'integrations/goland/build/release/plugin-archive.txt').read_text().strip()
+    subprocess.run([sys.executable, str(ROOT / 'scripts/run_ide_verifier.py'), '--baseline',
+                    '--archive', archive, '--version', version, '--output', str(output / 'baseline')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/run_ide_verifier.py'), '--snapshot', str(output / 'targets.json'),
                     '--archive', archive, '--version', version, '--output', str(output / 'results')], check=True)
     print(f'Compatibility reports: {output}')

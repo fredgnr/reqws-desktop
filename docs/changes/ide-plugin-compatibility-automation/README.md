@@ -9,9 +9,11 @@
 | [开发记录](implementation-2026-09-21.md) | active | 记录 S1–S3 开发、用例迁移映射、运行入口及当时未执行的验证。 |
 | [验证记录](verification-2026-09-21.md) | active | 记录平台/API 回归、早期授权阻塞及 CI 分片日志验证；不代替完整 V 验收。 |
 | [本机回归记录](local-verification-2026-09-22.md) | active | 记录获准启动 IDE 后的自动场景、宿主隔离修复和剩余验收边界。 |
-| [本机集成入口](local-integration.md) | active | 说明专用环境账号授权准备、显式 ZIP 自动集成、状态隔离和独立报告。 |
+| [本机集成入口](local-integration.md) | active | 说明专用环境授权准备、显式 ZIP 原宿主与 S4 Desktop 联动入口、隔离和独立报告。 |
 
 ## 当前状态
+
+2026-09-26 用户为 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 批准单独的受控 API 例外，范围与软超时限制见 [S4 记录](../playwright-regression-automation/implementation-s4-2026-09-26.md#6-已授权-api-例外)。原始 Verifier 失败级别全部保留，由统一入口对精确调用点、字节码和原始报告裁决；最低/固定两目标和后续完整 API 矩阵均继续执行，不扩大到其他内部或实验 API。
 
 2026-09-22 已移除 API 矩阵的 `max-parallel` 限制，工作流测试要求不再设置该字段；并发由 GitHub 的可用 runner 和账户配额决定。每周两组候选仍按阶段验证，全部必需目标和同一 ZIP 的汇总校验继续保留。此前开发记录中的双并发描述仅代表当时实现。
 
