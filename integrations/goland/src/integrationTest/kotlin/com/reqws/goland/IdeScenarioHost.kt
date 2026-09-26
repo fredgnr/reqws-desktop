@@ -15,7 +15,8 @@ import com.intellij.driver.sdk.isPluginLoaded
 import com.intellij.driver.sdk.openToolWindow
 import com.intellij.driver.sdk.singleProject
 import com.intellij.driver.sdk.ui.components.common.ideFrame
-import com.intellij.driver.sdk.ui.components.common.welcomeScreen
+import com.intellij.driver.sdk.ui.components.go.goWelcomeScreen
+import com.intellij.driver.sdk.ui.components.elements.tree
 import com.intellij.driver.sdk.ui.components.common.toolwindows.projectView
 import com.intellij.driver.sdk.waitFor
 import com.intellij.driver.sdk.isProjectOpened
@@ -372,15 +373,80 @@ internal class IdeScenarioHost {
     }
   }
 
-  fun reopenProject(driver: Driver, fixture: ProjectionFixture) = with(driver) {
-    val name = singleProject().getName()
-    assertEquals(fixture.shell.toString(), singleProject().getBasePath())
-    invokeAction("CloseProject", false)
-    waitFor("project closed without terminating the IDE process", 1.minutes) { getOpenProjects().isEmpty() }
-    welcomeScreen().clickRecentProject(name)
-    waitFor("same fixture reopened in the existing IDE process", 2.minutes) {
-      getOpenProjects().singleOrNull()?.getBasePath() == fixture.shell.toString()
+  fun reopenProject(driver: Driver, fixture: DesktopProjectionFixture) = with(driver) {
+    require(fixture.name == "selection" && fixture.revision == 7L && fixture.selected.isEmpty())
+    val project = fixture.shell.toRealPath().toString()
+    val original = singleProject()
+    assertEquals(project, original.getBasePath())
+    assertTrue(original.isOpen())
+    val pid = utility<RemoteCaptureManagementFactory>().getRuntimeMXBean().getPid()
+    check(pid == processes.last())
+    val previous = json.readTree(Files.readAllLines(root.resolve("desktop-projections.jsonl")).last())
+    check(previous.path("scenario").asText() == fixture.name && previous.path("phase").asText() == "user-root-empty" &&
+      previous.path("revision").asLong() == fixture.revision && previous.path("pid").asLong() == pid &&
+      previous.path("bindingId").asText() == fixture.bindingId)
+    val config = Path.of(requireNotNull(utility<LocalIdeSystemProperties>().getProperty("idea.config.path"))).toRealPath()
+    check(config == Path.of(System.getProperty("reqws.local.profile")).resolve("config").toRealPath())
+    val welcomeProject = config.resolve("projects/GoLandWorkspace").toString()
+    val stages = mutableListOf<Map<String, Any?>>()
+    fun record(stage: Map<String, Any?>) {
+      check(utility<RemoteCaptureManagementFactory>().getRuntimeMXBean().getPid() == pid)
+      stages += stage + ("pid" to pid)
+      Files.writeString(root.resolve("desktop-project-reopen-diagnostic.json"), json.writeValueAsString(mapOf(
+        "project" to project, "stages" to stages,
+      )))
     }
+    invokeAction("CloseProject", false)
+    // 262 keeps a real welcome workspace open after closing the fixture project.
+    // Only that exact dedicated-profile workspace may remain in this process.
+    waitFor("fixture closed without terminating the IDE process", 1.minutes) {
+      !original.isOpen() && getOpenProjects().map { it.getBasePath() }.all { it == welcomeProject }
+    }
+    record(mapOf("stage" to "closed", "originalOpen" to original.isOpen(),
+      "openProjects" to getOpenProjects().map { it.getBasePath() }))
+    val welcome = goWelcomeScreen()
+    val recent = welcome.tree("//div[@accessiblename='Recent Projects']")
+    val exactPath = Regex("(^|\\s)${Regex.escape(project)}(?=\\s|$)")
+    var paths = recent.collectExpandedPaths()
+    try {
+      waitFor("unique canonical fixture path in the real Recent Projects tree", 30.seconds) {
+        paths = recent.collectExpandedPaths()
+        paths.count { it.path.lastOrNull()?.let(exactPath::containsMatchIn) == true } == 1
+      }
+    } finally {
+      // Preserve every actual row even when a renderer truncates the path or the
+      // identity is ambiguous; never guess the first or similarly named project.
+      record(mapOf("stage" to "recent-projects-observed", "tree" to paths.map {
+        mapOf("row" to it.row, "path" to it.path)
+      }))
+    }
+    val selected = paths.single { it.path.lastOrNull()?.let(exactPath::containsMatchIn) == true }
+    check(recent.collectExpandedPaths().map { it.row to it.path } == paths.map { it.row to it.path }) {
+      "Recent Projects changed before the bound UI action"
+    }
+    check(getOpenProjects().map { it.getBasePath() } == listOf(welcomeProject))
+    val title = cast(welcome.component, RemoteCaptureFrame::class).getTitle()
+    check(title == "GoLandWorkspace – Welcome to GoLand")
+    // The diagnostic observation becomes the selected stage only after all
+    // identity checks; the final record is emitted only after actual reopening.
+    stages.removeAt(stages.lastIndex)
+    record(mapOf("stage" to "recent-project-selected", "welcomeProject" to welcomeProject,
+      "frameTitle" to title, "tree" to paths.map { mapOf("row" to it.row, "path" to it.path) },
+      "selectedRow" to selected.row, "selectedPath" to selected.path))
+    recent.doubleClickRow(selected.row)
+    waitFor("same fixture reopened in the existing IDE process", 2.minutes) {
+      getOpenProjects().singleOrNull()?.let { it.getBasePath() == project && it.isOpen() && it.isInitialized() } == true
+    }
+    assertFalse(original.isOpen())
+    record(mapOf("stage" to "reopened", "originalOpen" to original.isOpen(), "projectOpen" to singleProject().isOpen(),
+      "projectInitialized" to singleProject().isInitialized(), "openProjects" to getOpenProjects().map { it.getBasePath() }))
+    Files.writeString(root.resolve("desktop-project-reopen.json"), json.writeValueAsString(mapOf(
+      "schemaVersion" to 1, "sessionId" to System.getProperty("reqws.desktop.session"),
+      "scenario" to fixture.name, "phase" to "reopened-empty", "revision" to fixture.revision,
+      "workspaceId" to fixture.workspaceId, "bindingId" to fixture.bindingId, "project" to project,
+      "idePid" to pid, "profileConfig" to config.toString(), "previousScreenshot" to previous.path("screenshot").asText(),
+      "stages" to stages,
+    )), StandardOpenOption.CREATE_NEW)
   }
 
   fun vcsMappings(driver: Driver): List<Map<String, String>> = with(driver) {

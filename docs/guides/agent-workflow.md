@@ -2,7 +2,7 @@
 title: ReqWS Agent 协作指南
 type: guide
 status: active
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # ReqWS Agent 协作指南
@@ -44,7 +44,7 @@ updated: 2026-09-26
 | 改动 | 本地验证范围 |
 |---|---|
 | 仅文档/指令 | `npm run docs:check`、diff 检查；变更 skill 时另查 metadata、参考链接和相关 eval 场景。 |
-| Desktop 代码 | 迭代时运行受影响测试；交付前在环境支持时运行一次 `npm run check`。 |
+| Desktop 代码 | 迭代时运行受影响低层测试及必要 Electron E2E；交付前在环境支持时运行一次 `npm run check`。 |
 | GoLand 代码、descriptor 或构建 | `npm run check:goland`；需要交付 ZIP 时再打包。 |
 | TS/Kotlin 共享 manifest 契约 | Desktop 与 GoLand 两侧检查。 |
 | 安装、GUI 或发布行为 | 对应环境和 exact-head 证据，遵守既有验收计划及确认边界。 |
@@ -52,6 +52,8 @@ updated: 2026-09-26
 插件每次迭代记录最低系列 262 的影响；CI 保留编译、Light/Heavy 平台与 API 等全部自动门禁，只有完整 Starter/Driver 进程/UI 移到[本机入口](../changes/ide-plugin-compatibility-automation/local-integration.md)。`HeavyPlatformTestCase` 不是完整 IDE 场景。专用 profile 可交互登录 JetBrains Account、可选 License Server，不复制个人配置或假定继承登录。CI 与本机报告分开，签名产物不能借用签名前 UI 结果；更高版本无需 GUI/Computer Use 矩阵。用户要求只开发时记录未运行项，不执行授权准备。隔离 Starter 不激活日常用户 IDE 安装技能。
 
 文档 checker 不覆盖全部 skill 参考链接，也不执行模型行为评测。静态检查、模型 eval、完整应用测试和真实 GUI 证据是不同结论。不得通过更改 CI、跳过失败用例或清除翻译基线来减少工作；没有相关改动或新证据需求时不重复执行无关的大型检查。
+
+普通业务回归优先使用 `test:e2e` 的实际 selector；跨进程投影使用获准本机的 `check:goland:desktop`。旧手工步骤是否退出由[逐项替代登记](../changes/playwright-regression-automation/manual-inventory.md)和 [V 实证](../changes/playwright-regression-automation/verification-v-2026-09-26.md)决定，不能仅凭测试文件存在或 CI 绿色撤销。保留原生风险时说明具体断言、候选和最小补验步骤；不重复已由等价自动化证明的操作。每轮 Electron 构建/trace 和专用 IDE profile 各由一个任务独占，运行期间冻结输入，退出确认后才能交接。
 
 ## 5. 可直接使用的任务提示词
 

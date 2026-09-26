@@ -42,6 +42,16 @@ class DesktopIdeTests(unittest.TestCase):
         self.workspaces.mkdir(parents=True)
         self.session = initialize_link(self.root)
         self.directory = self.root / 'desktop-link'
+        profile = tempfile.TemporaryDirectory(prefix='reqws-profile-fixture-')
+        self.addCleanup(profile.cleanup)
+        self.profile = Path(profile.name).resolve()
+        (self.profile / 'config').mkdir()
+        self.profile_id = str(uuid.uuid4())
+        policy = read_policy()
+        ide = {'product': 'GO', 'version': policy['uiTestIdeVersion'], 'build': policy['uiTestIdeBuild']}
+        (self.profile / '.reqws-ide-profile.json').write_text(json.dumps({
+            'schemaVersion': 1, 'purpose': 'reqws-local-ide-authorization', 'id': self.profile_id, **ide}))
+        (self.root / 'report.json').write_text(json.dumps({'profileId': self.profile_id, 'ide': ide}))
 
     def transcript(self):
         sequence = 0
@@ -447,6 +457,21 @@ class DesktopIdeTests(unittest.TestCase):
             'stages': [{'stage': stage, 'frameFocused': active, 'frameActive': active,
                 'repoDiskExists': exists, 'shellDiskExists': exists} for stage, active, exists in [
                     ('desktop-focused', False, False), ('files-created', False, True), ('ide-returned', True, True)]]}))
+        snapshot = snapshots['selection', 7]
+        config = self.profile / 'config'
+        welcome = str(config / 'projects/GoLandWorkspace')
+        path = ['Recent Projects', 'goland ' + snapshot['shell']]
+        (self.root / 'desktop-project-reopen.json').write_text(json.dumps({
+            'schemaVersion': 1, 'sessionId': self.session, 'scenario': 'selection', 'phase': 'reopened-empty',
+            'revision': 7, 'workspaceId': snapshot['workspaceId'], 'bindingId': snapshot['bindingId'],
+            'project': snapshot['shell'], 'idePid': 101, 'profileConfig': str(config),
+            'previousScreenshot': proofs[12]['screenshot'], 'stages': [
+                {'stage': 'closed', 'pid': 101, 'originalOpen': False, 'openProjects': [welcome]},
+                {'stage': 'recent-project-selected', 'pid': 101, 'welcomeProject': welcome,
+                 'frameTitle': 'GoLandWorkspace – Welcome to GoLand', 'tree': [{'row': 0, 'path': path}],
+                 'selectedRow': 0, 'selectedPath': path},
+                {'stage': 'reopened', 'pid': 101, 'originalOpen': False, 'projectOpen': True,
+                 'projectInitialized': True, 'openProjects': [snapshot['shell']]}]}))
         return proofs
 
     def screenshot(self, name, project=None, pid=100):
@@ -521,6 +546,64 @@ class DesktopIdeTests(unittest.TestCase):
             with self.subTest(name=name):
                 path.write_bytes(image)
                 with self.assertRaises(ValueError): validate_png(path.read_bytes())
+
+    def test_reopen_requires_closed_original_unique_canonical_recent_row_and_same_pid(self):
+        self.transcript()
+        self.write_proofs()
+        pids = [str(pid) for pid in range(100, 109)]
+        self.assertEqual(validate_projection_evidence(self.root, pids), PROJECTION_PROOFS)
+        filename = self.root / 'desktop-project-reopen.json'
+        original = read_message(filename)
+        variants = []
+        for key, value in [('schemaVersion', True), ('sessionId', str(uuid.uuid4())), ('revision', 7.0),
+                           ('idePid', 102), ('bindingId', 'foreign'), ('project', '/wrong'),
+                           ('previousScreenshot', str(self.root / 'selection-13.png'))]:
+            changed = copy.deepcopy(original); changed[key] = value; variants.append(changed)
+        for index, key, value in [
+            (0, 'originalOpen', True), (0, 'openProjects', [original['project']]),
+            (0, 'openProjects', ['/unrelated/project']), (0, 'pid', 101.0),
+            (1, 'selectedRow', True), (1, 'selectedRow', 1), (1, 'selectedPath', ['goland']),
+            (1, 'welcomeProject', '/foreign/config/projects/GoLandWorkspace'),
+            (1, 'frameTitle', 'Other IDE'), (2, 'pid', 102), (2, 'originalOpen', True),
+            (2, 'projectOpen', False), (2, 'projectInitialized', 1), (2, 'openProjects', []),
+        ]:
+            changed = copy.deepcopy(original); changed['stages'][index][key] = value; variants.append(changed)
+        for path in [['goland /private/.../goland'], ['goland ' + original['project'] + '-other'],
+                     [original['project'], 'child-without-path']]:
+            changed = copy.deepcopy(original)
+            changed['stages'][1]['tree'][0]['path'] = path
+            changed['stages'][1]['selectedPath'] = path
+            variants.append(changed)
+        changed = copy.deepcopy(original)
+        changed['stages'][1]['tree'].append({**changed['stages'][1]['tree'][0], 'row': 1})
+        variants.append(changed)
+        # Even a second correctly marked profile for the same fixed IDE is not
+        # this run's profile. Replacing all mutually consistent paths must fail.
+        foreign = tempfile.TemporaryDirectory(prefix='reqws-foreign-profile-fixture-')
+        self.addCleanup(foreign.cleanup)
+        foreign_profile = Path(foreign.name).resolve()
+        (foreign_profile / 'config').mkdir()
+        foreign_marker = read_message(self.profile / '.reqws-ide-profile.json')
+        foreign_marker['id'] = str(uuid.uuid4())
+        (foreign_profile / '.reqws-ide-profile.json').write_text(json.dumps(foreign_marker))
+        changed = copy.deepcopy(original)
+        changed['profileConfig'] = str(foreign_profile / 'config')
+        foreign_welcome = str(foreign_profile / 'config/projects/GoLandWorkspace')
+        changed['stages'][0]['openProjects'] = [foreign_welcome]
+        changed['stages'][1]['welcomeProject'] = foreign_welcome
+        variants.append(changed)
+        changed = copy.deepcopy(changed)
+        changed['profileConfig'] = str(foreign_profile / 'missing/config')
+        changed['stages'][0]['openProjects'] = [str(foreign_profile / 'missing/config/projects/GoLandWorkspace')]
+        changed['stages'][1]['welcomeProject'] = changed['stages'][0]['openProjects'][0]
+        variants.append(changed)
+        changed = copy.deepcopy(original); changed['stages'] = changed['stages'][1:]; variants.append(changed)
+        changed = copy.deepcopy(original); changed['stages'].reverse(); variants.append(changed)
+        for changed in variants:
+            filename.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError): validate_projection_evidence(self.root, pids)
+        filename.unlink()
+        with self.assertRaises(FileNotFoundError): validate_projection_evidence(self.root, pids)
 
     def test_g4_user_root_survives_two_to_empty_before_project_reopen_and_cold_recovery(self):
         self.transcript()
@@ -625,7 +708,7 @@ class DesktopIdeTests(unittest.TestCase):
         archive = self.root / 'candidate.zip'; archive.write_bytes(b'fixture')
         policy = read_policy()
         ide = {'product': 'GO', 'version': policy['uiTestIdeVersion'], 'build': policy['uiTestIdeBuild']}
-        report = {'scope': 'local-ide-integration', 'status': 'passed', 'ide': ide, 'actualIde': ide,
+        report = {'scope': 'local-ide-integration', 'status': 'passed', 'ide': ide, 'actualIde': ide, 'profileId': self.profile_id,
                   'candidate': {'sha256': digest(archive), 'version': '0.1.7'}}
         path = self.root / 'report.json'; path.write_text(json.dumps(report))
         verify_report(path, archive, '0.1.7')
@@ -647,7 +730,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('acceptanceVersion', 5), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))

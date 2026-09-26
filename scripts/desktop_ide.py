@@ -15,11 +15,12 @@ import xml.etree.ElementTree as ET
 import zlib
 
 from desktop_e2e import ROOT, all_tests, cleanup_owned_processes, identity, read_json, validate_report
+from ide_compatibility import read_policy
 
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 5
+ACCEPTANCE_VERSION = 6
 CAPTURE_KIND = 'swing-root-pane-print-all'
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
@@ -187,6 +188,7 @@ def validate_projection_evidence(run_root, process_ids):
         raise ValueError('Unbound shell must use its own independent IDE process')
     screenshots = [proof.get('screenshot') for proof in proofs] + [ordinary.get('screenshot')] + validate_error_ui_evidence(run_root, proofs, snapshots)
     validate_external_edit_evidence(run_root, proofs, snapshots)
+    validate_project_reopen_evidence(run_root, proofs, snapshots)
     if any(not isinstance(path, str) for path in screenshots) or len(set(screenshots)) != len(screenshots):
         raise ValueError('Every IDE observation requires its own fresh screenshot')
     for name in NAMES:
@@ -333,6 +335,72 @@ def validate_external_edit_evidence(run_root, proofs, snapshots):
     if value.get('stages') != expected or any(type(item.get(key)) is not bool for item in value['stages']
             for key in ('frameFocused', 'frameActive', 'repoDiskExists', 'shellDiskExists')):
         raise ValueError('External files were not created while the IDE was inactive and observed after returning')
+
+
+def validate_project_reopen_evidence(run_root, proofs, snapshots):
+    value = read_message(run_root / 'desktop-project-reopen.json')
+    session = read_message(run_root / 'desktop-link/session.json')['sessionId']
+    snapshot = snapshots['selection', 7]
+    selection = [proof for proof in proofs if proof.get('scenario') == 'selection']
+    if (set(value) != {'schemaVersion', 'sessionId', 'scenario', 'phase', 'revision', 'workspaceId', 'bindingId',
+                      'project', 'idePid', 'profileConfig', 'previousScreenshot', 'stages'}
+            or type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 1
+            or type(value.get('revision')) is not int or value['revision'] != 7
+            or type(value.get('idePid')) is not int or value['idePid'] <= 0
+            or value.get('sessionId') != session or value.get('scenario') != 'selection'
+            or value.get('phase') != 'reopened-empty' or value.get('project') != snapshot['shell']
+            or any(value.get(key) != snapshot[key] for key in ('workspaceId', 'bindingId'))
+            or len(selection) != 17 or selection[12].get('phase') != 'user-root-empty'
+            or selection[13].get('phase') != 'reopened-empty'
+            or any(proof.get('pid') != value['idePid'] or proof.get('revision') != 7 for proof in selection[12:14])
+            or value.get('previousScreenshot') != selection[12].get('screenshot')):
+        raise ValueError('Missing bound same-process project close/reopen evidence')
+    config = value.get('profileConfig')
+    if (not isinstance(config, str) or not Path(config).is_absolute() or Path(config).name != 'config'
+            or not Path(config).is_dir() or Path(config).resolve() != Path(config)
+            or Path(config).is_relative_to(run_root) or run_root.is_relative_to(Path(config).parent)):
+        raise ValueError('Project reopen did not identify the dedicated profile config')
+    # report.json is written with profileId before launching either child and is
+    # retained for later verify-report. Never derive profile identity from the
+    # reopen record itself, or a coordinated config/welcome substitution passes.
+    report = read_message(run_root / 'report.json')
+    marker = read_message(Path(config).parent / '.reqws-ide-profile.json')
+    policy = read_policy()
+    ide = {'product': 'GO', 'version': policy['uiTestIdeVersion'], 'build': policy['uiTestIdeBuild']}
+    if (not isinstance(report.get('profileId'), str) or not report['profileId']
+            or marker.get('id') != report['profileId'] or report.get('ide') != ide
+            or type(marker.get('schemaVersion')) is not int or marker['schemaVersion'] != 1
+            or marker.get('purpose') != 'reqws-local-ide-authorization'
+            or any(marker.get(key) != expected for key, expected in ide.items())):
+        raise ValueError('Project reopen profile does not match this run and the fixed IDE')
+    welcome = str(Path(config) / 'projects/GoLandWorkspace')
+    stages = value.get('stages')
+    if (not isinstance(stages, list) or len(stages) != 3
+            or any(not isinstance(stage, dict) or type(stage.get('pid')) is not int
+                   or stage['pid'] != value['idePid'] for stage in stages)):
+        raise ValueError('Project close/reopen must preserve the actual IDE process')
+    closed, selected, reopened = stages
+    if (set(closed) != {'stage', 'pid', 'originalOpen', 'openProjects'} or closed.get('stage') != 'closed'
+            or closed.get('originalOpen') is not False or closed.get('openProjects') not in ([], [welcome])
+            or reopened != {'stage': 'reopened', 'pid': value['idePid'], 'originalOpen': False,
+                            'projectOpen': True, 'projectInitialized': True, 'openProjects': [snapshot['shell']]}
+            or any(type(reopened.get(key)) is not bool for key in ('originalOpen', 'projectOpen', 'projectInitialized'))):
+        raise ValueError('The original project did not close and the exact fixture did not reopen')
+    if (set(selected) != {'stage', 'pid', 'welcomeProject', 'frameTitle', 'tree', 'selectedRow', 'selectedPath'}
+            or selected.get('stage') != 'recent-project-selected' or selected.get('welcomeProject') != welcome
+            or selected.get('frameTitle') != 'GoLandWorkspace – Welcome to GoLand'
+            or type(selected.get('selectedRow')) is not int or selected['selectedRow'] < 0):
+        raise ValueError('Project reopen lacks the actual welcome frame and selected row')
+    tree = selected.get('tree')
+    if (not isinstance(tree, list) or not tree or any(not isinstance(entry, dict) or set(entry) != {'row', 'path'}
+            or type(entry.get('row')) is not int or entry['row'] < 0 or not isinstance(entry.get('path'), list)
+            or not entry['path'] or any(not isinstance(text, str) or not text for text in entry['path']) for entry in tree)
+            or len({entry['row'] for entry in tree}) != len(tree)):
+        raise ValueError('Project reopen lacks complete unambiguous Recent Projects rows')
+    exact = re.compile(r'(^|\s)' + re.escape(snapshot['shell']) + r'(?=\s|$)')
+    matches = [entry for entry in tree if exact.search(entry['path'][-1])]
+    if len(matches) != 1 or matches[0] != {'row': selected['selectedRow'], 'path': selected.get('selectedPath')}:
+        raise ValueError('The clicked Recent Projects row is not the unique canonical fixture path')
 
 
 def validate_error_ui_evidence(run_root, projections, snapshots):

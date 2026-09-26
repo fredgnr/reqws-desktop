@@ -2,7 +2,7 @@
 title: ReqWS Playwright 回归自动化方案与改造流程
 type: technical-design
 status: active
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # ReqWS 回归自动化方案与改造流程
@@ -163,9 +163,9 @@ D06 和 D07 必须区分：现有仓库已经明确“发布前清理临时 stag
 
 建议在本机用测试编排器协调 Playwright 与现有 Driver 宿主，通过临时文件／测试进程通信共享路径和步骤状态，不给产品新增远程控制服务。复用 `scripts/run_local_ide.py` 的授权、profile 锁、候选校验及进程清理，不通过裸 Gradle 命令绕过这些保护。该联动不放入 CI，也不新增工作流授权 Secrets。
 
-S4 实施契约：在现有入口增加显式 `--suite desktop`，默认保留原三组宿主场景。专用 profile 锁覆盖 Playwright 和 Driver 的完整会话；一次性运行目录内的 UUID 会话与递增序号绑定请求/响应，只允许创建固定场景工作区、保存两仓库加载选择和结束 Desktop 会话。Desktop 通过真实 UI 创建 Git 工作区及入口，Driver 只读回查实际 workspace/binding/revision，再观察树与模型。通信不接收任意路径或命令，不进入产品代码。两端超时、异常、跳过、证据缺失或进程异常退出均不能生成通过报告；Desktop fixture 保留在私有运行目录，避免 IDE 尚未退出时删除项目。原宿主与新增联动报告按 suite 区分，旧报告不能代替新联动证据。
+S4 实施契约：在现有入口增加显式 `--suite desktop`，默认保留原三组宿主场景。专用 profile 锁覆盖 Playwright 和 Driver 的完整会话；一次性运行目录内的 UUID 会话与递增序号绑定请求/响应，只允许创建固定场景工作区、保存两仓库加载选择和结束 Desktop 会话。V 增加唯一受限 `focus-external-edit`：只限 selection revision 1，在 late 文件创建前置前自有 Desktop 窗口，记录测试 IDE 失活、文件创建和返回同一 IDE 三个阶段。它还原 G3 外部编辑后的观察流程，不进入 G2 revision 转换，也不调用 Refresh/Sync；不宣称持续前台轮询能保证 IDE 发现外部文件。Desktop 通过真实 UI 创建 Git 工作区及入口，Driver 只读回查实际 workspace/binding/revision，再观察树与模型。通信不接收任意路径或命令，不进入产品代码。两端超时、异常、跳过、证据缺失或进程异常退出均不能生成通过报告；Desktop fixture 保留在私有运行目录，避免 IDE 尚未退出时删除项目。原宿主与新增联动报告按 suite 区分，旧报告不能代替新联动证据。
 
-完整进程退出后，还须逐个工作区独立读取原生 `modules.xml`、受管 `.iml` 和 journal，核对精确模块登记、最终选择的根及相同所有权 marker；仅从 IDE 缓存恢复的实时模型不能证明持久化成功。报告缺少四组落盘证明时不得复用。
+完整进程退出后，还须逐个工作区独立读取原生 `modules.xml`、受管 `.iml` 和 journal，核对精确模块登记、最终选择的根及相同所有权 marker；仅从 IDE 缓存恢复的实时模型不能证明持久化成功。S4 原契约要求四组落盘证明；V 增加用户覆盖工作区后要求五组，当前完整计数和严格原始证据门禁见[本机入口](../ide-plugin-compatibility-automation/local-integration.md#desktop-真实-ui-联动)。组件图必须来自实际 IDE Swing 内容并绑定项目/PID；SDK 失败时的全屏诊断只按用户明确许可保存在私有目录，不作为通过图像。
 
 完整场景：
 

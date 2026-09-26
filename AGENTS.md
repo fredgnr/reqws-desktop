@@ -37,6 +37,8 @@ Delegate code exploration, implementation, debugging, tests and review only when
 
 For the Playwright migration, use the [stage-specific subagent plan](docs/changes/playwright-regression-automation/subagent-plan.md); do not confuse planned automation, a worker report and candidate verification.
 
+Use the [assertion-level replacement register](docs/changes/playwright-regression-automation/manual-inventory.md) and its [V evidence](docs/changes/playwright-regression-automation/verification-v-2026-09-26.md) to choose regression scope. Only rows with verified equivalent coverage retire their matching repeated Computer Use steps; pending and native boundaries remain. Prefer affected Electron tests for ordinary Desktop flows and the authorized fixed-IDE Desktop suite for cross-process projection. Diagnose failures from raw reports before adding manual actions. Native picker, window/focus, external-app, signing/install and real two-version update checks remain tied to the specific changed risk, not an automatic full manual matrix.
+
 ## Work and verification
 
 Use two-space indentation, single quotes, semicolons, trailing commas, strict TypeScript, and existing naming conventions; ESLint is authoritative. Keep Kotlin packages under `com.reqws.goland`. For IPC changes, update shared schemas/types/channels, preload, main handlers, and contract tests together.
