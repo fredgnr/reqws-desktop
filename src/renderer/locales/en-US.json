@@ -327,6 +327,7 @@
       "FEATURE_BRANCH_CHECKOUT_FAILED": "The feature branch could not be checked out.",
       "WORKSPACE_NOT_FOUND": "The workspace could not be found.",
       "WORKSPACE_PATH_MISSING": "A workspace path is missing.",
+      "WORKSPACE_PATH_UNAVAILABLE": "The workspace path could not be accessed. Check file permissions or disk status.",
       "REPOSITORY_NOT_FOUND": "The repository could not be found.",
       "REPOSITORY_ALREADY_ADDED": "The repository is already in this workspace.",
       "REPOSITORY_PATH_CONFLICT": "The repository folder conflicts with an existing folder.",

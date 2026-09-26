@@ -327,6 +327,7 @@
       "FEATURE_BRANCH_CHECKOUT_FAILED": "无法切换到功能分支。",
       "WORKSPACE_NOT_FOUND": "找不到工作区。",
       "WORKSPACE_PATH_MISSING": "工作区路径不存在。",
+      "WORKSPACE_PATH_UNAVAILABLE": "无法访问工作区路径，请检查文件权限或磁盘状态。",
       "REPOSITORY_NOT_FOUND": "找不到仓库。",
       "REPOSITORY_ALREADY_ADDED": "该仓库已在工作区中。",
       "REPOSITORY_PATH_CONFLICT": "仓库目录发生冲突。",

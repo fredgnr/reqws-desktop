@@ -130,6 +130,7 @@ describe('WorkspaceService integration', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all([
       fs.rm(root, { recursive: true, force: true }),
       origin.cleanup(),
@@ -213,6 +214,49 @@ describe('WorkspaceService integration', () => {
     } finally {
       if (!closed && cloneChild?.pid) process.kill(-cloneChild.pid, 'SIGKILL');
       await first.catch(() => undefined);
+    }
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM', 'EIO'])('distinguishes path inspection failure %s from missing files', async (code) => {
+    const created = await createWorkspace();
+    const originalAccess = fs.access.bind(fs);
+    const failure = Object.assign(new Error('injected inspection failure'), { code });
+    vi.spyOn(fs, 'access').mockImplementation(async (target, mode) => {
+      if (target === created.rootPath) throw failure;
+      return originalAccess(target, mode);
+    });
+    const listed = await service.list();
+    expect(listed).toHaveLength(1);
+    if (code === 'ENOENT') {
+      expect(listed[0]).toMatchObject({ status: 'missing', missingArtifacts: ['workspace-root'] });
+    } else {
+      expect(listed[0]).toMatchObject({ status: 'error', lastError: { code: 'WORKSPACE_PATH_UNAVAILABLE', detail: expect.stringContaining(code) } });
+      expect(listed[0]?.missingArtifacts).toBeUndefined();
+      await expect(service.get(created.id)).rejects.toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE' });
+      await expect(service.sync(created.id)).rejects.toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE' });
+    }
+    vi.restoreAllMocks();
+    expect((await service.list())[0]?.status).toBe('ready');
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM', 'EIO'])('preserves parent stat failure %s before workspace writes', async (code) => {
+    const clone = vi.spyOn(git, 'clone');
+    for (const directory of [path.join(root, 'features'), path.join(root, 'workspaces')]) {
+      const failure = Object.assign(new Error('injected stat failure'), { code });
+      const originalStat = fs.stat.bind(fs);
+      const inspection = vi.spyOn(fs, 'stat').mockImplementation(async (target, options) => {
+        if (target === directory) throw failure;
+        return originalStat(target, options);
+      });
+      const error = await createWorkspace().catch((reason: unknown) => reason);
+      if (code === 'ENOENT') {
+        expect(error).toMatchObject({ code: 'INVALID_INPUT', stage: 'validating' });
+      } else {
+        expect(error).toMatchObject({ code: 'WORKSPACE_PATH_UNAVAILABLE', stage: 'validating', detail: expect.stringContaining(code), cause: failure });
+      }
+      expect(clone).not.toHaveBeenCalled();
+      expect(await fs.readdir(path.join(root, 'features'))).toEqual([]);
+      inspection.mockRestore();
     }
   });
 

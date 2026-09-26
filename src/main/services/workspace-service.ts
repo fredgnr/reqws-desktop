@@ -76,8 +76,9 @@ async function pathExists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return false;
+    throw workspacePathError(error);
   }
 }
 
@@ -87,6 +88,25 @@ function isNodeError(error: unknown, code: string): boolean {
     'code' in error &&
     (error as NodeJS.ErrnoException).code === code
   );
+}
+
+function workspacePathError(error: unknown): ReqwsError {
+  const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
+  return new ReqwsError({
+    code: 'WORKSPACE_PATH_UNAVAILABLE',
+    message: 'Unable to inspect workspace path.',
+    detail: error instanceof Error ? [code, error.message].filter(Boolean).join(': ') : undefined,
+    stage: 'validating',
+  }, { cause: error });
+}
+
+async function statIfExists(target: string): Promise<Awaited<ReturnType<typeof fs.stat>> | null> {
+  try {
+    return await fs.stat(target);
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return null;
+    throw workspacePathError(error);
+  }
 }
 
 function localPathIdentity(target: string): string {
@@ -99,7 +119,7 @@ async function pathEntryExists(target: string): Promise<boolean> {
     return true;
   } catch (error) {
     if (isNodeError(error, 'ENOENT')) return false;
-    throw error;
+    throw workspacePathError(error);
   }
 }
 
@@ -663,7 +683,7 @@ export class WorkspaceService {
         stage: 'validating',
       });
     }
-    const rootParent = await fs.stat(path.dirname(rootPath)).catch(() => null);
+    const rootParent = await statIfExists(path.dirname(rootPath));
     if (!rootParent?.isDirectory()) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -674,7 +694,7 @@ export class WorkspaceService {
     const workspaceFileDirectory = await resolveProspectiveRealPath(
       input.workspaceFileDirectory,
     );
-    const fileDirectory = await fs.stat(workspaceFileDirectory).catch(() => null);
+    const fileDirectory = await statIfExists(workspaceFileDirectory);
     if (!fileDirectory?.isDirectory()) {
       throw new ReqwsError({
         code: 'INVALID_INPUT',
@@ -902,14 +922,25 @@ export class WorkspaceService {
     summary: WorkspaceSummary,
   ): Promise<WorkspaceSummary> {
     const missingArtifacts: WorkspaceArtifact[] = [];
-    if (!(await pathExists(summary.rootPath))) {
-      missingArtifacts.push('workspace-root');
-    }
-    if (!(await pathExists(manifestPathFor(summary.rootPath)))) {
-      missingArtifacts.push('manifest');
-    }
-    if (!(await pathExists(summary.workspaceFilePath))) {
-      missingArtifacts.push('workspace-file');
+    try {
+      if (!(await pathExists(summary.rootPath))) {
+        missingArtifacts.push('workspace-root');
+      }
+      if (!(await pathExists(manifestPathFor(summary.rootPath)))) {
+        missingArtifacts.push('manifest');
+      }
+      if (!(await pathExists(summary.workspaceFilePath))) {
+        missingArtifacts.push('workspace-file');
+      }
+    } catch (error) {
+      const failed: WorkspaceSummary = {
+        ...summary,
+        status: 'error',
+        lastError: toReqwsError(error).toPayload(),
+      };
+      delete failed.missingArtifacts;
+      delete failed.statusDetail;
+      return failed;
     }
     if (missingArtifacts.length > 0) {
       const legacyLabels: Record<WorkspaceArtifact, string> = {
@@ -928,7 +959,7 @@ export class WorkspaceService {
     }
     const evaluated = { ...summary };
     delete evaluated.missingArtifacts;
-    if (evaluated.status === 'error') return evaluated;
+    if (evaluated.status === 'error' && evaluated.lastError?.code !== 'WORKSPACE_PATH_UNAVAILABLE') return evaluated;
     const ready: WorkspaceSummary = { ...evaluated, status: 'ready' };
     delete ready.statusDetail;
     delete ready.lastError;
@@ -937,6 +968,9 @@ export class WorkspaceService {
 
   private async loadDetail(summary: WorkspaceSummary): Promise<WorkspaceDetail> {
     const evaluated = await this.evaluateSummary(summary);
+    if (evaluated.lastError?.code === 'WORKSPACE_PATH_UNAVAILABLE') {
+      throw new ReqwsError(evaluated.lastError);
+    }
     if (evaluated.status === 'missing') {
       const manifestFile = manifestPathFor(summary.rootPath);
       if (await pathExists(manifestFile)) {
