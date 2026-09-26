@@ -10,9 +10,9 @@ updated: 2026-09-27
 本方案补齐 Electron 真实操作链路，并与现有本机 GoLand 自动化对接，逐项替代重复的 Computer Use 回归。
 
 - 调研日期：2026-09-22。
-- 状态：S0–S3 实施依据；隔离 Electron 链路与 CI/候选包入口已实现，实际证据见[实施记录](implementation-2026-09-26.md)。S4 跨进程入口及初始 JPS 修复已通过同候选本机联动和原生落盘门禁，见 [S4 记录](implementation-s4-2026-09-26.md)；V 正在逐项验证，见 [V 记录](verification-v-2026-09-26.md)。
+- 状态：S0–S3 的隔离 Electron 与 CI/候选包入口已实现，证据见[实施记录](implementation-2026-09-26.md)。S4 同候选联动和初始 JPS 修复见 [S4 记录](implementation-s4-2026-09-26.md)；V 已完成[逐项替代裁决](manual-inventory.md)，真实候选、故意失败、重复运行、成本及保留边界见 [V 记录](verification-v-2026-09-26.md)。
 - 入库基线：`fredgnr/reqws-desktop`，`main` 提交 `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`，应用版本 `0.1.6`。初次方案审阅基于 `7f9dc8b3a17d11339cfed5d7d770f90df659fe3b`；本次已核对两提交差异并同步新的插件与 CI 边界。
-- 关联工作：PR #20 是早期设计来源；插件兼容性与本机自动化已随 PR #21 合入上述 main。现行执行边界以[插件需求包](../ide-plugin-compatibility-automation/README.md)和[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)为准，完整 V 验收仍未完成。
+- 关联工作：PR #20 是早期设计来源；插件兼容性与本机自动化已随 PR #21 合入上述 main。现行执行边界以[插件需求包](../ide-plugin-compatibility-automation/README.md)和[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)为准。本次 Playwright V 不等于其他需求包所有独立验收项均已执行。
 - 初次入库仅包含方案与索引；2026-09-26 的 S0–S3 实现单独以分支 diff 和执行报告定位，不改兼容性下限或发布配置，不将本机源码测试当作 CI/精确包证据。
 
 ## 1. 目标与非目标
@@ -34,7 +34,7 @@ updated: 2026-09-27
 | CI | 已有 impact/docs-only 分流、project-checks、macos-package、固定名称聚合检查，以及 plugin-targets/build/verification | 新增 Electron E2E 与候选包启动证据；保留现有分流；完整 IDE 与 Desktop→IDE 联动仅本机执行 |
 | 插件兼容性与 GUI | 最低 262、无上限；最低 SDK GO 2026.2、固定本机 GO 2026.2.1.1、自动 API 矩阵及显式 ZIP 本机入口 | 扩展真实 Desktop 写入驱动的本机联动，不重复搭建 Driver，不把已有正向报告当作完整替代验收 |
 
-以上表格保留初始入库基线的缺口定义，当前实现进度见[实施记录](implementation-2026-09-26.md)。Desktop 源码和已审阅的工作区集成测试在两个初始基线之间没有变化；新增插件基础设施与仍未完成的 V 验收分别记录，不混为一谈。[R1]–[R8][R11][R15]
+以上表格保留初始入库基线的缺口定义，当前实现和替代结果分别见[实施记录](implementation-2026-09-26.md)及 [V 记录](verification-v-2026-09-26.md)。Desktop 源码和已审阅的工作区集成测试在两个初始基线之间没有变化；新增基础设施与实际验收分别记录，不混为一谈。[R1]–[R8][R11][R15]
 
 ## 3. 测试分层与真实性边界
 
@@ -245,7 +245,7 @@ Electron 失败证据包括测试断言／步骤报告、Main stdout/stderr、re
 - 测试只注入 native dialog、editor OS spawn、Git OS spawn 和 updater adapter 边界；Git wrapper 在生产环境清理后设置固定 `GIT_CONFIG_NOSYSTEM=1`，使用独占 HOME/XDG 和 CA，禁用继承凭据、代理及 hooks。URL 校验及 TLS 验证保持原样。
 - 源码 E2E 每次重建独占 `.vite/e2e` 下的 Main/preload/built renderer，单 worker、零重试；生产包沿用 Forge。精确包 smoke 只接受 CI 一次性用户环境中的显式 `.app`，不提供本机真实账户启动捷径。
 - S3 初步稳定性门槛定为核心 smoke 连续 20 次独立新进程运行、首次失败为零，并完成故意失败及证据完整性检查；此门槛不宣称 99% 可靠，也不代表 S4/V 通过。
-- 本次不改插件 API、SDK、schema 或最低版本：仍为整个 262 系列，无兼容上限。S4/V 和旧手工门槛保持待验。
+- S0–S3 不改插件 API、SDK、schema 或最低版本。随后 S4 的唯一受控初始 JPS API 例外见 [S4 记录](implementation-s4-2026-09-26.md#6-已授权-api-例外)，仍为整个 262 系列、无兼容上限；V 完成的替代范围以[逐项登记](manual-inventory.md)为准，未覆盖项继续保留。
 
 阶段是工作拆分，不要求每阶段单独 PR；可以在一个集成分支交付，最后统一验收。
 

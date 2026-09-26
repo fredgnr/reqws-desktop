@@ -1,19 +1,21 @@
 # Playwright 回归自动化
 
-本需求包维护 Electron 真实链路自动化，并规划衔接现有本机 GoLand 回归，减少日常开发中重复的 Computer Use 操作。
+本需求包维护 Electron 真实链路与本机 GoLand 联动自动化，按已验证的断言范围替代重复 Computer Use。
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
 | [自动化方案与改造流程](technical-design.md) | active | 定义真实链路、测试隔离、D01–D12 用例、CI/本机边界、S0–S4/V 实施阶段与手工替代门槛。 |
 | [子代理实施分工](subagent-plan.md) | draft | 定义各阶段的委派、文件/资源所有权、交接和集成约束，引用统一编码模型政策。 |
-| [旧验收步骤与替代登记](manual-inventory.md) | draft | 追溯旧断言、已实现 D01–D12 选择器及 S4/V 前仍保留的范围。 |
+| [旧验收步骤与替代登记](manual-inventory.md) | active | 对 49 个原 ID 分别记录自动替代、部分替代或保留，并关联实际候选与证据。 |
 | [S0–S3 实施与验证记录](implementation-2026-09-26.md) | active | 记录 S0–S3 的最终代码候选、真实 CI、稳定性和保留的手工边界。 |
 | [S4 本机联动实施记录](implementation-s4-2026-09-26.md) | active | 记录真实 Desktop 联动、初始 JPS 修复、受控 API 例外及同候选完整实跑结果。 |
-| [V 替代验收记录](verification-v-2026-09-26.md) | active | 记录逐项补漏、故意失败、成本及组件图修复；SDK 诊断采集已获准，三项新场景通过，项目重开宿主仍待修正。 |
+| [V 替代验收记录](verification-v-2026-09-26.md) | active | 记录 v7 两轮完整联动、legacy、故意失败、有限成本样本及按范围完成的规范切换。 |
 
 ## 当前状态
 
-2026-09-26 在 `feat/playwright-automation` 完成 S0–S3：共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格报告/负向门禁、CI job 和同包 smoke 已实现并验证。最终代码候选 `56657ea` 的 18 项 Electron、两项故障探针、同包 smoke 和 Desktop 聚合门禁通过；核心 smoke 连续 20 轮共 80 项通过。候选身份、CI 修复过程与实际证据见[实施记录](implementation-2026-09-26.md)。S4 已完成真实 Desktop→Driver 联动及初始 JPS 修复，同一 CI ZIP 上三项场景、六进程、二十条投影和四份原生落盘证明通过，见 [S4 记录](implementation-s4-2026-09-26.md)。[V 已补 Desktop 覆盖并执行多项故障证明](verification-v-2026-09-26.md)，首轮增强 GUI 因全屏图证据不合格停止；组件图与取消清理修复已检查，SDK 失败诊断采集已获准，组件图已实跑；三项新场景通过，正在修正同进程项目重开的宿主判断。V 完成前不撤销现有验收门槛。
+S0–S3 的共用启动、隔离 Electron/HTTPS Git fixture、D01–D12、严格门禁及 CI 同包 smoke 已完成；当时 `56657ea` 的 18 项 Electron、两项故障探针和核心 smoke 20 轮共 80 项通过，见[实施记录](implementation-2026-09-26.md)。S4 同一 CI ZIP 的真实 Desktop→Driver 联动、初始 JPS 修复与原生落盘结果见 [S4 记录](implementation-s4-2026-09-26.md)。
+
+2026-09-27 完成 [V 的按范围替代验收](verification-v-2026-09-26.md)：普通 Desktop 30 项重复两次，后续 D02/D01 补充各重复 20 次；`e7a25f2` 宿主在原始 CI ZIP 上两轮各四项/九进程、32 条投影及五份落盘证明通过，legacy 三项/九进程通过，当前宿主准确拒绝 watcher 负向 ZIP。所有首次失败、修复和私有证据保留。按[逐项裁决](manual-inventory.md)撤销等价范围的重复手工操作，原生 picker、焦点/外部应用、签名安装/真实升级及明确缺口继续保留。有限成本样本不证明全套减少 80% 或长期可靠性；没有新推送或发布。
 
 方案入库基于 main `fc7c31a69128039a31c0f0bc9cc0eb368feaca1c`（0.1.6），已对齐 PR #21 合入后的插件规则，不沿用早期调研中的旧 build 上下限或 CI 完整 IDE 建议。
 
