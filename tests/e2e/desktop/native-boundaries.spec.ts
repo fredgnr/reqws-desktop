@@ -147,8 +147,8 @@ test('D12 a real settings write blocks UI update installation until the shared a
   } finally {
     await desktop.app.evaluate(() => globalThis.__reqwsE2E.finishWrite?.());
   }
-  await expect.poll(async () => (await desktop.state()).settings.workspaceParentDirectory).toBe(desktop.isolation.workspaceRoot);
   await expect(desktop.page.getByRole('button', { name: 'Save settings', exact: true })).toBeDisabled();
+  expect((await desktop.state()).settings.workspaceParentDirectory).toBe(desktop.isolation.workspaceRoot);
   await install.click();
   await desktop.page.getByRole('dialog', { name: 'Install the update and restart?', exact: true })
     .getByRole('button', { name: 'Install and restart', exact: true }).click();
