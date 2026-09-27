@@ -66,7 +66,7 @@ internal object ReqwsComposeHost {
     )
     val before = manager.contents.toSet()
     try {
-      toolWindow.addComposeTab(isCloseable = true, focusOnClickInside = true) {
+      toolWindow.addComposeTab(isCloseable = false, focusOnClickInside = true) {
         val state by session.presenter.state.collectAsState()
         ReqwsScreen(state) { action ->
           ApplicationManager.getApplication().assertIsDispatchThread()

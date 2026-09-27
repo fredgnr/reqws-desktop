@@ -458,6 +458,35 @@ class ReqwsUiStateMapperTest {
     }
   }
 
+  @Test
+  fun `loading selection directory presence and projection proof remain independent`() {
+    val original = snapshot()
+    val root = original.canonicalProjectRoot
+    for (ids in listOf(emptyList(), listOf("repo_api"), listOf("repo_worker"), listOf("repo_api", "repo_worker"))) {
+      val loading = com.reqws.goland.loading.contract.LoadingSnapshot(
+        original,
+        com.reqws.goland.loading.contract.VerifiedBinding("workspace", "binding", root, root.resolve(".reqws/ide/goland"), emptyList()),
+        com.reqws.goland.loading.contract.GoLandProject("workspace", "binding", 1,
+          com.reqws.goland.loading.contract.GoLandSelection.Selected(ids), "2026-09-27T00:00:00Z"),
+        emptyList(), "loading-digest",
+      )
+      val snapshot = original.copy(loading = loading)
+      for (confirmed in listOf(false, true)) {
+        val model = ReqwsUiStateMapper.map(ReqwsProjectState(
+          ReqwsLifecycleState.SYNCHRONIZED, snapshot = snapshot,
+          validatedProjectionDigest = snapshot.digestSha256.takeIf { confirmed },
+        ))
+        assertEquals(if (confirmed && "repo_api" in ids) 1 else 0, model.loadedRepositoryCount)
+        assertEquals(when {
+          "repo_api" !in ids -> "repository.notLoaded"
+          !confirmed -> "repository.projectContentUnavailable"
+          else -> "repository.loaded"
+        }, model.repositories[0].statusKey)
+        assertEquals(if ("repo_worker" in ids) "repository.missing" else "repository.notLoaded", model.repositories[1].statusKey)
+      }
+    }
+  }
+
   private fun snapshot(): ManifestSnapshot {
     val root = Path.of("/tmp/workspace")
     val repositories = listOf(
