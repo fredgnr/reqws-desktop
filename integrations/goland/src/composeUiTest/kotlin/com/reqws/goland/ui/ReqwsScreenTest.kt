@@ -8,6 +8,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -46,6 +50,7 @@ class ReqwsScreenTest {
   private val state = mutableStateOf(sample())
   private val dark = mutableStateOf(false)
   private val density = mutableStateOf(Density(1f, 1f))
+  private val escapedOutsidePopup = mutableListOf<KeyEventType>()
   private val actions = mutableListOf<ReqwsUiAction>()
   private val direction = mutableStateOf(LayoutDirection.Ltr)
   private val fontSize = mutableStateOf(13.sp)
@@ -65,7 +70,10 @@ class ReqwsScreenTest {
       CompositionLocalProvider(LocalDensity provides density.value, LocalLayoutDirection provides direction.value) {
         ReqwsTestTheme(dark.value) {
           CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(fontSize = fontSize.value)) {
-            Box(Modifier.size((widthOverride.value ?: width).dp, height.dp)) { ReqwsScreen(state.value, actions::add) }
+            Box(Modifier.size((widthOverride.value ?: width).dp, height.dp).onKeyEvent {
+              if (it.key == Key.Escape && it.type == KeyEventType.KeyDown) escapedOutsidePopup += it.type
+              false
+            }) { ReqwsScreen(state.value, actions::add) }
           }
         }
       }
@@ -219,6 +227,28 @@ class ReqwsScreenTest {
     tooltip.assertTextEquals(state.value.workspaceName!!)
     tooltip.performMouseInput { exit() }
     compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isEmpty() }
+  }
+
+  @Test fun focusedActionDismissesTooltipWithoutLosingFocusOrLeavingStaleEscapeHandlers() {
+    mount()
+    val copy = node("reqws.copyDiagnostics")
+    copy.performMouseInput { click(center) }
+    copy.assertIsFocused()
+    node("reqws.workspace").performMouseInput { enter(center) }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isNotEmpty() }
+    copy.performKeyInput { pressKey(Key.Escape) }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isEmpty() }
+    copy.assertIsFocused()
+    assertTrue(escapedOutsidePopup.isEmpty())
+    copy.performKeyInput { pressKey(Key.Escape) }
+    assertEquals(1, escapedOutsidePopup.size)
+    node("reqws.workspace").performMouseInput { exit(); enter(center) }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isNotEmpty() }
+    compose.runOnIdle { state.value = state.value.copy(workspaceName = "") }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isEmpty() }
+    copy.performKeyInput { pressKey(Key.Escape) }
+    assertEquals(2, escapedOutsidePopup.size)
+    copy.assertIsFocused()
   }
 
   @Test fun errorAndRepeatedCopyFeedbackRemainSeparateAndUpdatesClearTheFeedback() {

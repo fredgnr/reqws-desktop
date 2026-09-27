@@ -47,6 +47,8 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.platform.LocalDensity
@@ -97,6 +99,30 @@ internal fun ReqwsLiteralText(
   }
 }
 
+/** Scoped to one Content; only a visible tooltip consumes the screen's Escape. */
+internal class ReqwsTooltipController {
+  private var active: Pair<Any, () -> Unit>? = null
+
+  fun register(owner: Any, dismiss: () -> Unit) {
+    val previous = active
+    active = owner to dismiss
+    if (previous?.first !== owner) previous?.second?.invoke()
+  }
+
+  fun unregister(owner: Any) {
+    if (active?.first === owner) active = null
+  }
+
+  fun dismissVisible(): Boolean {
+    val previous = active ?: return false
+    active = null
+    previous.second()
+    return true
+  }
+}
+
+internal val LocalReqwsTooltipController = staticCompositionLocalOf<ReqwsTooltipController?> { null }
+
 /** A bounded full-text popup must stay open while the pointer enters it to scroll. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -134,15 +160,23 @@ internal fun ReqwsHoverTooltip(
       }
     }
   }
-  fun dismiss() { visible = false; anchorHovered = false; popupHovered = false }
+  val controller = LocalReqwsTooltipController.current
+  val owner = remember { Any() }
+  val dismiss = rememberUpdatedState({ visible = false; anchorHovered = false; popupHovered = false })
+  DisposableEffect(controller, visible && enabled) {
+    if (visible && enabled) controller?.register(owner) { dismiss.value() }
+    onDispose { controller?.unregister(owner) }
+  }
   Box(modifier.onPointerEvent(PointerEventType.Enter) { anchorHovered = true }
     .onPointerEvent(PointerEventType.Exit) { anchorHovered = false }) {
     content()
     if (visible && enabled) {
       val shape = RoundedCornerShape(style.metrics.cornerSize)
       Popup(popupPositionProvider = position, cornerSize = style.metrics.cornerSize,
-        onDismissRequest = ::dismiss, properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
-        onPreviewKeyEvent = { if (it.key == Key.Escape) { dismiss(); true } else false }) {
+        onDismissRequest = { dismiss.value() }, properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
+        onPreviewKeyEvent = {
+          if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { dismiss.value(); true } else false
+        }) {
         Box(Modifier.onPointerEvent(PointerEventType.Enter) { popupHovered = true }
           .onPointerEvent(PointerEventType.Exit) { popupHovered = false }
           .clip(shape).background(style.colors.background, shape)
