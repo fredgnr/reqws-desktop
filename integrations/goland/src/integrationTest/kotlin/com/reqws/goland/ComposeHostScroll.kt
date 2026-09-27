@@ -11,15 +11,14 @@ import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
 import org.w3c.dom.Element
 import com.intellij.driver.model.OnDispatcher
-import java.awt.Dimension
 import java.awt.Point
 import java.awt.Rectangle
 import kotlin.math.abs
 
 /** Observes native Compose scroll state through read-only standard Java Accessibility. */
 internal data class NativeScrollRange(val value: NativeAccessibleValue, val bounds: Rectangle) {
-  fun current() = requireNotNull(value.getCurrentAccessibleValue()).toDouble()
-  fun maximum() = requireNotNull(value.getMaximumAccessibleValue()).toDouble()
+  fun current() = requireNotNull(value.getCurrentAccessibleValue()).doubleValue()
+  fun maximum() = requireNotNull(value.getMaximumAccessibleValue()).doubleValue()
 }
 
 internal fun Driver.nativeVerticalScroll(target: Rectangle, text: String? = null): NativeScrollRange =
@@ -28,7 +27,7 @@ internal fun Driver.nativeVerticalScroll(target: Rectangle, text: String? = null
     fun search(context: NativeAccessibleContext, depth: Int): NativeScrollRange? {
       check(++visited <= 3000 && depth <= 40) { "Accessible scroll search exceeded its bound" }
       val component = context.getAccessibleComponent()
-      val bounds = if (component?.isShowing() == true) Rectangle(component.getLocationOnScreen(), component.getSize()) else null
+      val bounds = if (component?.isShowing() == true) Rectangle(component.getLocationOnScreen(), component.getBounds().size) else null
       if (bounds != null && !bounds.intersects(target)) return null
       val count = context.getAccessibleChildrenCount()
       check(count in 0..3000)
@@ -85,12 +84,12 @@ internal interface NativeAccessibleStates { override fun toString(): String }
 internal interface NativeAccessibleComponent {
   fun isShowing(): Boolean
   fun getLocationOnScreen(): Point
-  fun getSize(): Dimension
+  fun getBounds(): Rectangle
 }
 @Remote("javax.accessibility.AccessibleValue")
 internal interface NativeAccessibleValue {
-  fun getCurrentAccessibleValue(): Number?
-  fun getMaximumAccessibleValue(): Number?
+  fun getCurrentAccessibleValue(): NativeAccessibleNumber?
+  fun getMaximumAccessibleValue(): NativeAccessibleNumber?
 }
 @Remote("java.awt.MouseInfo")
 internal interface NativeMouseInfo { fun getPointerInfo(): NativePointerInfo }
@@ -116,3 +115,6 @@ internal fun Driver.composeAttributes(tag: String): Map<String, String> {
       "focused" to node.getAttribute("focused"))
   }.orEmpty()
 }
+
+@Remote("java.lang.Number")
+internal interface NativeAccessibleNumber { fun doubleValue(): Double }
