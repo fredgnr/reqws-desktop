@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 defaults:
   run:
@@ -38,6 +39,17 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.matrix) }}
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -76,6 +88,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
