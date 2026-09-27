@@ -1,5 +1,6 @@
 package com.reqws.goland.ui
 
+import com.reqws.goland.ui.state.ReqwsUiStateMapper
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
@@ -33,7 +34,7 @@ internal class ReqwsToolWindowAvailabilityController(
 
   internal fun accept(state: ReqwsProjectState) {
     if (disposed.get() || state.lifecycle == com.reqws.goland.project.ReqwsLifecycleState.DISPOSED) return
-    val visible = ReqwsToolWindowViewModel.from(state).visible
+    val visible = ReqwsUiStateMapper.map(state).visible
     dispatchOnEdt {
       if (!disposed.get() && !isProjectDisposed() && !isToolWindowDisposed()) {
         setAvailable(visible)

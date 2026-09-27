@@ -4,7 +4,8 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.ui.content.ContentFactory
+import com.reqws.goland.ui.platform.ReqwsComposeHost
+import com.reqws.goland.ui.state.ReqwsUiStateMapper
 import com.reqws.goland.project.ReqwsProjectDetector
 import com.reqws.goland.project.ReqwsProjectService
 
@@ -21,14 +22,8 @@ internal class ReqwsToolWindowFactory : ToolWindowFactory {
     // in an already-open project. This idempotent entry point keeps the Tool Window recoverable.
     service.refreshAutomatically()
     if (!project.isDisposed && !toolWindow.isDisposed) {
-      toolWindow.setAvailable(ReqwsToolWindowViewModel.from(service.state).visible)
+      toolWindow.setAvailable(ReqwsUiStateMapper.map(service.state).visible)
     }
-    val panel = ReqwsToolWindowPanel(
-      project = project,
-      service = service,
-    )
-    val content = ContentFactory.getInstance().createContent(panel, null, false)
-    content.setDisposer(panel)
-    toolWindow.contentManager.addContent(content)
+    ReqwsComposeHost.mount(project, toolWindow)
   }
 }

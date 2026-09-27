@@ -570,3 +570,35 @@ val verifyBaselineTestReports by tasks.registering(Exec::class) {
   dependsOn("test")
   commandLine("python3", "../../scripts/check_junit_reports.py", "build/test-results/test")
 }
+
+
+// Local-only S1 Content lifecycle evidence. Does not rebuild or install a daily IDE.
+tasks.register<Test>("composeContentHostTest") {
+  notCompatibleWithConfigurationCache("Uses a fresh isolated local run directory")
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+  failOnNoDiscoveredTests = true
+  maxParallelForks = 1
+  testClassesDirs = integrationTestSourceSet.output.classesDirs
+  classpath = integrationTestSourceSet.runtimeClasspath
+  useJUnitPlatform()
+  filter { includeTestsMatching("com.reqws.goland.ComposeContentLifecycleTest") }
+  systemProperty("junit.jupiter.extensions.autodetection.enabled", "false")
+  systemProperty("java.awt.headless", "false")
+  systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
+  systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
+  systemProperty("reqws.plugin.version", project.version.toString())
+  providers.gradleProperty("reqwsLocalIdeRunRoot").orNull?.let {
+    reports.junitXml.outputLocation.set(file(it).resolve("junit"))
+    reports.html.outputLocation.set(file(it).resolve("test-report"))
+  }
+  doFirst {
+    val (runRoot, profile) = requireLocalIdeLauncher()
+    require(candidateArchive.isPresent)
+    systemProperty("reqws.plugin.archive", file(candidateArchive.get()).absolutePath)
+    systemProperty("reqws.plugin.expectedSha256", providers.gradleProperty("reqwsPluginSha256").get())
+    systemProperty("reqws.integration.root", runRoot.absolutePath)
+    systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+  }
+}
