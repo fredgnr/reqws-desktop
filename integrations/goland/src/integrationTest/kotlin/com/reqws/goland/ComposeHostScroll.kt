@@ -17,8 +17,8 @@ import kotlin.math.abs
 
 /** Observes native Compose scroll state through read-only standard Java Accessibility. */
 internal data class NativeScrollRange(val value: NativeAccessibleValue, val bounds: Rectangle) {
-  fun current() = requireNotNull(value.getCurrentAccessibleValue()).doubleValue()
-  fun maximum() = requireNotNull(value.getMaximumAccessibleValue()).doubleValue()
+  fun current() = requireNotNull(value.getCurrentAccessibleValue()).toDouble()
+  fun maximum() = requireNotNull(value.getMaximumAccessibleValue()).toDouble()
 }
 
 internal fun Driver.nativeVerticalScroll(target: Rectangle, text: String? = null): NativeScrollRange =
@@ -88,8 +88,8 @@ internal interface NativeAccessibleComponent {
 }
 @Remote("javax.accessibility.AccessibleValue")
 internal interface NativeAccessibleValue {
-  fun getCurrentAccessibleValue(): NativeAccessibleNumber?
-  fun getMaximumAccessibleValue(): NativeAccessibleNumber?
+  fun getCurrentAccessibleValue(): Number?
+  fun getMaximumAccessibleValue(): Number?
 }
 @Remote("java.awt.MouseInfo")
 internal interface NativeMouseInfo { fun getPointerInfo(): NativePointerInfo }
@@ -115,6 +115,3 @@ internal fun Driver.composeAttributes(tag: String): Map<String, String> {
       "focused" to node.getAttribute("focused"))
   }.orEmpty()
 }
-
-@Remote("java.lang.Number")
-internal interface NativeAccessibleNumber { fun doubleValue(): Double }
