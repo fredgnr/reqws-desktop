@@ -1,8 +1,8 @@
 ---
 title: S3 Compose 自动化与真实 IDE 集成
 type: technical-design
-status: draft
-updated: 2026-09-26
+status: active
+updated: 2026-09-27
 ---
 
 # S3：接通独立测试和真实 IDE 验证

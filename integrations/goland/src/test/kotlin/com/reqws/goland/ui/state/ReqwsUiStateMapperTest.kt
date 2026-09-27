@@ -85,6 +85,8 @@ class ReqwsUiStateMapperTest {
     assertEquals(ReqwsStatusTone.ERROR, model.statusTone)
     assertEquals("MANIFEST_INVALID_JSON", model.errorCode)
     assertTrue(model.preservedSnapshot)
+    assertTrue(requireNotNull(formatDetailsText(model)).contains("MANIFEST_INVALID_JSON"))
+    assertTrue(requireNotNull(formatDetailsText(model)).contains(ReqwsBundle.message("message.preservedModel")))
     assertEquals(
       listOf("repository.loaded", "repository.missing"),
       model.repositories.map { it.statusKey },

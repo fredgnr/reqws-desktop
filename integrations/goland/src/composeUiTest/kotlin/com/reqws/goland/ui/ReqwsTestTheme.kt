@@ -19,6 +19,8 @@ import org.jetbrains.jewel.ui.component.styling.*
 // theme artifact or platform application is created by component tests.
 internal val testLightBackground = Color(0xfff5f5f5)
 internal val testDarkBackground = Color(0xff202124)
+internal val testLightPanel = Color(0xffffffff)
+internal val testDarkPanel = Color(0xff2b2d30)
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -32,7 +34,7 @@ internal fun ReqwsTestTheme(dark: Boolean, content: @Composable () -> Unit) {
   val colors = GlobalColors(BorderColors(border, accent, border),
     OutlineColors(accent, warning, error, warning, error),
     TextColors(foreground, foreground, border, border, foreground, error, warning),
-    background, background)
+    if (dark) testDarkPanel else testLightPanel, background)
   fun button(primary: Boolean): ButtonStyle {
     val bg = SolidColor(if (primary) accent else background)
     val outline = SolidColor(border)

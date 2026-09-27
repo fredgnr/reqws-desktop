@@ -231,7 +231,7 @@ npm run package:goland
 
 `buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`，消费者读取 `build/release/plugin-archive.txt` 的精确产物路径；Gradle cache、sandbox 和 build output 均不可提交。完整 IDE 使用[本机独占入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，不绕过 profile 与授权保护直接运行。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
-生产使用 IDE 的 Compose/Jewel 运行时。Compose 内容目前使用状态 Mapper、Content 级 Presenter 和独立平台动作适配；列表选择不改变 Desktop 加载配置。`composeUiTest` 只使用测试专属主题/渲染依赖，不启动完整 IDE，也不证明系统 VoiceOver 或真实宿主键鼠通过。最小 Content 隐藏/重建验证使用[插件 README](../../integrations/goland/README.md)中的确切 ZIP 入口，阶段边界见 [Compose 重构](../changes/goland-compose-rebuild/README.md)。旧 Swing 源码与测试在 S4 清理前保留。
+生产使用 IDE 的 Compose/Jewel 运行时。Compose 内容目前使用状态 Mapper、Content 级 Presenter 和独立平台动作适配；列表选择不改变 Desktop 加载配置。`composeUiTest` 只使用测试专属主题/渲染依赖，不启动完整 IDE，也不证明系统 VoiceOver 或真实宿主键鼠通过。独立组件及失败/空发现探针由 `python3 scripts/check_compose_ui.py` 运行，`check:goland` 和独立 CI 任务也要求该门禁；CI 不启动完整 IDE。20轮 Content 隐藏/重建及冷恢复验证使用[插件 README](../../integrations/goland/README.md)中的确切 ZIP 入口，真实键鼠/主题/缩放/重载需本轮前台时段并显式添加 `--allow-input`；阶段边界见 [Compose 重构](../changes/goland-compose-rebuild/README.md)。旧 Swing 源码与测试在 S4 清理前保留。
 
 ### 插件开发与验收边界
 

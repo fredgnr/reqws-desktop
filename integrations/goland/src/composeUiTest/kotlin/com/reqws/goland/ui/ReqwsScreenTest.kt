@@ -9,6 +9,10 @@ import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.unit.LayoutDirection
+import com.reqws.goland.ui.presentation.formatDetailsText
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -41,6 +45,8 @@ class ReqwsScreenTest {
   private val dark = mutableStateOf(false)
   private val density = mutableStateOf(Density(1f, 1f))
   private val actions = mutableListOf<ReqwsUiAction>()
+  private val direction = mutableStateOf(LayoutDirection.Ltr)
+  private val widthOverride = mutableStateOf<Int?>(null)
 
   private fun sample(): ReqwsUiState = ReqwsUiStateMapper.map(
     ReqwsProjectState(ReqwsLifecycleState.ERROR, lastError = ReqwsProjectError("MANIFEST_INVALID_JSON")),
@@ -53,9 +59,9 @@ class ReqwsScreenTest {
 
   private fun mount(width: Int = 320, height: Int = 740) {
     compose.setContent {
-      CompositionLocalProvider(LocalDensity provides density.value) {
+      CompositionLocalProvider(LocalDensity provides density.value, LocalLayoutDirection provides direction.value) {
         ReqwsTestTheme(dark.value) {
-          Box(Modifier.size(width.dp, height.dp)) { ReqwsScreen(state.value, actions::add) }
+          Box(Modifier.size((widthOverride.value ?: width).dp, height.dp)) { ReqwsScreen(state.value, actions::add) }
         }
       }
     }
@@ -134,6 +140,13 @@ class ReqwsScreenTest {
     node("reqws.repository.r199").assertIsDisplayed().performClick().assertIsSelected()
     node("reqws.repositoryList").performScrollToKey("r0")
     node("reqws.repository.r0").assertIsNotSelected()
+    compose.runOnIdle { state.value = state.value.copy(repositories = state.value.repositories.drop(1).reversed()) }
+    node("reqws.repositoryList").performScrollToKey("r199")
+    node("reqws.repository.r199").assertIsSelected()
+    compose.runOnIdle { state.value = state.value.copy(repositories = emptyList()) }
+    node("reqws.empty").assertIsDisplayed()
+    compose.runOnIdle { state.value = state.value.copy(repositories = listOf(row("r199"))) }
+    node("reqws.repository.r199").assertIsNotSelected()
     assertActionsFit()
   }
 
@@ -157,7 +170,7 @@ class ReqwsScreenTest {
   }
 
   @Test fun fullTextTooltipContentWrapsWithoutDroppingSpacesMarkupOrGraphemes() {
-    val value = "<html>  👨‍👩‍👧‍👦e\u0301🇨🇳" + "x".repeat(600)
+    val value = "<html>  " + "👨‍👩‍👧‍👦👩🏽‍💻e\u0301🇨🇳汉字  ".repeat(45) + "END"
     compose.setContent { ReqwsTestTheme(false) { ReqwsFullText(value, "full") } }
     node("full").assertTextEquals(value)
     val layouts = mutableListOf<TextLayoutResult>()
@@ -165,6 +178,17 @@ class ReqwsScreenTest {
     assertEquals(value, layouts.single().layoutInput.text.text)
     assertTrue(layouts.single().lineCount > 1)
     assertFalse(layouts.single().hasVisualOverflow)
+    val boundaries = Regex("\\X").findAll(value).map { it.range.last + 1 }.toSet() + 0
+    val layout = layouts.single()
+    for (line in 0 until layout.lineCount) {
+      assertTrue("line starts at a grapheme boundary", layout.getLineStart(line) in boundaries)
+      assertTrue("line ends at a grapheme boundary", layout.getLineEnd(line) in boundaries)
+    }
+    val scroll = node("full").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+    assertTrue(scroll.maxValue() > 0f)
+    node("full").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, scroll.maxValue()) }
+    compose.waitForIdle()
+    assertEquals(scroll.maxValue(), scroll.value(), 1f)
     assertTrue(node("full").fetchSemanticsNode().boundsInRoot.width <= 320f)
     assertTrue(node("full").fetchSemanticsNode().boundsInRoot.height <= 240f)
   }
@@ -206,6 +230,12 @@ class ReqwsScreenTest {
     node("reqws.repository.b").performClick()
     val before = node("reqws.screen").captureToImage().toPixelMap()[0, 0]
     assertEquals(testLightBackground, before)
+    for (tag in listOf("reqws.summary", "reqws.repositories")) {
+      val pixels = node(tag).captureToImage().toPixelMap()
+      assertTrue("$tag uses the light panel token", (0 until pixels.height step 4).any { y ->
+        (0 until pixels.width step 4).count { x -> pixels[x, y] == testLightPanel } > pixels.width / 8
+      })
+    }
     screenshot("light")
     compose.runOnIdle { dark.value = true }
     node("reqws.repository.b").assertIsSelected()
@@ -213,6 +243,12 @@ class ReqwsScreenTest {
     assertEquals(testDarkBackground, after)
     assertNotEquals(before, after)
     assertActionsFit()
+    for (tag in listOf("reqws.summary", "reqws.repositories")) {
+      val pixels = node(tag).captureToImage().toPixelMap()
+      assertTrue("$tag uses the dark panel token", (0 until pixels.height step 4).any { y ->
+        (0 until pixels.width step 4).count { x -> pixels[x, y] == testDarkPanel } > pixels.width / 8
+      })
+    }
     screenshot("dark")
   }
 
@@ -221,6 +257,12 @@ class ReqwsScreenTest {
     compose.runOnIdle { density.value = Density(1.25f, 1.5f) }
     assertActionsFit()
     node("reqws.sync").assertTextContains(ReqwsBundle.message("action.syncNow"))
+    for (key in listOf("action.syncNow", "action.openManifest", "action.copyDiagnostics")) {
+      val layouts = mutableListOf<TextLayoutResult>()
+      compose.onNodeWithText(ReqwsBundle.message(key), useUnmergedTree = true)
+        .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+      assertFalse("$key scaled text remains complete: ${layouts.single().size}, lines=${layouts.single().lineCount}", layouts.single().hasVisualOverflow)
+    }
     screenshot("scaled")
   }
 
@@ -281,9 +323,69 @@ class ReqwsScreenTest {
     }
   }
 
+
+  @Test fun preservedErrorHasCompleteAccessibleTextTooltipAndSeparateLiveFeedback() {
+    val error = "MANIFEST_INVALID_JSON <html> 👩🏽‍💻 e\u0301 " + "X".repeat(160)
+    state.value = state.value.copy(errorCode = error, preservedSnapshot = true, diagnosticsCopied = true,
+      errorDetailKey = "message.projectFileIndexNotConverged")
+    mount(width = 240)
+    val expected = requireNotNull(formatDetailsText(state.value))
+    assertTrue(expected.contains(ReqwsBundle.message("message.preservedModel")))
+    node("reqws.diagnostics").assertTextEquals(expected).assertContentDescriptionEquals(expected)
+    node("reqws.copyFeedback").assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+    node("reqws.diagnostics").performScrollTo().performMouseInput { enter(center) }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.diagnostics.tooltip").fetchSemanticsNodes().isNotEmpty() }
+    node("reqws.diagnostics.tooltip").assertTextEquals(expected)
+    val diagnostics = node("reqws.diagnostics").fetchSemanticsNode().boundsInRoot
+    val footer = node("reqws.actions").fetchSemanticsNode().boundsInRoot
+    assertTrue(diagnostics.bottom <= footer.top)
+    assertActionsFit()
+    compose.runOnIdle { state.value = state.value.copy(diagnosticsCopied = false, errorCode = "NEW_ERROR") }
+    node("reqws.copyFeedback").assertDoesNotExist()
+    node("reqws.diagnostics").assertTextEquals(requireNotNull(formatDetailsText(state.value)))
+  }
+
+  @Test fun userRootExplanationRemainsAccessibleInBothDirectionsAtNarrowWidths() {
+    state.value = state.value.copy(repositories = listOf(row("root", "repo3", "repository.userRootCoverage")
+      .copy(statusDetailKey = "repository.userRootCoverageDetail")))
+    mount(width = 160)
+    for (width in listOf(160, 240, 480)) for (layout in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+      compose.runOnIdle { widthOverride.value = width; direction.value = layout }
+      val row = node("reqws.repository.root")
+      row.performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+      val expected = listOf("repo3", ReqwsBundle.message("repository.userRootCoverage"),
+        ReqwsBundle.message("repository.userRootCoverageDetail")).joinToString("\n")
+      assertTrue(expected in row.fetchSemanticsNode().config[SemanticsProperties.ContentDescription])
+      val bounds = row.fetchSemanticsNode().boundsInRoot
+      for (tag in listOf("name", "detail", "status.text")) {
+        val child = node("reqws.repository.root.$tag", true).fetchSemanticsNode().boundsInRoot
+        assertTrue(child.left >= bounds.left && child.right <= bounds.right)
+      }
+      node("reqws.repository.root.name", true).assertTextEquals("repo3")
+      row.performClick().assertIsSelected()
+      assertActionsFit()
+    }
+  }
+
+  @Test fun keyboardSkipsDisabledActionsAndPreservesFocusAcrossThemeChanges() {
+    state.value = state.value.copy(openManifestEnabled = false)
+    mount()
+    node("reqws.sync").performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+    node("reqws.sync").performKeyInput { pressKey(Key.Tab) }
+    node("reqws.copyDiagnostics").assertIsFocused()
+    compose.runOnIdle { dark.value = true }
+    node("reqws.copyDiagnostics").assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+    node("reqws.copyDiagnostics").performKeyInput { withKeyDown(Key.ShiftLeft) { pressKey(Key.Tab) } }
+    node("reqws.sync").assertIsFocused()
+    assertEquals(listOf(ReqwsUiAction.CopyDiagnostics), actions)
+    node("reqws.repository.a").performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+    node("reqws.repository.a").performKeyInput { pressKey(Key.Spacebar) }
+    node("reqws.repository.a").assertIsSelected()
+  }
+
   private fun screenshot(name: String) {
     val image = node("reqws.screen").captureToImage()
-    val directory = Path.of("build/reports/compose-s2/screenshots")
+    val directory = Path.of(System.getProperty("reqws.compose.reports", "build/reports/compose-ui"), "screenshots")
     Files.createDirectories(directory)
     Image.makeFromBitmap(image.asSkiaBitmap()).use { skia ->
       skia.encodeToData()!!.use { data -> Files.write(directory.resolve("$name.png"), data.bytes) }

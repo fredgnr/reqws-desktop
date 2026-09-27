@@ -46,8 +46,10 @@ class ReqwsContentSessionTest : BasePlatformTestCase() {
   fun testRecreatedContentGetsLatestProjectStateAndHasOneOwnedListener() {
     val publisher = TerminalStatePublisher(ReqwsProjectState.INACTIVE) { it.lifecycle == ReqwsLifecycleState.DISPOSED }
     var active = 0
-    repeat(3) {
-      val session = ReqwsContentSession(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+    val projectWork = SupervisorJob()
+    repeat(20) {
+      val contentWork = SupervisorJob(projectWork)
+      val session = ReqwsContentSession(CoroutineScope(contentWork + Dispatchers.Unconfined))
       val content = ContentFactory.getInstance().createContent(JPanel(), null, false)
       content.setDisposer(session)
       session.bind { listener ->
@@ -63,6 +65,11 @@ class ReqwsContentSessionTest : BasePlatformTestCase() {
         Disposer.dispose(content)
       }
       assertEquals(0, active)
+      assertTrue(contentWork.isCompleted)
+      assertTrue(projectWork.isActive)
+      assertEquals(0, projectWork.children.count())
     }
+    projectWork.cancel()
+    assertTrue(projectWork.isCompleted)
   }
 }

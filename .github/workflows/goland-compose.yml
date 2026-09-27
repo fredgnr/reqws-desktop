@@ -1,0 +1,35 @@
+name: Standalone GoLand Compose components
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  components:
+    name: Compose components and failure probes
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      REQWS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-goland
+      - name: Render production components on SDK JBR and verify failure propagation
+        run: python3 scripts/check_compose_ui.py --output integrations/goland/build/reports/compose-ci
+      - name: Preserve positive and negative JUnit, rendering and runtime evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compose-components-${{ github.run_id }}
+          path: integrations/goland/build/reports/compose-ci
+          if-no-files-found: error
+          retention-days: 14

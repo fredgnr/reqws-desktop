@@ -22,6 +22,7 @@ import org.jetbrains.intellij.platform.gradle.tasks.SignPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginSignatureTask
 import org.jetbrains.intellij.platform.gradle.tasks.ComposedJarTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.zip.ZipFile
@@ -582,7 +583,12 @@ tasks.register<Test>("composeContentHostTest") {
   testClassesDirs = integrationTestSourceSet.output.classesDirs
   classpath = integrationTestSourceSet.runtimeClasspath
   useJUnitPlatform()
-  filter { includeTestsMatching("com.reqws.goland.ComposeContentLifecycleTest") }
+  filter {
+    includeTestsMatching("com.reqws.goland.ComposeContentLifecycleTest")
+    if (providers.gradleProperty("reqwsComposeHostInput").orNull == "true") {
+      includeTestsMatching("com.reqws.goland.ComposeHostInputTest")
+    }
+  }
   systemProperty("junit.jupiter.extensions.autodetection.enabled", "false")
   systemProperty("java.awt.headless", "false")
   systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
@@ -614,14 +620,47 @@ dependencies {
   add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-junit4-desktop:1.11.0") { isTransitive = false }
   add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-desktop:1.11.0") { isTransitive = false }
   add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.10.2") { isTransitive = false }
-  // This stage validates the fixed local macOS arm64 environment. CI graphics are S3.
-  add(composeUiTestSourceSet.runtimeOnlyConfigurationName, "org.jetbrains.skiko:skiko-awt-runtime-macos-arm64:0.144.5") { isTransitive = false }
+  val os = System.getProperty("os.name").lowercase()
+  val arch = System.getProperty("os.arch").lowercase()
+  val nativePlatform = when {
+    os.contains("mac") && arch in setOf("aarch64", "arm64") -> "macos-arm64"
+    os.contains("mac") && arch in setOf("amd64", "x86_64") -> "macos-x64"
+    os.contains("linux") && arch in setOf("amd64", "x86_64") -> "linux-x64"
+    else -> error("Compose test rendering is not configured for $os/$arch")
+  }
+  add(composeUiTestSourceSet.runtimeOnlyConfigurationName,
+    "org.jetbrains.skiko:skiko-awt-runtime-$nativePlatform:0.144.5") { isTransitive = false }
 }
-tasks.register<Test>("composeUiTest") {
+fun Test.configureComposeTest() {
+  providers.gradleProperty("reqwsComposeReportRoot").orNull?.let { root ->
+    reports.junitXml.outputLocation.set(file(root).resolve("$name/junit"))
+    reports.html.outputLocation.set(file(root).resolve("$name/html"))
+    systemProperty("reqws.compose.reports", file(root).absolutePath)
+  }
+  // Reuse the SDK's JBR launcher, not a generic build JVM or a complete IDE.
+  javaLauncher.set(tasks.named<RunIdeTask>("runIde").flatMap { it.runtimeLauncher })
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+  timeout.set(Duration.ofMinutes(10))
   testClassesDirs = composeUiTestSourceSet.output.classesDirs
   classpath = composeUiTestSourceSet.runtimeClasspath
   systemProperty("java.awt.headless", "false")
   useJUnit()
   failOnNoDiscoveredTests = true
   maxParallelForks = 1
+}
+
+tasks.register<Test>("composeUiTest") {
+  configureComposeTest()
+  filter { excludeTestsMatching("*ReqwsComposeFailureProbeTest") }
+}
+
+tasks.register<Test>("composeUiFailureProbeTest") {
+  configureComposeTest()
+  filter { includeTestsMatching("*ReqwsComposeFailureProbeTest") }
+}
+
+tasks.register<Test>("composeUiEmptyProbeTest") {
+  configureComposeTest()
+  filter { includeTestsMatching("com.reqws.goland.ui.DeliberatelyAbsentComposeTest") }
 }

@@ -23,7 +23,9 @@ S0_TEST_CLASSES = (
 
 COMPOSE_TEST_CLASSES = S0_TEST_CLASSES + (
     'com/reqws/goland/ComposeContentLifecycleTest', 'com/reqws/goland/ComposeLifecycle',
+    'com/reqws/goland/ComposeHost',
     'com/reqws/goland/ui/ReqwsScreenTest', 'com/reqws/goland/ui/ReqwsTestTheme',
+    'com/reqws/goland/ui/ReqwsComposeEnvironmentTest', 'com/reqws/goland/ui/ReqwsComposeFailureProbeTest',
 )
 
 

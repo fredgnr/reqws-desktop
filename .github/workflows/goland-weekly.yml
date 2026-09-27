@@ -40,6 +40,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  plugin-compose:
+    uses: ./.github/workflows/goland-compose.yml
+
   main-candidate:
     needs: targets
     name: Build current default-branch candidate
@@ -56,6 +59,7 @@ jobs:
           version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
             verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$version"
+          python3 scripts/check_compose_artifact.py --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$version"
           python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
             --version "$version" --output integrations/goland/build/reports/api-baseline
           python3 scripts/stage_ide_candidate.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$version"

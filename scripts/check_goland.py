@@ -19,6 +19,9 @@ def main():
                     'compileIntegrationTestKotlin', 'test', 'verifyBaselineTestReports', 'verifyForbiddenProductionSymbols', 'verifyPluginProjectConfiguration',
                     'verifyPluginStructure', 'exportPluginArchivePath', f'-PreleaseVersion={version}'], check=True)
     archive = (ROOT / 'integrations/goland/build/release/plugin-archive.txt').read_text().strip()
+    subprocess.run([sys.executable, str(ROOT / 'scripts/check_compose_ui.py')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/check_compose_artifact.py'),
+                    '--archive', archive, '--version', version], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/run_ide_verifier.py'), '--baseline',
                     '--archive', archive, '--version', version, '--output', str(output / 'baseline')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/run_ide_verifier.py'), '--snapshot', str(output / 'targets.json'),
