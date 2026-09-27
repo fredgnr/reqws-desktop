@@ -35,6 +35,7 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
   var selectedId by remember { mutableStateOf<String?>(null) }
   val ids = repositories.map { it.catalogRepositoryId }
   LaunchedEffect(ids) { if (selectedId !in ids) selectedId = null }
+  val rowHeight = 40.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
   val textMeasurer = rememberTextMeasurer()
   val colors = JewelTheme.globalColors
   val listColors = LocalSelectableLazyColumnStyle.current.simpleListItemStyle.colors
@@ -46,13 +47,14 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(colors.borders.normal))
     if (repositories.isEmpty()) {
-      Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+      Box(Modifier.fillMaxWidth().heightIn(min = rowHeight).padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center) {
         Text(ReqwsBundle.message("message.noRepositories"), modifier = Modifier.testTag("reqws.empty"), color = colors.text.info)
       }
     } else {
       val listState = rememberLazyListState()
       val scrollbarWidth = if (repositories.size > 6) LocalScrollbarStyle.current.scrollbarVisibility.trackThickness else 0.dp
-      Box(Modifier.fillMaxWidth().height((40 * repositories.size.coerceAtMost(6)).dp)) {
+      Box(Modifier.fillMaxWidth().height(rowHeight * repositories.size.coerceAtMost(6))) {
         LazyColumn(
           modifier = Modifier.fillMaxSize().padding(end = scrollbarWidth).testTag("reqws.repositoryList"),
           state = listState,
@@ -64,7 +66,7 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
             val full = listOfNotNull(repository.name, status, detail).joinToString("\n")
             val tag = "reqws.repository.${repository.catalogRepositoryId}"
             Tooltip(tooltip = { ReqwsFullText(full, "$tag.tooltip") }) {
-              Box(Modifier.fillMaxWidth().height(40.dp)
+              Box(Modifier.fillMaxWidth().height(rowHeight)
                 .background(if (selected) listColors.backgroundSelectedActive else colors.panelBackground)
                 .selectable(selected, role = Role.Button, onClick = { selectedId = repository.catalogRepositoryId })
                 .semantics(mergeDescendants = true) { contentDescription = full; stateDescription = status }

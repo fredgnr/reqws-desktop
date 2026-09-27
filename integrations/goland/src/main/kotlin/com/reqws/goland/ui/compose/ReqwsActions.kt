@@ -3,6 +3,9 @@ package com.reqws.goland.ui.compose
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -12,10 +15,12 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.reqws.goland.ReqwsBundle
 import com.reqws.goland.ui.presentation.formatDetailsText
 import com.reqws.goland.ui.state.ReqwsUiAction
 import com.reqws.goland.ui.state.ReqwsUiState
+import com.reqws.goland.ui.state.ReqwsStatusTone
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.DefaultButton
 import org.jetbrains.jewel.ui.component.Link
@@ -34,8 +39,7 @@ internal fun ReqwsActions(state: ReqwsUiState, onAction: (ReqwsUiAction) -> Unit
       horizontalAlignment = Alignment.CenterHorizontally) {
       val details = formatDetailsText(state)
       if (details != null) {
-        ReqwsLiteralText(details, "reqws.diagnostics", maxLines = 1,
-          style = reqwsSmallTextStyle(), color = colors.text.info)
+        ReqwsDiagnostics(state, details)
       }
       if (state.diagnosticsCopied) {
         if (details != null) Spacer(Modifier.height(4.dp))
@@ -55,6 +59,28 @@ internal fun ReqwsActions(state: ReqwsUiState, onAction: (ReqwsUiAction) -> Unit
       Link(ReqwsBundle.message("action.copyDiagnostics"), onClick = { onAction(ReqwsUiAction.CopyDiagnostics) },
         enabled = state.copyDiagnosticsEnabled, modifier = Modifier.testTag("reqws.copyDiagnostics"))
     }
+  }
+}
+
+/** Keep routine metadata compact while making actionable diagnostics readable. */
+@Composable
+private fun ReqwsDiagnostics(state: ReqwsUiState, details: String) {
+  val colors = JewelTheme.globalColors
+  val attention = state.errorCode != null || state.vcsDiagnosticCode != null ||
+    state.statusTone == ReqwsStatusTone.ERROR || state.statusTone == ReqwsStatusTone.WARNING
+  if (!attention) {
+    ReqwsLiteralText(details, "reqws.diagnostics", maxLines = 1,
+      style = reqwsSmallTextStyle(), color = colors.text.info)
+    return
+  }
+  val accent = if (state.statusTone == ReqwsStatusTone.ERROR || state.errorCode != null) colors.text.error else colors.text.warning
+  val style = reqwsSmallTextStyle().let { it.copy(lineHeight = (it.fontSize.value + 4f).sp) }
+  Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clip(RoundedCornerShape(4.dp))
+    .background(accent.copy(alpha = .06f).compositeOver(colors.panelBackground))
+    .testTag("reqws.diagnosticNotice")) {
+    Box(Modifier.width(2.dp).fillMaxHeight().background(accent))
+    ReqwsLiteralText(details, "reqws.diagnostics", modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp),
+      maxLines = 3, style = style)
   }
 }
 

@@ -458,6 +458,69 @@ class ReqwsScreenTest {
     assertTrue(name.right <= status.left)
   }
 
+  @Test fun attentionDiagnosticsWrapWithinThreeLinesAndKeepCompleteText() {
+    state.value = state.value.copy(errorCode = "VCS_CONFIGURATION_MISMATCH", preservedSnapshot = true,
+      errorDetailKey = "message.vcsManualConfigurationRequired")
+    mount(width = 240, height = 640)
+    val complete = requireNotNull(formatDetailsText(state.value))
+    for (isDark in listOf(false, true)) {
+      compose.runOnIdle { dark.value = isDark }
+      node("reqws.diagnosticNotice").assertIsDisplayed()
+      node("reqws.diagnostics").assertTextEquals(complete).assertContentDescriptionEquals(complete)
+      val layouts = mutableListOf<TextLayoutResult>()
+      node("reqws.diagnostics").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+      val layout = layouts.single()
+      assertEquals(3, layout.lineCount)
+      // The desktop paragraph reports truncation through didExceedMaxLines;
+      // isLineEllipsized can be false even when the rendered third line ends in an ellipsis.
+      assertTrue("long diagnostics are bounded", layout.multiParagraph.didExceedMaxLines)
+      assertTrue(layout.getLineEnd(2) < complete.length)
+      assertTrue("all three visible lines fit", layout.getLineBottom(2) <= layout.size.height + 1f)
+      assertActionsFit()
+    }
+    screenshot("product-design-diagnostic-dark")
+    compose.runOnIdle { density.value = Density(1f, 1.5f) }
+    assertActionsFit()
+    node("reqws.diagnostics").assertContentDescriptionEquals(complete)
+    screenshot("product-design-diagnostic-scaled")
+  }
+
+  @Test fun routineDiagnosticsStayCompactWithoutAnAlertSurface() {
+    state.value = state.value.copy(errorCode = null, errorDetailKey = null, preservedSnapshot = false,
+      statusTone = ReqwsStatusTone.SUCCESS, statusKey = "state.synchronized", digest = "123456789abc")
+    mount()
+    node("reqws.diagnosticNotice").assertDoesNotExist()
+    node("reqws.diagnostics").assertTextEquals(ReqwsBundle.message("message.currentDigest", "123456789abc"))
+    val layouts = mutableListOf<TextLayoutResult>()
+    node("reqws.diagnostics").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    assertEquals(1, layouts.single().lineCount)
+    assertActionsFit()
+  }
+
+  @Test fun enlargedRepositoryRowsAndEmptyHintKeepTheirCompleteTextHeight() {
+    state.value = state.value.copy(repositories = listOf(row("a", "repo-a")))
+    mount(width = 240)
+    compose.runOnIdle { density.value = Density(1f, 2f) }
+    val rowBounds = node("reqws.repository.a").fetchSemanticsNode().boundsInRoot
+    assertEquals(80f, rowBounds.height, 1f)
+    for (tag in listOf("reqws.repository.a.name", "reqws.repository.a.status.text")) {
+      val textBounds = node(tag, true).fetchSemanticsNode().boundsInRoot
+      val layouts = mutableListOf<TextLayoutResult>()
+      node(tag, true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+      assertTrue("$tag fits vertically", layouts.single().getLineBottom(0) <= textBounds.height + 1f)
+      assertTrue(textBounds.top >= rowBounds.top && textBounds.bottom <= rowBounds.bottom)
+    }
+    compose.runOnIdle { state.value = state.value.copy(repositories = emptyList()) }
+    val layouts = mutableListOf<TextLayoutResult>()
+    node("reqws.empty").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    val layout = layouts.single()
+    assertFalse(layout.multiParagraph.didExceedMaxLines)
+    assertEquals(layout.layoutInput.text.length, layout.getLineEnd(layout.lineCount - 1))
+    assertTrue(layout.getLineBottom(layout.lineCount - 1) <= layout.size.height + 1f)
+    assertActionsFit()
+    screenshot("product-design-empty-scaled")
+  }
+
   private fun screenshot(name: String) {
     val image = node("reqws.screen").captureToImage()
     val directory = Path.of(System.getProperty("reqws.compose.reports", "build/reports/compose-ui"), "screenshots")

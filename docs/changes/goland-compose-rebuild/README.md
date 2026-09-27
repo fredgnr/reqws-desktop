@@ -14,6 +14,7 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
+| [Product Design 原型与实施](product-design-2026-09-27.md) | active | 记录旧版基线上的诊断、字重与字号适配优化及本轮证据。 |
 | [技术方案](technical-design.md) | draft | 定义范围、宿主依赖、展示状态、线程、生命周期和旧代码清理边界。 |
 | [分阶段任务](tasks/README.md) | draft | 按 S0–S4 拆分可执行子任务、依赖、所有权和阶段验收条件。 |
 | [Subagent 协作方案](subagent-plan.md) | draft | 定义按需委派、模型核验、并发文件隔离、任务提示词和集成职责。 |
