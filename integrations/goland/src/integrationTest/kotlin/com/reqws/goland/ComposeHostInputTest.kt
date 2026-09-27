@@ -285,6 +285,8 @@ class ComposeHostInputTest {
         assertTrue(notice.maxY <= node("reqws.sync").boundsOnScreen.y, "diagnostics do not overlap the primary action")
         assertTrue(ideFrame().x { and(byAttribute("testtag", "reqws.diagnostics"), byAttribute("contentdescription", fullDiagnostic)) }.present())
         capture("font-$size-$theme-narrow")
+        node("reqws.copyDiagnostics").strictClick()
+        focused("reqws.copyDiagnostics")
         node("reqws.diagnostics").moveMouse()
         waitFor("actual tooltip retains the complete diagnostic", 10.seconds) {
           ui.x { and(byAttribute("testtag", "reqws.diagnostics.tooltip"), byAttribute("text", fullDiagnostic)) }.present()
@@ -295,7 +297,20 @@ class ComposeHostInputTest {
         tooltip.robot.rotateMouseWheel(12)
         waitFor("tooltip remains open after real scrolling", 10.seconds) { tooltip.present() }
         capture("font-$size-$theme-tooltip-tail")
+        node("reqws.copyDiagnostics").keyboard { escape() }
+        waitFor("Escape dismisses the actual tooltip", 10.seconds) { !tooltip.present() }
+        focused("reqws.copyDiagnostics")
+        node("reqws.repositoryCount").moveMouse()
+        node("reqws.diagnostics").moveMouse()
+        waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
+        node("reqws.repositoryCount").strictClick()
+        waitFor("outside click dismisses the actual tooltip", 10.seconds) { !tooltip.present() }
+        copyToClipboard("style-first-copy-sentinel")
         node("reqws.copyDiagnostics").strictClick()
+        waitFor("first copy replaces the fresh sentinel", 10.seconds) {
+          val copied = getClipboardText().toString()
+          copied.startsWith("pluginVersion=") && copied.endsWith("errorField=")
+        }
         val fullCopy = getClipboardText().toString()
         assertTrue(fullCopy.contains("vcsDiagnosticCode=VCS_CONFIGURATION_MISMATCH"))
         assertTrue(fullCopy.contains("repositoryCount=2"))
@@ -307,7 +322,7 @@ class ComposeHostInputTest {
         copyToClipboard("style-copy-sentinel")
         node("reqws.copyDiagnostics").strictClick()
         waitFor("complete diagnostic copy is repeatable", 10.seconds) { getClipboardText().toString() == fullCopy }
-        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltip=full copy=full actions=3")
+        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltip=full copy=full actions=3 escape=true outside=true")
         if (largeFont) {
           val manifest = mapper.readTree(originalManifest) as ObjectNode
           val repositories = manifest.withArray("repositories")
