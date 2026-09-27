@@ -38,6 +38,12 @@ Compose 三个生产文件已实现标题 Medium 字重、最多三行的语义�
 
 首次终端默认Java21导致Gradle尝试获取Java25，已停止该次构建并切换到现有JBR25；没有启动IDE。首次直接回归26项中1项新断言失败：桌面paragraph的 `isLineEllipsized` 为false，但截图已显示省略号，`didExceedMaxLines` 为true且末行offset小于原文长度。断言改为验证后两项、三行真实边界和完整语义；原始失败报告保留在 `/private/tmp/reqws-product-design-direct` 与 `reqws-product-design-probe`。
 
-最终 `npm run check:goland`、新候选与固定提交的独立审查正在进行，尚不声称完成。
+生产与测试固定提交为 `bbbf02b`。在该干净提交运行的完整 `npm run check:goland` 已退出0：39类、364项平台测试，27项组件/环境测试，均0失败/错误/跳过；指定断言失败与空发现探针按预期失败。生产/测试/集成编译、禁用符号、结构/descriptor、326类ZIP隔离检查、最低/代表版2目标及新冻结完整7个API目标全部通过。API原始失败级别与唯一已授权的初始JPS精确例外继续由既有入口裁决，没有增加例外。
+
+原始日志为 `/private/tmp/reqws-product-design-final-check.log`；组件报告 `run-8h9u0tzb/evidence` 记录 `sourceCommit=bbbf02b`、工作区干净；API报告在私有临时目录 `reqws-api-uhz98h9w`。私有候选身份为 `/private/tmp/reqws-product-design-candidate.json`，确切ZIP另存 `/private/tmp/reqws-product-design-bbbf02b.zip`；所有API报告与保留ZIP保持一致。没有将私有截图或原型资产推送到仓库。
+
+独立Reviewer `/root/product_design_review` 采用 `requested_profile=astra`、`effective_model=gpt-6-astra`、`effective_reasoning=xhigh`，由宿主工具目录及显式参数核验为verified、非继承。对固定提交、原型、原始26项直接组件以及最终364平台/27组件、负探针和候选身份进行只读审查，未发现需要修复的代码问题。同一Reviewer进一步核对冻结清单、完整7份原始Verifier结果与同一ZIP身份，确认全部已完成、无遗漏或新增API问题，本地自动门禁审查范围无剩余阻塞。
+
+后续文档提交不改变上述生产/测试输入或ZIP。远端结果以[现有PR #29](https://github.com/fredgnr/reqws-desktop/pull/29)的对应提交检查为准；这里的通过结论仅覆盖上述本地候选，不借交接时 `6f6fa4e` 的绿CI证明新代码。
 
 本轮原生 IDE 最终验收尚未授权启动，Compose、受影响 legacy 及 Desktop→GoLand 临时工作区联动继续待运行；旧ZIP结果不能借给本轮新候选。VoiceOver 未运行，按用户要求豁免。S4/G4不因此变为通过。
