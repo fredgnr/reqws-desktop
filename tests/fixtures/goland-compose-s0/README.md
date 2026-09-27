@@ -39,4 +39,4 @@ rendering flags, production code or exception suppressions implement this adapte
 All remote interfaces and performance sampling stay in test source sets. Neither
 these reports nor a static screenshot replace the retained nine-process integration
 suite. Commands, evidence and the G0 decision are in the
-[S0 verification record](../../../docs/changes/goland-compose-rebuild/s0-verification-2026-09-26.md).
+[S0 verification record](../../../docs/changes/goland-compose-rebuild/s0-verification.md).

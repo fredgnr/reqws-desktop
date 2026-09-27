@@ -32,7 +32,7 @@ Main 独占实现 checkout、构建输出、专用 IDE profile 与远端写入�
 
 ## 旧断言接续与 S4 删除条件
 
-以 [S2迁移表](s2-verification-2026-09-27.md#4-旧断言迁移)为基础，本轮补齐其中缺少的格式化错误保留提示、Unicode换行、完整诊断/无障碍与窄宽RTL行为。`ReqwsProjectServiceTest` 中12处旧 ViewModel 调用仍需在S4改为新Mapper，保留所有错误、投影、取消和恢复断言。旧Panel/ViewModel/LatestOnlyEdtDispatcher及其三个专属测试文件是待删除清单，尚未删除；publisher、Factory/availability、项目服务与全部安全回归继续保留。
+以 [S2迁移表](s2-verification.md#4-旧断言迁移)为基础，本轮补齐其中缺少的格式化错误保留提示、Unicode换行、完整诊断/无障碍与窄宽RTL行为。`ReqwsProjectServiceTest` 中12处旧 ViewModel 调用仍需在S4改为新Mapper，保留所有错误、投影、取消和恢复断言。旧Panel/ViewModel/LatestOnlyEdtDispatcher及其三个专属测试文件是待删除清单，尚未删除；publisher、Factory/availability、项目服务与全部安全回归继续保留。
 
 初轮固定 `8161e77` 宿主报告为 failed：Project辅助检查先打开面板，破坏未打开面板断言；同步临时禁用影响焦点假设；动态卸载后的 Content 销毁检查未成立。独立Reviewer另指出复制旧反馈可掩盖键盘失效、weekly组件未绑定冻结source-ref、发布依赖集合测试未更新。Main正在修复并重跑，不能将此轮记为通过。VoiceOver未启用。
 

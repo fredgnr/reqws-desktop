@@ -20,11 +20,11 @@
 
 | 阶段 | 当前执行状态 | 退出条件 | 未完成验证 |
 |---|---|---|---|
-| S0 | completed | [本轮记录](../s0-verification-2026-09-26.md)：依赖、组件、真实输入与内容生命周期通过，`7ad3387` 独立审查完成；按用户要求取消性能门禁后 G0 pass。 | 无 S0 必需项遗留；后续阶段仍按各自范围验证。 |
-| S1 | completed | [S1 实施记录](../s1-verification-2026-09-27.md)：G1 pass，`cccc3de` 独立审查闭环；共享契约、有序状态和真实 Content 生命周期已验证。 | 无本阶段必需项遗留；V06 的完整卸载/重载仍由 S3 扩充。 |
-| S2 | completed | [S2 验证记录](../s2-verification-2026-09-27.md)：G2 pass，`34f1392` 独立审查与最终同候选验证闭环。 | 无本阶段必需项遗留；CI 图形、系统主题/输入和 VoiceOver 仍由 S3 扩充。 |
-| S3 | completed | [S3记录](../s3-verification-2026-09-27.md)：24组件、CI、原生输入/主题/重载和20轮Content通过独立审查，G3 pass。 | VoiceOver按用户要求豁免，未运行。 |
-| S4 | in-progress | [S4记录](../s4-verification-2026-09-27.md)：旧UI已清理，新UI修复候选自动门禁通过。 | legacy已通过；Compose滚动与Desktop独立状态观察待复验，随后审查与G4。 |
+| S0 | completed | [本轮记录](../s0-verification.md)：依赖、组件、真实输入与内容生命周期通过，`7ad3387` 独立审查完成；按用户要求取消性能门禁后 G0 pass。 | 无 S0 必需项遗留；后续阶段仍按各自范围验证。 |
+| S1 | completed | [S1 实施记录](../s1-verification.md)：G1 pass，`cccc3de` 独立审查闭环；共享契约、有序状态和真实 Content 生命周期已验证。 | 无本阶段必需项遗留；V06 的完整卸载/重载仍由 S3 扩充。 |
+| S2 | completed | [S2 验证记录](../s2-verification.md)：G2 pass，`34f1392` 独立审查与最终同候选验证闭环。 | 无本阶段必需项遗留；CI 图形、系统主题/输入和 VoiceOver 仍由 S3 扩充。 |
+| S3 | completed | [S3记录](../s3-verification.md)：24组件、CI、原生输入/主题/重载和20轮Content通过独立审查，G3 pass。 | VoiceOver按用户要求豁免，未运行。 |
+| S4 | in-progress | [S4记录](../s4-verification.md)：旧UI已清理，新UI修复候选自动门禁通过。 | legacy已通过；Compose滚动与Desktop独立状态观察待复验，随后审查与G4。 |
 
 阶段记录使用 planned、in-progress、blocked、completed；文档 frontmatter 的 draft/active 是另一维度，不混为实现完成度。开始实施时在本表链接真实记录与 commit，不把本计划生成日期当作测试日期。
 

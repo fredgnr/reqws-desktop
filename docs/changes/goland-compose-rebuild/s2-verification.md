@@ -13,7 +13,7 @@ updated: 2026-09-27
 
 G1 交接为 `166f564`，S2 初始实现与测试为 `89796e7`；`b0e5eb6` 统一源文件空白，`34f1392` 修复真实宿主暴露的合并语义标签，并补充直接摘要状态测试。Factory 继续挂载 [ReqwsScreen](../../../integrations/goland/src/main/kotlin/com/reqws/goland/ui/compose/ReqwsScreen.kt)，摘要、仓库列表、诊断和三个操作共用一个内容根；组件仅接受不可变数据和事件，不持有 Project/service/VFS，不执行领域写入。旧 Swing 源码与测试仍保留，S4 再删除，不存在运行时 UI 回退开关。
 
-资源 catalog 未改变，全部 UI 文案仍来自 `ReqwsBundle`，没有翻译 delta，也没有重新确认翻译基线。最低版本不变：整个 262 系列，无任何兼容上限。工具链/代表宿主与 [S1 记录](s1-verification-2026-09-27.md)一致。
+资源 catalog 未改变，全部 UI 文案仍来自 `ReqwsBundle`，没有翻译 delta，也没有重新确认翻译基线。最低版本不变：整个 262 系列，无任何兼容上限。工具链/代表宿主与 [S1 记录](s1-verification.md)一致。
 
 ## 2. 生产行为
 

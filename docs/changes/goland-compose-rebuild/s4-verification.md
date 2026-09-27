@@ -13,7 +13,7 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 
 删除旧 `ReqwsToolWindowPanel`、`ReqwsToolWindowViewModel`、`LatestOnlyEdtDispatcher` 及三个专属测试文件。项目服务测试12处调用原子迁移至 `ReqwsUiStateMapper.map`，保留错误、投影证明、取消和恢复断言。Factory/availability、TerminalStatePublisher、Presenter、Content session及领域安全测试不删。S0历史patch继续用于原Git基线重建，不是正式运行时或双UI入口。
 
-旧Panel由[S2迁移表](s2-verification-2026-09-27.md#4-旧-panel-意图接续)和[S3补充](s3-verification-2026-09-27.md)的24组件接续；恢复旧版结构后增加状态标签、40dp横向行、六行上限、按钮/链接层级与短名宽度回归。旧ViewModel20意图在Mapper同名测试保留；旧dispatcher四项有序/终态/关闭意图由Presenter及平台Content测试接续，业务latest-wins/publisher回归仍保留。
+旧Panel由[S2迁移表](s2-verification.md#4-旧-panel-意图接续)和[S3补充](s3-verification.md)的24组件接续；恢复旧版结构后增加状态标签、40dp横向行、六行上限、按钮/链接层级与短名宽度回归。旧ViewModel20意图在Mapper同名测试保留；旧dispatcher四项有序/终态/关闭意图由Presenter及平台Content测试接续，业务latest-wins/publisher回归仍保留。
 
 ## 最终候选与验证
 
@@ -27,7 +27,7 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 
 ## 后续 Product Design 迭代
 
-用户随后要求先完成可见原型再改造UI，并允许适度美观性/可用性调整、不追求一比一复刻。新范围与当前证据见[Product Design记录](product-design-2026-09-27.md)。上面的 `3c305f6` 仅代表清理候选；新UI改变后的ZIP需重新绑定自动检查和本机证据，G4继续未通过。
+用户随后要求先完成可见原型再改造UI，并允许适度美观性/可用性调整、不追求一比一复刻。新范围与当前证据见[Product Design记录](product-design.md)。上面的 `3c305f6` 仅代表清理候选；新UI改变后的ZIP需重新绑定自动检查和本机证据，G4继续未通过。
 
 ## 当前冻结候选与剩余原生验收
 
@@ -42,6 +42,6 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 
 图片范围需准确保留：Desktop部分IDE通知遮挡底部操作，少量Dock标签位于底边，但本轮树、加载数和错误码可见；未出现前轮索引占位图缺口，不能扩大为所有操作都无遮挡。旧 `cl9ubc8x` 的33图与占位局限保留在历史记录，不替代新37图结论。Compose的017错误图在finally恢复字号/宽度后采集，不能证明失败前的大字号列表边界；后续测试已前置采图并记录实际视口/首末行几何，严格完整包含、行高与位移断言保持不变。
 
-修复使用公开Driver/标准Java API：等待窗口注册但不提前创建Content；读取真实Compose属性；滚动由实际Robot输入、只读可访问数值观察；区域采图前后核对active、项目/PID和几何，不调用focus补偿。SDK确认可访问数值按实际Float按值返回；每次重新查询语义节点以避免Driver复用脱离布局的缓存。固定输入方法新增可选诊断入口，范围与完整验收隔离，不能用单项探针替代整套结果。完整失败历史见[Product Design记录](product-design-2026-09-27.md#desktop完整通过与剩余列表边界)。没有生产、catalog、依赖、新API例外或兼容下限变化，仍支持整个262系列。
+修复使用公开Driver/标准Java API：等待窗口注册但不提前创建Content；读取真实Compose属性；滚动由实际Robot输入、只读可访问数值观察；区域采图前后核对active、项目/PID和几何，不调用focus补偿。SDK确认可访问数值按实际Float按值返回；每次重新查询语义节点以避免Driver复用脱离布局的缓存。固定输入方法新增可选诊断入口，范围与完整验收隔离，不能用单项探针替代整套结果。完整失败历史见[Product Design记录](product-design.md#desktop完整通过与剩余列表边界)。没有生产、catalog、依赖、新API例外或兼容下限变化，仍支持整个262系列。
 
 约25分钟前台时段于09:32 UTC收束，全部本轮测试进程退出、专用active-session标记为空。后续先对相同ZIP运行输入诊断，修复确认后执行完整Compose宿主套件；无需重跑输入未变且已通过的legacy/Desktop。新的原生执行需要新的用户前台时段。VoiceOver继续豁免；S4保持in-progress，G4未通过。

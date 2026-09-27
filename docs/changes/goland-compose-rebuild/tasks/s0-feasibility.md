@@ -11,7 +11,7 @@ updated: 2026-09-27
 
 ## 输入和边界
 
-输入为固定实施 head、当前工具链/SDK 政策、现有 Panel 与测试、[技术方案](../technical-design.md)及[测试方案](../test-plan.md)。初始文档 PR 不构建或启动 IDE；2026-09-26 用户已授权执行 S0，实际结果见[验证记录](../s0-verification-2026-09-26.md)。2026-09-27 用户取消性能门禁后，现有功能证据满足本阶段要求，G0 为 pass、S0 为 completed；S1 尚未开始。
+输入为固定实施 head、当前工具链/SDK 政策、现有 Panel 与测试、[技术方案](../technical-design.md)及[测试方案](../test-plan.md)。初始文档 PR 不构建或启动 IDE；2026-09-26 用户已授权执行 S0，实际结果见[验证记录](../s0-verification.md)。2026-09-27 用户取消性能门禁后，现有功能证据满足本阶段要求，G0 为 pass、S0 为 completed；S1 尚未开始。
 
 Main 独占 Gradle、settings、descriptor、SDK 策略和最小宿主入口；Explorer 仅读资料和测试，Reviewer 仅读最终验证结果。测试使用隔离 fixture/profile；不得写用户工作区或安装日常 IDE。
 
