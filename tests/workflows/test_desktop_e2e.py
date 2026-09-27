@@ -5,9 +5,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -310,6 +313,125 @@ class InvocationTests(unittest.TestCase):
                 self.assertTrue(popen.call_args.kwargs['start_new_session'])
                 self.assertFalse(popen.call_args.kwargs['shell'])
                 self.assertIn('fixture stdout', log.read_text())
+
+    def test_wait_error_still_stops_child_and_checks_registered_groups(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(E2E, 'ROOT', root), patch.object(E2E.subprocess, 'Popen') as popen, \
+                    patch.object(E2E.os, 'killpg') as kill, patch.object(E2E, 'cleanup_owned_processes', return_value=[]) as cleanup:
+                process = popen.return_value; process.pid = 5678; process.stdout = iter([])
+                process.wait.side_effect = [OSError('wait failed'), 0]
+                with self.assertRaisesRegex(OSError, 'wait failed'):
+                    E2E.run_child(['playwright'], 1, root / 'registry', root / 'runner.log')
+                kill.assert_called_once_with(5678, signal.SIGTERM)
+                cleanup.assert_called_once_with(root / 'registry')
+
+
+class CancellationTests(unittest.TestCase):
+    def wait_until(self, condition):
+        deadline = time.monotonic() + 10
+        while not condition():
+            if time.monotonic() >= deadline:
+                self.fail('Disposable cancellation fixture did not reach its expected state')
+            time.sleep(0.02)
+
+    def check_signal_cleanup(self, signum, force_kill=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            processes = []
+            reapers = []
+            runner = None
+            child_identity = None
+            try:
+                # The controller owns/reaps these independent sessions. Two are
+                # registered just like detached Electron/Git groups; one is not.
+                for _ in range(3):
+                    processes.append(subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                                       start_new_session=True))
+                records = [{'event': 'start', 'id': f'01234567-89ab-cdef-0123-{index:012d}',
+                            'pid': process.pid, 'signature': E2E.process_signature(process.pid)}
+                           for index, process in enumerate(processes[:2])]
+                for process in processes[:2]:
+                    reaper = threading.Thread(target=process.wait, daemon=True)
+                    reaper.start()
+                    reapers.append(reaper)
+                (root / 'registered.json').write_text(json.dumps(records))
+                (root / 'passing-report.json').write_text(json.dumps(report()))
+                (root / 'child.py').write_text('''import json, os, pathlib, signal, sys, time
+root = pathlib.Path.cwd()
+def stopping(_signum, _frame):
+    (root / 'stopping').touch()
+signal.signal(signal.SIGTERM, stopping)
+records = json.loads((root / 'registered.json').read_text())
+pathlib.Path(os.environ['REQWS_E2E_PROCESS_REGISTRY']).write_text(''.join(json.dumps(row) + '\\n' for row in records))
+(root / 'test-results/desktop-report.json').write_bytes((root / 'passing-report.json').read_bytes())
+print('real child output before cancellation', flush=True)
+(root / 'ready').write_text(str(os.getpid()))
+while sys.argv[1] == 'force' or not (root / 'release').exists():
+    time.sleep(0.02)
+''')
+                (root / 'runner.py').write_text('''import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import desktop_e2e as runner
+runner.ROOT = pathlib.Path(sys.argv[2])
+runner.command = lambda *_: [sys.executable, '-u', str(runner.ROOT / 'child.py'), sys.argv[3]]
+runner.identity = lambda *_: {'scope': 'disposable signal regression'}
+sys.exit(runner.cli(['--mode', 'source', '--timeout', '30']))
+''')
+                runner = subprocess.Popen([sys.executable, '-u', str(root / 'runner.py'), str(ROOT / 'scripts'),
+                                           str(root), 'force' if force_kill else 'graceful'],
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+                self.wait_until(lambda: (root / 'ready').exists() or runner.poll() is not None)
+                self.assertIsNone(runner.poll())
+                child_pid = int((root / 'ready').read_text())
+                child_identity = (child_pid, E2E.process_signature(child_pid))
+                self.assertEqual(os.getpgid(child_pid), child_pid)
+                runner.send_signal(signum)
+                self.wait_until(lambda: (root / 'stopping').exists() or runner.poll() is not None)
+                self.assertTrue((root / 'stopping').exists(), 'Runner exited before controlled child cleanup')
+                # A second cancellation during the grace period must not bypass
+                # registered-group cleanup or the failed summary publication.
+                runner.send_signal(signal.SIGTERM)
+                if not force_kill:
+                    (root / 'release').touch()
+                output, _ = runner.communicate(timeout=15)
+                self.assertEqual(runner.returncode, 1, output)
+                for process in processes[:2]:
+                    self.assertEqual(process.wait(timeout=2), -signal.SIGKILL)
+                self.assertIsNone(E2E.process_signature(child_pid), 'Runner did not reap its child')
+                self.assertIsNone(processes[2].poll(), 'Unregistered process was signalled')
+                summary = json.loads((root / 'test-results/source-result.json').read_text())
+                self.assertEqual(summary['status'], 'failed')
+                self.assertIn('interrupted', summary['error'])
+                self.assertIn('finishedAt', summary)
+                self.assertNotIn('tests', summary, 'Cancellation borrowed a passing child report')
+                self.assertIn('real child output before cancellation', (root / 'test-results/source-runner.log').read_text())
+                self.assertIn('Desktop E2E failed:', output)
+            finally:
+                if runner is not None:
+                    if runner.poll() is None:
+                        runner.kill()
+                    runner.communicate(timeout=5)
+                if child_identity is not None:
+                    pid, signature = child_identity
+                    if signature is not None and E2E.process_signature(pid) == signature:
+                        try: os.killpg(pid, signal.SIGKILL)
+                        except ProcessLookupError: pass
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                for reaper in reapers:
+                    reaper.join(timeout=5)
+
+    def test_sigterm_cleans_real_owned_sessions_and_publishes_failure(self):
+        self.check_signal_cleanup(signal.SIGTERM)
+
+    def test_sigint_retains_controlled_cleanup_and_failure(self):
+        self.check_signal_cleanup(signal.SIGINT)
+
+    def test_sigterm_escalates_when_child_ignores_graceful_stop(self):
+        self.check_signal_cleanup(signal.SIGTERM, force_kill=True)
 
 
 class ProcessRegistryTests(unittest.TestCase):

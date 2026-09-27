@@ -358,7 +358,35 @@ def cleanup_owned_processes(filename):
     return killed
 
 
-def run_child(args, timeout, registry, log_path):
+class Cancellation:
+    def __init__(self):
+        self.requested = False
+
+
+def check_cancelled(cancellation):
+    if cancellation is not None and cancellation.requested:
+        raise KeyboardInterrupt('Electron runner cancellation requested')
+
+
+def wait_for_child(process, timeout, cancellation):
+    if cancellation is None:
+        process.wait(timeout=timeout)
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        check_cancelled(cancellation)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            process.wait(timeout=min(remaining, 0.25))
+            return
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def run_child(args, timeout, registry, log_path, cancellation=None):
+    check_cancelled(cancellation)
     process = subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, start_new_session=True, shell=False)
     output = []
@@ -375,37 +403,45 @@ def run_child(args, timeout, registry, log_path):
             log_errors.append(str(error))
 
     reader = threading.Thread(target=tee, daemon=True)
-    reader.start()
     timed_out = False
+    completed = False
     try:
-        process.wait(timeout=timeout)
+        reader.start()
+        wait_for_child(process, timeout, cancellation)
+        check_cancelled(cancellation)
+        completed = True
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
         timed_out = True
-        # Electron and git-http-backend are detached group leaders; this Node
-        # group signal first gives their fixture a chance to close them normally.
-        try: os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError: pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            try: os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
-            process.wait(timeout=5)
     finally:
         try:
-            killed = cleanup_owned_processes(registry)
+            if not completed:
+                # Give the fixture a bounded chance to close its detached groups,
+                # including when waiting/log setup failed for a different reason.
+                try: os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError: pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try: os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    process.wait(timeout=5)
         finally:
-            reader.join(timeout=5)
+            try:
+                killed = cleanup_owned_processes(registry)
+            finally:
+                if reader.ident is not None:
+                    reader.join(timeout=5)
     if reader.is_alive() or log_errors:
         raise ValueError('Electron runner log capture did not finish: ' + '; '.join(log_errors))
     if timed_out:
         raise ValueError('Electron runner timed out or was interrupted; owned process groups were checked')
+    check_cancelled(cancellation)
     if killed:
         raise ValueError('Electron runner left live owned process groups after completion')
     return process.returncode, ''.join(output)
 
 
-def main(argv=None):
+def main(argv=None, cancellation=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode', choices=MODES, default='source')
     parser.add_argument('--app', type=Path)
@@ -421,8 +457,10 @@ def main(argv=None):
         raise ValueError('--authorize-only is only supported for packaged smoke')
     candidate = authorize_packaged(args.app) if args.mode == 'packaged' else None
     if args.authorize_only:
+        check_cancelled(cancellation)
         print(json.dumps(candidate))
         return
+    check_cancelled(cancellation)
     if candidate:
         os.environ['REQWS_PACKAGED_APP'] = candidate['app']
     results = ROOT / 'test-results'
@@ -442,25 +480,46 @@ def main(argv=None):
     summary = {'status': 'failed', 'identity': identity(args.mode, invocation), 'candidate': candidate}
     started = time.time()
     try:
-        returncode, _ = run_child(invocation, args.timeout, registry_path, results / f'{args.mode}-runner.log')
+        returncode, _ = run_child(invocation, args.timeout, registry_path, results / f'{args.mode}-runner.log', cancellation)
         summary['returncode'] = returncode
         summary['tests'] = validate_report(read_json(report_path), returncode, args.mode)
         if args.mode == 'negative':
             summary['evidence'] = validate_negative_evidence(results / 'probes', started)
+        check_cancelled(cancellation)
         summary['status'] = 'passed'
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
-        summary['error'] = str(error)
+    except (OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError, KeyboardInterrupt) as error:
+        summary['error'] = str(error) or 'Electron runner interrupted'
         raise
     finally:
+        if cancellation is not None and cancellation.requested:
+            summary['status'] = 'failed'
+            summary.setdefault('error', 'Electron runner cancellation requested')
         summary['finishedAt'] = datetime.now(timezone.utc).isoformat()
         summary_path.write_text(json.dumps(summary, indent=2) + '\n')
     print(json.dumps({'status': summary['status'], 'mode': args.mode,
                       'executed': summary['tests']['executed'], 'failed': summary['tests']['failed']}))
 
 
-if __name__ == '__main__':
+def cli(argv=None):
+    cancellation = Cancellation()
+
+    def interrupted(_signum, _frame):
+        # Observe cancellation at controlled checkpoints. Raising inside Popen
+        # or cleanup can lose a detached child or interrupt its final reaping.
+        cancellation.requested = True
+
+    previous = {signum: signal.signal(signum, interrupted) for signum in (signal.SIGINT, signal.SIGTERM)}
     try:
-        main()
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        main(argv, cancellation)
+        check_cancelled(cancellation)
+        return 0
+    except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt) as error:
         print(f'Desktop E2E failed: {error}', file=sys.stderr)
-        sys.exit(1)
+        return 1
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+if __name__ == '__main__':
+    sys.exit(cli())
