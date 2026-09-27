@@ -216,7 +216,7 @@ class DesktopWorkspaceIntegrationTest {
 
   private fun Driver.assertVisibleError(fixture: DesktopProjectionFixture, phase: String, errorCode: String) {
     openToolWindow("ReqWS")
-    val panel = ideFrame().x { byJavaClass("com.reqws.goland.ui.ReqwsToolWindowPanel") }
+    val panel = ideFrame().x { byAttribute("testtag", "reqws.screen") }
     var statusTexts = emptyList<String>()
     var detailTexts = emptyList<String>()
     waitFor("ReqWS visibly reports Error and $errorCode", 30.seconds) {

@@ -14,6 +14,7 @@ import com.intellij.driver.sdk.ui.getClipboardText
 import com.intellij.driver.sdk.ui.copyToClipboard
 import java.awt.event.KeyEvent
 import com.intellij.driver.sdk.ui.components.common.ideFrame
+import com.intellij.driver.sdk.ui.components.elements.balloon
 import com.intellij.driver.sdk.ui.components.settings.clickOkBtnAndCloseDialog
 import com.intellij.driver.sdk.ui.components.settings.openPluginsSettings
 import com.intellij.driver.sdk.ui.components.settings.pluginsSettingsPage
@@ -45,6 +46,7 @@ class ComposeHostInputTest {
     host.withIde(context) {
       host.assertProjection(this, fixture)
       focusContent()
+      capture("legacy-layout")
       val logRoot = Path.of(requireNotNull(utility<LocalIdeSystemProperties>().getProperty("idea.log.path"))).toRealPath()
       check(logRoot.startsWith(host.root))
       val log = logRoot.resolve("idea.log")
@@ -55,6 +57,7 @@ class ComposeHostInputTest {
       waitFor("manual pointer synchronization finished", 30.seconds) {
         service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED")
       }
+      dismissNotifications()
       node("reqws.copyDiagnostics").strictClick()
       focused("reqws.copyDiagnostics")
       recordFocus("before-reverse-tab")
@@ -75,6 +78,7 @@ class ComposeHostInputTest {
       waitFor("manual keyboard synchronization finished", 30.seconds) {
         service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED")
       }
+      dismissNotifications()
       node("reqws.copyDiagnostics").strictClick()
       focused("reqws.copyDiagnostics")
       recordFocus("before-reverse-tab")
@@ -94,6 +98,7 @@ class ComposeHostInputTest {
         }
       }
       focusContent()
+      dismissNotifications()
       node("reqws.copyDiagnostics").strictClick()
       waitFor("pointer copy has visible feedback and actual clipboard diagnostics", 10.seconds) {
         node("reqws.copyFeedback").present() && getClipboardText().toString().contains("strategy=loaded-roots-v1")
@@ -115,6 +120,7 @@ class ComposeHostInputTest {
           }
           waitFor("real IDE theme applied", 30.seconds) { manager.getCurrentUIThemeLookAndFeel().isDark() == dark }
           focusContent()
+          dismissNotifications()
           node("reqws.copyDiagnostics").strictClick()
           focused("reqws.copyDiagnostics")
           for (scale in listOf(1f, 1.25f)) {
@@ -182,6 +188,7 @@ class ComposeHostInputTest {
         host.assertProjection(this, fixture)
         focusContent()
         assertEquals(1, ideFrame().xx { byAttribute("testtag", "reqws.screen") }.list().size)
+        dismissNotifications()
         node("reqws.copyDiagnostics").strictClick()
         waitFor("reloaded content accepts actual input", 10.seconds) { node("reqws.copyFeedback").present() }
         fixture.select(listOf("repo-a", "repo-b"))
@@ -196,9 +203,17 @@ class ComposeHostInputTest {
 
   private fun Driver.setPluginEnabled(enabled: Boolean) {
     openPluginsSettings()
-    val page = ideFrame().pluginsSettingsPage().openInstalledTab().searchForPlugin("ReqWS")
-    val checkbox = page.listPluginComponent("ReqWS").enabledCheckBox
+    val page = ideFrame().pluginsSettingsPage()
+    page.installedTab.click()
+    page.searchForPlugin("ReqWS")
+    val row = page.listPluginComponent("ReqWS")
+    // Marketplace detail loading is unrelated to the installed plugin checkbox.
+    waitFor("installed ReqWS checkbox is available", 30.seconds) {
+      row.present() && row.enabledCheckBox.present() && row.enabledCheckBox.isEnabled()
+    }
+    val checkbox = row.enabledCheckBox
     if (enabled) checkbox.check() else checkbox.uncheck()
+    waitFor("installed ReqWS checkbox changed", 10.seconds) { checkbox.isSelected() == enabled }
     ideFrame().clickOkBtnAndCloseDialog()
   }
 
@@ -208,6 +223,27 @@ class ComposeHostInputTest {
     waitFor("production Compose actions are present", 30.seconds) { node("reqws.sync").present() }
     waitFor("dedicated fixture owns the focused frame", 10.seconds) {
       cast(ideFrame().component, RemoteCaptureFrame::class).isActive()
+    }
+    dismissNotifications()
+  }
+
+  private fun Driver.dismissNotifications() {
+    // Startup/synchronization notifications can arrive after the first quiet
+    // frame. Wait for an unobstructed interval, without changing IDE settings.
+    var quietSince = System.nanoTime()
+    waitFor("native notification overlay has settled", 15.seconds) {
+      val balloon = ideFrame().balloon("GOROOT is detected")
+      if (balloon.present()) {
+        balloon.moveMouse()
+        val close = ideFrame().x { byAttribute("tooltiptext", "Close. ⌥click to close all notifications") }
+        waitFor("native notification close is visible", 5.seconds) { close.present() }
+        close.strictClick()
+        waitFor("native notification balloon closed", 5.seconds) { !balloon.present() }
+        quietSince = System.nanoTime()
+        false
+      } else {
+        System.nanoTime() - quietSince >= 2_000_000_000L
+      }
     }
   }
 
@@ -228,7 +264,7 @@ class ComposeHostInputTest {
   private fun Driver.capture(name: String) {
     val screenshot = Path.of(requireNotNull(utility<ComposeHostScreenCapture>().takeFullScreenshot("compose-$name")))
     check(screenshot.toRealPath().startsWith(host.root) && Files.size(screenshot) > 0)
-    record("screenshot", screenshot.toString())
+    record(if (name == "legacy-layout") "layout-screenshot" else "screenshot", screenshot.toString())
   }
 
   private fun record(event: String, detail: String) {
