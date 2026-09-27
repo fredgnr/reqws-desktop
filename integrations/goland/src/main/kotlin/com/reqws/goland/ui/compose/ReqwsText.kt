@@ -38,7 +38,23 @@ import com.reqws.goland.ui.state.ReqwsStatusTone
 import org.jetbrains.jewel.foundation.theme.LocalColorPalette
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.Text
-import org.jetbrains.jewel.ui.component.Tooltip
+import org.jetbrains.jewel.ui.component.Popup
+import org.jetbrains.jewel.ui.component.styling.LocalTooltipStyle
+import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun ReqwsCard(tag: String, padding: Dp = 12.dp, spacing: Dp = 8.dp, content: @Composable ColumnScope.() -> Unit) {
@@ -65,7 +81,7 @@ internal fun ReqwsLiteralText(
   style: TextStyle = LocalTextStyle.current,
   fillWidth: Boolean = true,
 ) {
-  Tooltip(
+  ReqwsHoverTooltip(
     enabled = tooltipEnabled,
     modifier = modifier,
     tooltip = { ReqwsFullText(value, "$tag.tooltip") },
@@ -78,6 +94,63 @@ internal fun ReqwsLiteralText(
       color = color,
       style = style,
     )
+  }
+}
+
+/** A bounded full-text popup must stay open while the pointer enters it to scroll. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun ReqwsHoverTooltip(
+  tooltip: @Composable () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit,
+) {
+  val style = LocalTooltipStyle.current
+  var anchorHovered by remember { mutableStateOf(false) }
+  var popupHovered by remember { mutableStateOf(false) }
+  var visible by remember { mutableStateOf(false) }
+  LaunchedEffect(enabled, anchorHovered, popupHovered) {
+    if (!enabled) visible = false
+    else if (anchorHovered) {
+      delay(style.metrics.showDelay.inWholeMilliseconds.coerceAtLeast(0))
+      visible = true
+    } else if (!popupHovered) {
+      // Allow the pointer to cross the small gap between the source and popup.
+      delay(350)
+      visible = false
+    }
+  }
+  val gap = with(LocalDensity.current) { 6.dp.roundToPx() }
+  val position = remember(gap) {
+    object : PopupPositionProvider {
+      override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
+        layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val preferredX = if (layoutDirection == LayoutDirection.Ltr) anchorBounds.left else anchorBounds.right - popupContentSize.width
+        val below = anchorBounds.bottom + gap
+        val preferredY = if (below + popupContentSize.height <= windowSize.height) below else anchorBounds.top - popupContentSize.height - gap
+        return IntOffset(preferredX.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+          preferredY.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)))
+      }
+    }
+  }
+  fun dismiss() { visible = false; anchorHovered = false; popupHovered = false }
+  Box(modifier.onPointerEvent(PointerEventType.Enter) { anchorHovered = true }
+    .onPointerEvent(PointerEventType.Exit) { anchorHovered = false }) {
+    content()
+    if (visible && enabled) {
+      val shape = RoundedCornerShape(style.metrics.cornerSize)
+      Popup(popupPositionProvider = position, cornerSize = style.metrics.cornerSize,
+        onDismissRequest = ::dismiss, properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
+        onPreviewKeyEvent = { if (it.key == Key.Escape) { dismiss(); true } else false }) {
+        Box(Modifier.onPointerEvent(PointerEventType.Enter) { popupHovered = true }
+          .onPointerEvent(PointerEventType.Exit) { popupHovered = false }
+          .clip(shape).background(style.colors.background, shape)
+          .border(style.metrics.borderWidth, style.colors.border, shape).padding(style.metrics.contentPadding)) {
+          CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(color = style.colors.content)) { tooltip() }
+        }
+      }
+    }
   }
 }
 

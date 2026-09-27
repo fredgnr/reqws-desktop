@@ -24,7 +24,6 @@ import com.reqws.goland.ui.state.ReqwsRepositoryUiState
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.foundation.theme.LocalTextStyle
 import org.jetbrains.jewel.ui.component.Text
-import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.VerticalScrollbar
 import org.jetbrains.jewel.ui.component.styling.LocalScrollbarStyle
 import org.jetbrains.jewel.ui.component.styling.LocalSelectableLazyColumnStyle
@@ -35,8 +34,14 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
   var selectedId by remember { mutableStateOf<String?>(null) }
   val ids = repositories.map { it.catalogRepositoryId }
   LaunchedEffect(ids) { if (selectedId !in ids) selectedId = null }
-  val rowHeight = 40.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
   val textMeasurer = rememberTextMeasurer()
+  val density = LocalDensity.current
+  // The IDE custom font updates Jewel's TextStyle without changing fontScale.
+  // Keep the compact default while also reserving room for that real font.
+  val textHeight = with(density) {
+    textMeasurer.measure("Ag", style = LocalTextStyle.current).size.height.toDp()
+  }
+  val rowHeight = maxOf(40.dp * density.fontScale.coerceAtLeast(1f), textHeight + 24.dp)
   val colors = JewelTheme.globalColors
   val listColors = LocalSelectableLazyColumnStyle.current.simpleListItemStyle.colors
   ReqwsCard("reqws.repositories", padding = 0.dp, spacing = 0.dp) {
@@ -65,7 +70,7 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
             val detail = repository.statusDetailKey?.let { ReqwsBundle.message(it) }
             val full = listOfNotNull(repository.name, status, detail).joinToString("\n")
             val tag = "reqws.repository.${repository.catalogRepositoryId}"
-            Tooltip(tooltip = { ReqwsFullText(full, "$tag.tooltip") }) {
+            ReqwsHoverTooltip(tooltip = { ReqwsFullText(full, "$tag.tooltip") }) {
               Box(Modifier.fillMaxWidth().height(rowHeight)
                 .background(if (selected) listColors.backgroundSelectedActive else colors.panelBackground)
                 .selectable(selected, role = Role.Button, onClick = { selectedId = repository.catalogRepositoryId })

@@ -21,6 +21,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.jetbrains.jewel.foundation.theme.LocalTextStyle
 import com.reqws.goland.ReqwsBundle
 import com.reqws.goland.project.ReqwsLifecycleState
 import com.reqws.goland.project.ReqwsProjectError
@@ -46,6 +48,7 @@ class ReqwsScreenTest {
   private val density = mutableStateOf(Density(1f, 1f))
   private val actions = mutableListOf<ReqwsUiAction>()
   private val direction = mutableStateOf(LayoutDirection.Ltr)
+  private val fontSize = mutableStateOf(13.sp)
   private val widthOverride = mutableStateOf<Int?>(null)
 
   private fun sample(): ReqwsUiState = ReqwsUiStateMapper.map(
@@ -61,7 +64,9 @@ class ReqwsScreenTest {
     compose.setContent {
       CompositionLocalProvider(LocalDensity provides density.value, LocalLayoutDirection provides direction.value) {
         ReqwsTestTheme(dark.value) {
-          Box(Modifier.size((widthOverride.value ?: width).dp, height.dp)) { ReqwsScreen(state.value, actions::add) }
+          CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(fontSize = fontSize.value)) {
+            Box(Modifier.size((widthOverride.value ?: width).dp, height.dp)) { ReqwsScreen(state.value, actions::add) }
+          }
         }
       }
     }
@@ -198,6 +203,22 @@ class ReqwsScreenTest {
     node("reqws.workspace").performMouseInput { enter(center) }
     compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isNotEmpty() }
     node("reqws.workspace.tooltip").assertTextEquals("Workspace 项目")
+  }
+
+  @Test fun fullTextPopupStaysOpenForPointerScrollingAndClosesAfterExit() {
+    state.value = state.value.copy(workspaceName = "long tooltip ".repeat(100) + "END")
+    mount()
+    node("reqws.workspace").performMouseInput { enter(center) }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isNotEmpty() }
+    node("reqws.workspace").performMouseInput { exit() }
+    val tooltip = node("reqws.workspace.tooltip")
+    tooltip.performMouseInput { enter(center); scroll(androidx.compose.ui.geometry.Offset(0f, 1000f)) }
+    compose.waitForIdle()
+    val range = tooltip.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+    assertTrue("real pointer wheel scrolls the tooltip", range.value() > 0f)
+    tooltip.assertTextEquals(state.value.workspaceName!!)
+    tooltip.performMouseInput { exit() }
+    compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isEmpty() }
   }
 
   @Test fun errorAndRepeatedCopyFeedbackRemainSeparateAndUpdatesClearTheFeedback() {
@@ -519,6 +540,21 @@ class ReqwsScreenTest {
     assertTrue(layout.getLineBottom(layout.lineCount - 1) <= layout.size.height + 1f)
     assertActionsFit()
     screenshot("product-design-empty-scaled")
+  }
+
+  @Test fun hostTextStyleGrowthAtConstantDensityExpandsRepositoryRows() {
+    mount(width = 280)
+    val normal = node("reqws.repository.a").fetchSemanticsNode().boundsInRoot.height
+    compose.runOnIdle { fontSize.value = 26.sp }
+    assertEquals(Density(1f, 1f), density.value)
+    val enlarged = node("reqws.repository.a").fetchSemanticsNode().boundsInRoot
+    assertTrue("host font growth increases row height", enlarged.height > normal)
+    val layouts = mutableListOf<TextLayoutResult>()
+    node("reqws.repository.a.name", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    assertFalse(layouts.single().multiParagraph.didExceedMaxLines)
+    assertTrue(layouts.single().size.height <= enlarged.height - 10f)
+    assertActionsFit()
+    screenshot("actual-host-font-growth")
   }
 
   private fun screenshot(name: String) {

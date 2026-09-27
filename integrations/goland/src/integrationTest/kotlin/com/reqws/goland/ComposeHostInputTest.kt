@@ -1,5 +1,9 @@
 package com.reqws.goland
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
+import com.intellij.driver.sdk.ui.ui
+import java.nio.file.StandardCopyOption
 import com.intellij.driver.client.Driver
 import com.intellij.driver.client.Remote
 import com.intellij.driver.client.service
@@ -111,6 +115,8 @@ class ComposeHostInputTest {
       val originalTheme = manager.getCurrentUIThemeLookAndFeel()
       val autodetect = manager.getAutodetect()
       val originalScale = settings.getCurrentIdeScale()
+      val originalFontOverride = settings.getOverrideLafFonts()
+      val originalFontSize = settings.getFontSize2D()
       try {
         for (dark in listOf(false, true)) {
           withContext(OnDispatcher.EDT) {
@@ -146,8 +152,38 @@ class ComposeHostInputTest {
             record("theme", "dark=$dark scale=$scale focus=copyDiagnostics actions=3")
           }
         }
+        withContext(OnDispatcher.EDT) {
+          settings.setCurrentIdeScale(1f)
+          settings.fireUISettingsChanged()
+        }
+        waitFor("baseline 100 percent row layout", 10.seconds) {
+          node("reqws.repository.repo-a").boundsOnScreen.height == 40
+        }
+        val originalRow = node("reqws.repository.repo-a").boundsOnScreen
+        val originalText = node("reqws.workspace").boundsOnScreen
+        val originalLabelSize = utility<ComposeHostUIManager>().getFont("Label.font").getSize2D()
+        checkNarrowStyles(fixture, manager, largeFont = false)
+        withContext(OnDispatcher.EDT) {
+          settings.setOverrideLafFonts(true)
+          settings.setFontSize2D(originalLabelSize * 2f)
+          settings.fireUISettingsChanged()
+          manager.updateUI()
+        }
+        waitFor("actual host UI font increased independently of IDE scale", 30.seconds) {
+          settings.getCurrentIdeScale() == 1f &&
+            utility<ComposeHostUIManager>().getFont("Label.font").getSize2D() > originalLabelSize * 1.5f &&
+            node("reqws.workspace").boundsOnScreen.height > originalText.height
+        }
+        val enlargedRow = node("reqws.repository.repo-a").boundsOnScreen
+        val enlargedText = node("reqws.workspace").boundsOnScreen
+        record("font-sizing", "scale=1 baseFont=$originalLabelSize baseRow=${originalRow.height} baseText=${originalText.height} enlargedFont=${utility<ComposeHostUIManager>().getFont("Label.font").getSize2D()} enlargedRow=${enlargedRow.height} enlargedText=${enlargedText.height}")
+        capture("font-200")
+        assertTrue(enlargedRow.height > originalRow.height, "repository row must grow with the actual IDE font")
+        checkNarrowStyles(fixture, manager, largeFont = true)
       } finally {
         withContext(OnDispatcher.EDT) {
+          settings.setOverrideLafFonts(originalFontOverride)
+          settings.setFontSize2D(originalFontSize)
           settings.setCurrentIdeScale(originalScale)
           settings.fireUISettingsChanged()
           manager.setCurrentUIThemeLookAndFeel(originalTheme)
@@ -177,7 +213,17 @@ class ComposeHostInputTest {
         val disposer = utility<ComposeHostDisposer>()
         listOf(disposer.newCheckedDisposable(content), disposer.newCheckedDisposable(content.getDisposer()))
       }
+      val reloadManager = utility<ComposeHostLafManager>().getInstance()
+      val reloadOriginalTheme = reloadManager.getCurrentUIThemeLookAndFeel()
+      val reloadAutodetect = reloadManager.getAutodetect()
+      // The Islands editor scheme is temporarily unregistered by the IDE's
+      // global plugin reload. Use the built-in light theme for this one scenario.
       try {
+        withContext(OnDispatcher.EDT) {
+          reloadManager.setAutodetect(false)
+          reloadManager.setCurrentUIThemeLookAndFeel(requireNotNull(reloadManager.getDefaultLightLaf()))
+          reloadManager.updateUI()
+        }
         setPluginEnabled(false)
         waitFor("plugin dynamically unloaded without restarting the IDE", 1.minutes) { !isPluginLoaded("com.reqws.workspace") }
         waitFor("old Content and session are disposed after unload", 30.seconds) { disposalMarkers.all { it.isDisposed() } }
@@ -196,9 +242,146 @@ class ComposeHostInputTest {
         fixture.assertDiskPreserved()
         record("dynamic-reload", "unloaded content-disposed loaded empty-restored actual-click full-restored")
       } finally {
-        setPluginEnabled(true)
+        try {
+          setPluginEnabled(true)
+        } finally {
+          withContext(OnDispatcher.EDT) {
+            reloadManager.setCurrentUIThemeLookAndFeel(reloadOriginalTheme)
+            reloadManager.setAutodetect(reloadAutodetect)
+            reloadManager.updateUI()
+          }
+        }
       }
     }
+  }
+
+  private fun Driver.checkNarrowStyles(fixture: WorkspaceFixture, manager: ComposeHostLafManager, largeFont: Boolean) {
+    val window = cast(requireNotNull(service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS")), ComposeHostToolWindowEx::class)
+    val originalWidth = node("reqws.screen").boundsOnScreen.width
+    val manifestPath = fixture.root.resolve(".reqws/workspace.json")
+    val originalManifest = Files.readAllBytes(manifestPath)
+    val mapper = ObjectMapper()
+    val fullDiagnostic = "VCS_CONFIGURATION_MISMATCH · The Git Root configuration for loaded repositories needs review. " +
+      "Configure it manually in Settings → Version Control → Directory Mappings, then check again."
+    val size = if (largeFont) "large" else "base"
+    try {
+      for (dark in listOf(false, true)) {
+        withContext(OnDispatcher.EDT) {
+          manager.setCurrentUIThemeLookAndFeel(requireNotNull(if (dark) manager.getDefaultDarkLaf() else manager.getDefaultLightLaf()))
+          manager.updateUI()
+        }
+        focusContent()
+        val delta = 280 - node("reqws.screen").boundsOnScreen.width
+        withContext(OnDispatcher.EDT) { window.stretchWidth(delta) }
+        waitFor("actual narrow Tool Window", 10.seconds) { node("reqws.screen").boundsOnScreen.width in 275..285 }
+        val theme = if (dark) "dark" else "light"
+        val screen = node("reqws.screen").boundsOnScreen
+        for (tag in listOf("reqws.sync", "reqws.openManifest", "reqws.copyDiagnostics")) {
+          assertTrue(screen.contains(node(tag).boundsOnScreen), "$tag remains visible with $size font at narrow width")
+        }
+        val notice = node("reqws.diagnosticNotice").boundsOnScreen
+        val font = utility<ComposeHostUIManager>().getFont("Label.font").getSize2D()
+        assertTrue(notice.height <= (font + 2f) * 3 + 20, "diagnostic surface is bounded to three actual font lines")
+        assertTrue(notice.maxY <= node("reqws.sync").boundsOnScreen.y, "diagnostics do not overlap the primary action")
+        assertTrue(ideFrame().x { and(byAttribute("testtag", "reqws.diagnostics"), byAttribute("contentdescription", fullDiagnostic)) }.present())
+        capture("font-$size-$theme-narrow")
+        node("reqws.diagnostics").moveMouse()
+        waitFor("actual tooltip retains the complete diagnostic", 10.seconds) {
+          ui.x { and(byAttribute("testtag", "reqws.diagnostics.tooltip"), byAttribute("text", fullDiagnostic)) }.present()
+        }
+        capture("font-$size-$theme-tooltip")
+        val tooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
+        tooltip.moveMouse()
+        tooltip.robot.rotateMouseWheel(12)
+        waitFor("tooltip remains open after real scrolling", 10.seconds) { tooltip.present() }
+        capture("font-$size-$theme-tooltip-tail")
+        node("reqws.copyDiagnostics").strictClick()
+        val fullCopy = getClipboardText().toString()
+        assertTrue(fullCopy.contains("vcsDiagnosticCode=VCS_CONFIGURATION_MISMATCH"))
+        assertTrue(fullCopy.contains("repositoryCount=2"))
+        assertTrue(fullCopy.endsWith("errorField="))
+        assertEquals(listOf("pluginVersion", "ideBuild", "strategy", "lifecycle", "projectRoot", "manifestPath",
+          "lastAppliedDigest", "candidateDigest", "repositoryCount", "missingRepositoryCount", "vcsMode",
+          "configuredGitRootCount", "manualGitRootCount", "vcsDiagnosticCode", "vcsRepositoryStatuses",
+          "vcsWorkspaceDiagnostics", "errorCode", "errorField"), fullCopy.lines().map { it.substringBefore('=') })
+        copyToClipboard("style-copy-sentinel")
+        node("reqws.copyDiagnostics").strictClick()
+        waitFor("complete diagnostic copy is repeatable", 10.seconds) { getClipboardText().toString() == fullCopy }
+        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltip=full copy=full actions=3")
+        if (largeFont) {
+          val manifest = mapper.readTree(originalManifest) as ObjectNode
+          val repositories = manifest.withArray("repositories")
+          for (index in 3..8) {
+            val name = "repo-extra-$index"
+            Files.createDirectories(fixture.root.resolve(name))
+            repositories.addObject().put("catalogRepositoryId", name).put("name", name)
+              .put("url", "https://example.test/$name.git").put("defaultBranch", "main").put("relativePath", name)
+          }
+          replaceStyleManifest(manifestPath, mapper.writeValueAsBytes(manifest))
+          waitFor("eight real manifest repositories", 30.seconds) {
+            ideFrame().x { and(byAttribute("testtag", "reqws.repositoryCount"), byAttribute("text", "8")) }.present()
+          }
+          assertTrue(node("reqws.repositoryScrollbar").present())
+          capture("font-$size-$theme-long-list-before")
+          // Compose semantics components have no AWT Window ancestor. Move by
+          // the Driver's Compose-aware adapter, then wheel at the actual pointer.
+          node("reqws.workspace").moveMouse()
+          node("reqws.body").robot.rotateMouseWheel(8)
+          val list = node("reqws.repositoryList")
+          list.moveMouse()
+          val firstY = node("reqws.repository.repo-a").boundsOnScreen.y
+          list.robot.rotateMouseWheel(8)
+          waitFor("real wheel reveals the complete final row in the actual viewport", 10.seconds) {
+            val last = node("reqws.repository.repo-extra-8")
+            if (!last.present()) false else {
+              val viewport = list.boundsOnScreen.intersection(node("reqws.body").boundsOnScreen)
+              val lastBounds = last.boundsOnScreen
+              val first = node("reqws.repository.repo-a")
+              viewport.contains(lastBounds) && lastBounds.height >= 50 &&
+                (!first.present() || first.boundsOnScreen.y < firstY)
+            }
+          }
+          capture("font-$size-$theme-long-list")
+          record("style-long-list", "dark=$dark repositories=8 last=repo-extra-8 wheel=true")
+          manifest.putArray("repositories")
+          fixture.select(emptyList())
+          replaceStyleManifest(manifestPath, mapper.writeValueAsBytes(manifest))
+          waitFor("actual empty manifest hint", 30.seconds) { node("reqws.empty").present() }
+          val widen = 700 - node("reqws.screen").boundsOnScreen.width
+          withContext(OnDispatcher.EDT) { window.stretchWidth(widen) }
+          waitFor("wide empty hint reference", 10.seconds) { node("reqws.screen").boundsOnScreen.width >= 690 }
+          val singleLineHeight = node("reqws.empty").boundsOnScreen.height
+          val narrow = 280 - node("reqws.screen").boundsOnScreen.width
+          withContext(OnDispatcher.EDT) { window.stretchWidth(narrow) }
+          waitFor("narrow empty hint wraps beyond its single-line reference", 10.seconds) {
+            node("reqws.screen").boundsOnScreen.width in 275..285 &&
+              node("reqws.empty").boundsOnScreen.height > singleLineHeight * 1.5
+          }
+          val empty = node("reqws.empty").boundsOnScreen
+          assertTrue(node("reqws.screen").boundsOnScreen.contains(empty))
+          capture("font-$size-$theme-empty")
+          record("style-empty", "dark=$dark width=${empty.width} height=${empty.height} singleLineHeight=$singleLineHeight wrapped=true")
+          replaceStyleManifest(manifestPath, originalManifest)
+          fixture.select(listOf("repo-a", "repo-b"))
+          host.assertProjection(this, fixture)
+          focusContent()
+        }
+      }
+    } finally {
+      if (!Files.readAllBytes(manifestPath).contentEquals(originalManifest)) {
+        replaceStyleManifest(manifestPath, originalManifest)
+        fixture.select(listOf("repo-a", "repo-b"))
+      }
+      val delta = originalWidth - node("reqws.screen").boundsOnScreen.width
+      withContext(OnDispatcher.EDT) { window.stretchWidth(delta) }
+    }
+  }
+
+  private fun replaceStyleManifest(path: Path, bytes: ByteArray) {
+    check(path.toRealPath().startsWith(host.root))
+    val temporary = Files.createTempFile(path.parent, "native-style-", ".tmp")
+    Files.write(temporary, bytes)
+    Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
   }
 
   private fun Driver.setPluginEnabled(enabled: Boolean) {
@@ -264,7 +447,7 @@ class ComposeHostInputTest {
   private fun Driver.capture(name: String) {
     val screenshot = Path.of(requireNotNull(utility<ComposeHostScreenCapture>().takeFullScreenshot("compose-$name")))
     check(screenshot.toRealPath().startsWith(host.root) && Files.size(screenshot) > 0)
-    record(if (name == "legacy-layout") "layout-screenshot" else "screenshot", screenshot.toString())
+    record(if (name == "legacy-layout") "layout-screenshot" else if (name.startsWith("font-")) "style-screenshot" else "screenshot", screenshot.toString())
   }
 
   private fun record(event: String, detail: String) {
@@ -294,7 +477,17 @@ interface ComposeHostUISettings {
   fun getCurrentIdeScale(): Float
   fun setCurrentIdeScale(scale: Float)
   fun fireUISettingsChanged()
+  fun getOverrideLafFonts(): Boolean
+  fun setOverrideLafFonts(enabled: Boolean)
+  fun getFontSize2D(): Float
+  fun setFontSize2D(size: Float)
 }
+@Remote("com.intellij.openapi.wm.ex.ToolWindowEx")
+interface ComposeHostToolWindowEx { fun stretchWidth(delta: Int) }
+@Remote("javax.swing.UIManager")
+interface ComposeHostUIManager { fun getFont(key: Any): ComposeHostFont }
+@Remote("java.awt.Font")
+interface ComposeHostFont { fun getSize2D(): Float }
 @Remote("com.intellij.openapi.util.Disposer")
 interface ComposeHostDisposer {
   fun newCheckedDisposable(parent: ComposeLifecycleContent): ComposeHostCheckedDisposable
