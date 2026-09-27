@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from check_compose_ui import check_reports, PROBE_CLASS, PROBE_NAME, MARKER
-from check_compose_host_reports import check_host_reports
+from check_compose_host_reports import check_host_reports, check_input_probe_reports
 from test_ide_compatibility import load_yaml
 
 
@@ -99,6 +99,108 @@ class ComposeHostReportsTests(unittest.TestCase):
             source.write_text(source.read_text().replace('passed', 'forced-kill'))
             with self.assertRaisesRegex(ValueError, 'process'):
                 check_host_reports(root, False)
+
+
+    def input_fixture(self, root, full=False):
+        if full:
+            self.fixture(root)
+            suite = ET.parse(root / 'junit/TEST-host.xml').getroot()
+        else:
+            (root / 'junit').mkdir()
+            suite = ET.Element('testsuite')
+        ET.SubElement(suite, 'testcase', classname='com.reqws.goland.ComposeHostInputTest',
+                      name='productionActionsThemeAndScaleUseRealInput()')
+        if full:
+            ET.SubElement(suite, 'testcase', classname='com.reqws.goland.ComposeHostInputTest',
+                          name='settingsDisableAndEnableReleaseAndRecreateProductionContent()')
+        ET.ElementTree(suite).write(root / 'junit/TEST-host.xml')
+        pids = (101, 102, 103, 104) if full else (101,)
+        (root / 'processes.tsv').write_text(''.join(f'{pid}\t{phase}\n' for pid in pids
+                                                  for phase in ('started', 'passed', 'exited')))
+        inputs = [f'theme\tdark={dark} scale={scale} focus=copyDiagnostics actions=3'
+                  for dark in ('true', 'false') for scale in ('1.0', '1.25')]
+        inputs.append('input\tpointer-sync keyboard-sync keyboard-open pointer-copy keyboard-copy')
+        if full:
+            inputs.append('dynamic-reload\tunloaded content-disposed loaded empty-restored actual-click full-restored')
+        for number in range(4):
+            image = root / f'theme-{number}.png'
+            image.write_bytes(b'fixture')
+            inputs.append(f'screenshot\t{image}')
+        (root / 'compose-input.tsv').write_text('\n'.join(inputs) + '\n')
+
+    def test_probe_and_full_acceptance_are_not_interchangeable(self):
+        for full in (False, True):
+            with self.subTest(full=full), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.input_fixture(root, full)
+                if full:
+                    self.assertEqual(check_host_reports(root, True),
+                                     {'tests': 3, 'skipped': 0, 'processes': 4, 'contentCycles': 20})
+                    with self.assertRaises(ValueError):
+                        check_input_probe_reports(root)
+                    source = root / 'compose-input.tsv'
+                    source.write_text('\n'.join(line for line in source.read_text().splitlines()
+                                                if not line.startswith('dynamic-reload\t')))
+                    with self.assertRaises(ValueError):
+                        check_host_reports(root, True)
+                else:
+                    self.assertEqual(check_input_probe_reports(root),
+                                     {'tests': 1, 'skipped': 0, 'processes': 1, 'contentCycles': 0})
+                    for allow_input in (False, True):
+                        with self.assertRaises(ValueError):
+                            check_host_reports(root, allow_input)
+
+    def test_probe_rejects_missing_extra_wrong_or_unsuccessful_tests(self):
+        for bad in ('empty', 'duplicate', 'wrong', 'failure', 'error', 'skipped'):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.input_fixture(root)
+                path = root / 'junit/TEST-host.xml'
+                suite = ET.parse(path).getroot()
+                case = suite.find('testcase')
+                if bad == 'empty':
+                    suite.remove(case)
+                elif bad == 'duplicate':
+                    ET.SubElement(suite, 'testcase', **case.attrib)
+                elif bad == 'wrong':
+                    case.set('name', 'settingsDisableAndEnableReleaseAndRecreateProductionContent()')
+                else:
+                    ET.SubElement(case, bad)
+                ET.ElementTree(suite).write(path)
+                with self.assertRaises(ValueError):
+                    check_input_probe_reports(root)
+
+    def test_probe_rejects_incomplete_or_forced_processes(self):
+        for events in ('', '101\tstarted\n101\tpassed\n',
+                       '101\tstarted\n101\tforced-kill\n101\texited\n',
+                       '101\tstarted\n102\tpassed\n101\texited\n',
+                       '101\tstarted\textra\n101\tpassed\n101\texited\n'):
+            with self.subTest(events=events), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.input_fixture(root)
+                (root / 'processes.tsv').write_text(events)
+                with self.assertRaises(ValueError):
+                    check_input_probe_reports(root)
+
+    def test_probe_rejects_missing_input_and_other_scope_evidence(self):
+        for bad in ('missing-theme', 'missing-input', 'missing-image', 'reload', 'cycles'):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.input_fixture(root)
+                path = root / 'compose-input.tsv'
+                if bad == 'missing-theme':
+                    path.write_text(path.read_text().replace('scale=1.25', 'scale=1.0'))
+                elif bad == 'missing-input':
+                    path.write_text('\n'.join(line for line in path.read_text().splitlines()
+                                             if not line.startswith('input\t')))
+                elif bad == 'missing-image':
+                    (root / 'theme-0.png').unlink()
+                elif bad == 'reload':
+                    path.write_text(path.read_text() + 'dynamic-reload\tunrelated\n')
+                else:
+                    (root / 'compose-content-cycles.tsv').write_text('')
+                with self.assertRaises(ValueError):
+                    check_input_probe_reports(root)
 
 
 if __name__ == '__main__':

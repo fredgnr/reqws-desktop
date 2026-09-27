@@ -20,7 +20,7 @@
 | [Subagent 协作方案](subagent-plan.md) | draft | 定义按需委派、模型核验、并发文件隔离、任务提示词和集成职责。 |
 | [测试与验收方案](test-plan.md) | draft | 定义分层验证、覆盖迁移、真实交互、生命周期及候选证据要求，性能指标不参与验收。 |
 | [调研依据](research.md) | draft | 区分已核对源码、官方能力、工程决策和仍需 S0 验证的假设。 |
-| [S4 清理记录](s4-verification-2026-09-27.md) | active | 跟踪旧实现删除、legacy通过、Desktop三项通过及剩余滚动/状态观察复验。 |
+| [S4 清理记录](s4-verification-2026-09-27.md) | active | 跟踪旧实现删除、legacy及Desktop完整通过、剩余Compose列表边界和重载复验。 |
 | [S3 集成记录](s3-verification-2026-09-27.md) | active | 记录24组件、独立CI、原生输入/主题/重载/20轮资源证据和独立审查，G3 pass。 |
 | [S2 验证记录](s2-verification-2026-09-27.md) | active | 记录完整生产屏幕、18 个组件用例、同候选检查和独立审查，G2 pass。 |
 | [S1 验证记录](s1-verification-2026-09-27.md) | active | 记录生产状态/宿主实现、95 个直接测试、最小宿主与独立审查闭环。 |

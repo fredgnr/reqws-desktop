@@ -6,7 +6,7 @@ from check_compose_artifact import check_compose_artifact
 from pathlib import Path
 import sys
 import tempfile
-from check_compose_host_reports import check_host_reports
+from check_compose_host_reports import check_host_reports, check_input_probe_reports
 from run_local_ide import (ROOT, EnvironmentBlocked, local_only, optional_license_server,
     initialize_profile, checked_path, lock_profile, isolate_project_state,
     validate_plugin, read_policy, write_json, execute, session_closed, digest)
@@ -16,11 +16,15 @@ parser.add_argument('--profile', type=Path, required=True)
 parser.add_argument('--archive', type=Path, required=True)
 parser.add_argument('--version', required=True)
 parser.add_argument('--allow-input', action='store_true', help='Run real pointer/keyboard/theme/reload scenarios during an authorized foreground window')
+parser.add_argument('--input-probe', action='store_true', help='Diagnostic only: run the single input/style test, without lifecycle or reload acceptance')
 args = parser.parse_args()
+if args.input_probe and not args.allow_input:
+    parser.error('--input-probe requires --allow-input and an authorized foreground window')
+scope = 'compose-input-probe' if args.input_probe else 'compose-host'
 run = Path(tempfile.mkdtemp(prefix='reqws-compose-host-')).resolve()
 run.chmod(0o700)
 (run/'run-root.txt').write_text(str(run)+'\n')
-report = {'scope':'compose-host', 'status':'not-run', 'input':'pointer-and-keyboard' if args.allow_input else 'no-keyboard-or-mouse'}
+report = {'scope':scope, 'status':'not-run', 'input':'pointer-and-keyboard' if args.allow_input else 'no-keyboard-or-mouse'}
 try:
     local_only()
     server = optional_license_server()
@@ -37,7 +41,7 @@ try:
         if not server and not (profile/'preparation-session.json').is_file():
             raise EnvironmentBlocked('AUTHORIZATION_PREPARATION_REQUIRED','Dedicated authorization preparation required')
         isolate_project_state(profile,run)
-        write_json(active,{'runRoot':str(run),'mode':'compose-host'})
+        write_json(active,{'runRoot':str(run),'mode':scope})
         command = [str(ROOT/'integrations/goland/gradlew'),'-p',str(ROOT/'integrations/goland'),
           'composeContentHostTest','--no-daemon','--no-configuration-cache','--console=plain',
           '-Porg.jetbrains.intellij.platform.useCacheRedirector=false',
@@ -46,6 +50,8 @@ try:
           f"-PreqwsPluginSha256={candidate['sha256']}"]
         if args.allow_input:
             command += ['-PreqwsComposeHostInput=true']
+        if args.input_probe:
+            command += ['--tests', 'com.reqws.goland.ComposeHostInputTest.productionActionsThemeAndScaleUseRealInput']
         print(f'Compose host report: {run}/report.json',flush=True)
         try:
             code = execute(command,run/'host.log',1800,{**os.environ,
@@ -61,7 +67,8 @@ try:
             raise EnvironmentBlocked(detail['code'],detail['message'])
         if code != 0:
             raise ValueError('Host failed; inspect host.log')
-        report.update(status='passed', **check_host_reports(run, args.allow_input),
+        checks = check_input_probe_reports(run) if args.input_probe else check_host_reports(run, args.allow_input)
+        report.update(status='passed', **checks,
                       actualIde=json.loads((run/'actual-ide.json').read_text()))
 
 except EnvironmentBlocked as e:

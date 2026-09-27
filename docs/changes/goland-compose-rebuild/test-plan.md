@@ -60,7 +60,7 @@ IDE 中的文件存在性使用 Project 面板目录/文件节点，不使用 Fi
 
 当前已有命令为 `npm run docs:check`、`npm run check:goland`、`npm run package:goland`，以及兼容性方案中的[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)。本机入口必须按其实际 CLI 传入候选 ZIP，不在本文编造未验证参数。
 
-`composeUiTest` 已在 S2 加入正式 Gradle 构建；本轮本机 JBR/macOS arm64 使用独立 source set/runtime 运行生产屏幕组件测试，不污染平台测试 classpath 或生产 ZIP。S3 新增 `scripts/check_compose_ui.py` 和独立 CI 任务，运行正向、刻意断言失败及空选择器负例并归档独立报告；本机通过不能标为远端 CI 已完成。`scripts/run_compose_content.py` 已扩充20轮 Content和冷恢复，`--allow-input` 加入真实输入/主题/缩放/重载；实际通过状态见阶段记录，不替代 legacy 或 Desktop 集成报告。
+`composeUiTest` 已在 S2 加入正式 Gradle 构建；本轮本机 JBR/macOS arm64 使用独立 source set/runtime 运行生产屏幕组件测试，不污染平台测试 classpath 或生产 ZIP。S3 新增 `scripts/check_compose_ui.py` 和独立 CI 任务，运行正向、刻意断言失败及空选择器负例并归档独立报告；本机通过不能标为远端 CI 已完成。`scripts/run_compose_content.py` 已扩充20轮 Content和冷恢复，`--allow-input` 加入真实输入/主题/缩放/重载；实际通过状态见阶段记录，不替代 legacy 或 Desktop 集成报告。中间修复可用 `--allow-input --input-probe` 仅执行固定输入/样式方法，保留同一ZIP、专用profile锁、正常退出和真实输入证据检查；报告范围为 `compose-input-probe`，只证明1项/1进程诊断。完整门禁拒绝这种报告，最终仍须3项/4进程和20周期，不能拼接探针与历史片段代替整套通过。
 
 中间任务只跑直接影响的类/方法、编译和必要负例；最终集成候选运行保留的 `check:goland` 与新增测试。测试 harness 变化、依赖/SDK 改变、清理生产调用方之后必须重跑对应证据。只改本需求包时不跑 Gradle、不构建或启动 IDE。
 

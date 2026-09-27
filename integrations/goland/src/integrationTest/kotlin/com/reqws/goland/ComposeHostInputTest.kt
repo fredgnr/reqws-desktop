@@ -166,7 +166,7 @@ class ComposeHostInputTest {
         val originalRow = node("reqws.repository.repo-a").boundsOnScreen
         val originalText = node("reqws.workspace").boundsOnScreen
         val originalLabelSize = utility<ComposeHostUIManager>().getFont("Label.font").getSize2D()
-        checkNarrowStyles(fixture, manager, largeFont = false)
+        checkNarrowStyles(fixture, manager, largeFont = false, expectedRowHeight = originalRow.height)
         withContext(OnDispatcher.EDT) {
           settings.setOverrideLafFonts(true)
           settings.setFontSize2D(originalLabelSize * 2f)
@@ -183,7 +183,7 @@ class ComposeHostInputTest {
         record("font-sizing", "scale=1 baseFont=$originalLabelSize baseRow=${originalRow.height} baseText=${originalText.height} enlargedFont=${utility<ComposeHostUIManager>().getFont("Label.font").getSize2D()} enlargedRow=${enlargedRow.height} enlargedText=${enlargedText.height}")
         capture("font-200")
         assertTrue(enlargedRow.height > originalRow.height, "repository row must grow with the actual IDE font")
-        checkNarrowStyles(fixture, manager, largeFont = true)
+        checkNarrowStyles(fixture, manager, largeFont = true, expectedRowHeight = enlargedRow.height)
       } finally {
         withContext(OnDispatcher.EDT) {
           settings.setOverrideLafFonts(originalFontOverride)
@@ -259,7 +259,7 @@ class ComposeHostInputTest {
     }
   }
 
-  private fun Driver.checkNarrowStyles(fixture: WorkspaceFixture, manager: ComposeHostLafManager, largeFont: Boolean) {
+  private fun Driver.checkNarrowStyles(fixture: WorkspaceFixture, manager: ComposeHostLafManager, largeFont: Boolean, expectedRowHeight: Int) {
     val window = cast(requireNotNull(service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS")), ComposeHostToolWindowEx::class)
     val originalWidth = node("reqws.screen").boundsOnScreen.width
     val manifestPath = fixture.root.resolve(".reqws/workspace.json")
@@ -359,11 +359,14 @@ class ComposeHostInputTest {
           // the Driver's Compose-aware adapter, then wheel at the actual pointer.
           val body = node("reqws.body")
           val bodyBounds = stableBounds("reqws.body")
-          wheelToEnd(body, nativeVerticalScroll(bodyBounds), Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
+          val bodyRange = nativeVerticalScroll(bodyBounds)
+          wheelToEnd(body, bodyRange, Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
           val list = node("reqws.repositoryList")
           val listBounds = stableBounds("reqws.repositoryList")
           val firstY = node("reqws.repository.repo-a").boundsOnScreen.y
-          wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme")
+          wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme") {
+            "bodyCurrent=${bodyRange.current()} bodyMax=${bodyRange.maximum()}"
+          }
           // Preserve the real font/scroll state even if the geometry assertion
           // below fails and the outer finally restores the IDE settings.
           capture("font-$size-$theme-long-list-after-wheel")
@@ -377,12 +380,14 @@ class ComposeHostInputTest {
               val lastBounds = last.boundsOnScreen
               val first = node("reqws.repository.repo-a")
               val firstBounds = if (first.present()) first.boundsOnScreen else null
-              val geometry = "dark=$dark viewport=$viewport last=$lastBounds firstBefore=$firstY firstAfter=$firstBounds"
+              val geometry = "dark=$dark viewport=$viewport last=$lastBounds expectedRowHeight=$expectedRowHeight " +
+                "firstBefore=$firstY firstAfter=$firstBounds bodyCurrent=${bodyRange.current()} bodyMax=${bodyRange.maximum()} " +
+                "edgeSpace=[${lastBounds.x - viewport.x},${lastBounds.y - viewport.y},${viewport.maxX - lastBounds.maxX},${viewport.maxY - lastBounds.maxY}]"
               if (geometry != previousGeometry) {
                 record("style-list-bounds", geometry)
                 previousGeometry = geometry
               }
-              viewport.contains(lastBounds) && lastBounds.height >= 50 &&
+              viewport.contains(lastBounds) && lastBounds.height >= expectedRowHeight &&
                 (firstBounds == null || firstBounds.y < firstY)
             }
           }
@@ -435,13 +440,13 @@ class ComposeHostInputTest {
     return Rectangle(previous)
   }
 
-  private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String) {
+  private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String, surroundings: (() -> String)? = null) {
     val initial = range.current()
     val maximum = range.maximum()
     component.robot.moveMouse(point)
     val enteredAt = utility<NativeMouseInfo>().getPointerInfo().getLocation()
     check(range.bounds.contains(enteredAt)) { "Actual pointer $enteredAt is outside ${range.bounds}" }
-    record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds} pointer=$enteredAt")
+    record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds} pointer=$enteredAt ${surroundings?.invoke().orEmpty()}")
     // Enter even a non-overflowing popup before Escape; the hover test must not
     // silently skip that real pointer transition just because no wheel is needed.
     if (maximum <= initial + 0.5) return
@@ -456,7 +461,7 @@ class ComposeHostInputTest {
         waitFor("real wheel changes $label scroll position", 2.seconds) { range.current() > initial + 0.5 }
         true
       } catch (_: WaitForException) { false }
-      record("style-scroll-probe", "$label step=$step pointer=$actual current=${range.current()} max=${range.maximum()}")
+      record("style-scroll-probe", "$label step=$step pointer=$actual current=${range.current()} max=${range.maximum()} ${surroundings?.invoke().orEmpty()}")
       if (moved) { direction = step; break }
     }
     check(direction != 0) { "Neither real wheel direction moved $label" }
@@ -468,7 +473,7 @@ class ComposeHostInputTest {
       }
     }
     waitFor("real wheel reaches $label scroll end", 10.seconds) { range.current() >= range.maximum() - 0.5 }
-    record("style-scroll-end", "$label current=${range.current()} max=${range.maximum()} direction=$direction")
+    record("style-scroll-end", "$label current=${range.current()} max=${range.maximum()} direction=$direction ${surroundings?.invoke().orEmpty()}")
   }
 
   private fun replaceStyleManifest(path: Path, bytes: ByteArray) {

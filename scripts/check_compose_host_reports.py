@@ -25,16 +25,40 @@ def check_host_reports(run, allow_input):
             or any(len(row) != 5 or row[1:4] != ['1', '0', '1'] or not row[4].isdecimal() for row in cycles)):
         raise ValueError('Twenty exclusive Content cycles were not verified')
     if allow_input:
-        inputs = (run / 'compose-input.tsv').read_text().splitlines()
-        expected_themes = {f'theme\tdark={dark} scale={scale} focus=copyDiagnostics actions=3'
-                           for dark in ('true', 'false') for scale in ('1.0', '1.25')}
-        themes = [line for line in inputs if line.startswith('theme\t')]
-        if (len(themes) != 4 or set(themes) != expected_themes
-                or inputs.count('input\tpointer-sync keyboard-sync keyboard-open pointer-copy keyboard-copy') != 1
-                or inputs.count('dynamic-reload\tunloaded content-disposed loaded empty-restored actual-click full-restored') != 1):
-            raise ValueError('Real input, both themes/scales and dynamic reload evidence is incomplete')
-        screenshots = [Path(line.split('\t', 1)[1]) for line in inputs if line.startswith('screenshot\t')]
-        if (len(screenshots) != 4 or len(set(screenshots)) != 4
-                or any(not p.is_file() or not p.resolve().is_relative_to(run.resolve()) or p.stat().st_size == 0 for p in screenshots)):
-            raise ValueError('Four current-run theme and scale screenshots are required')
+        _check_input_evidence(run, require_reload=True)
     return {'tests': len(cases), 'skipped': 0, 'processes': expected_processes, 'contentCycles': 20}
+
+
+def _check_input_evidence(run, require_reload):
+    inputs = (run / 'compose-input.tsv').read_text().splitlines()
+    expected_themes = {f'theme\tdark={dark} scale={scale} focus=copyDiagnostics actions=3'
+                       for dark in ('true', 'false') for scale in ('1.0', '1.25')}
+    themes = [line for line in inputs if line.startswith('theme\t')]
+    if (len(themes) != 4 or set(themes) != expected_themes
+            or inputs.count('input\tpointer-sync keyboard-sync keyboard-open pointer-copy keyboard-copy') != 1
+            or (require_reload and inputs.count('dynamic-reload\tunloaded content-disposed loaded empty-restored actual-click full-restored') != 1)):
+        raise ValueError('Real input, both themes/scales and dynamic reload evidence is incomplete')
+    screenshots = [Path(line.split('\t', 1)[1]) for line in inputs if line.startswith('screenshot\t')]
+    if (len(screenshots) != 4 or len(set(screenshots)) != 4
+            or any(not p.is_file() or not p.resolve().is_relative_to(run.resolve()) or p.stat().st_size == 0 for p in screenshots)):
+        raise ValueError('Four current-run theme and scale screenshots are required')
+
+
+def check_input_probe_reports(run):
+    """Validate one diagnostic input run; never substitutes for host acceptance."""
+    run = Path(run)
+    cases = [c for p in (run / 'junit').glob('TEST-*.xml') for c in ET.parse(p).getroot().iter('testcase')]
+    if (len(cases) != 1 or cases[0].get('classname') != 'com.reqws.goland.ComposeHostInputTest'
+            or cases[0].get('name') != 'productionActionsThemeAndScaleUseRealInput()'
+            or any(cases[0].find(t) is not None for t in ('failure', 'error', 'skipped'))):
+        raise ValueError('The exact non-skipped input probe did not pass')
+    events = [line.split('\t') for line in (run / 'processes.tsv').read_text().splitlines()]
+    if (len(events) != 3 or any(len(row) != 2 for row in events)
+            or not events[0][0].isdecimal() or len({row[0] for row in events}) != 1
+            or [row[1] for row in events] != ['started', 'passed', 'exited']):
+        raise ValueError('The single input probe process must pass and exit without forced cleanup')
+    inputs = (run / 'compose-input.tsv').read_text().splitlines()
+    if ((run / 'compose-content-cycles.tsv').exists() or any(line.startswith('dynamic-reload\t') for line in inputs)):
+        raise ValueError('Input probe contains evidence from another scope')
+    _check_input_evidence(run, require_reload=False)
+    return {'tests': 1, 'skipped': 0, 'processes': 1, 'contentCycles': 0}
