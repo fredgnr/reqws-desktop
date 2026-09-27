@@ -1,0 +1,915 @@
+--- a/integrations/goland/build.gradle.kts
++++ b/integrations/goland/build.gradle.kts
+@@ -29,6 +29,7 @@
+
+ plugins {
+   id("org.jetbrains.kotlin.jvm")
++  id("org.jetbrains.kotlin.plugin.compose")
+   id("org.jetbrains.intellij.platform")
+ }
+
+@@ -182,6 +183,7 @@
+       validateSdk(localSdk, "compile")
+       local(localSdk)
+     }
++    composeUI()
+     testFramework(TestFrameworkType.Platform)
+     zipSigner("0.1.43")
+     pluginVerifier(policy("pluginVerifierVersion"))
+@@ -432,6 +434,11 @@
+
+ // Host-side Starter/Driver dependencies never extend production configurations.
+ val integrationTestSourceSet = sourceSets.create("integrationTest")
++// Compose compiler is applied to all JVM compilations. The Starter host has no
++// composables; supply only the host runtime for compilation, never execution.
++integrationTestSourceSet.compileClasspath += configurations.compileClasspath.get().filter {
++  it.name == "intellij.libraries.compose.runtime.desktop.jar"
++}
+ dependencies {
+   val starterVersion = policy("starterVersion")
+   listOf("ide-starter-squashed", "ide-starter-driver", "ide-starter-product-goland").forEach {
+@@ -537,3 +544,53 @@
+   dependsOn("test")
+   commandLine("python3", "../../scripts/check_junit_reports.py", "build/test-results/test")
+ }
++
++// S0 only: independent component runtime, never part of the plugin ZIP.
++val composeUiTestSourceSet = sourceSets.create("composeUiTest")
++composeUiTestSourceSet.compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
++composeUiTestSourceSet.runtimeClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
++kotlin.target.compilations.getByName("composeUiTest").associateWith(kotlin.target.compilations.getByName("main"))
++dependencies {
++  add(composeUiTestSourceSet.implementationConfigurationName, "junit:junit:4.13.2")
++  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-junit4-desktop:1.11.0") { isTransitive = false }
++  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-desktop:1.11.0") { isTransitive = false }
++  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.10.2") { isTransitive = false }
++  add(composeUiTestSourceSet.runtimeOnlyConfigurationName, "org.jetbrains.skiko:skiko-awt-runtime-macos-arm64:0.144.5") { isTransitive = false }
++}
++tasks.register<Test>("composeUiTest") {
++  testClassesDirs = composeUiTestSourceSet.output.classesDirs
++  classpath = composeUiTestSourceSet.runtimeClasspath
++  systemProperty("java.awt.headless", "false")
++  useJUnit()
++}
++
++tasks.register<Test>("composeHostTest") {
++  outputs.upToDateWhen { false }
++  outputs.cacheIf { false }
++  failOnNoDiscoveredTests = true
++  maxParallelForks = 1
++  providers.gradleProperty("reqwsLocalIdeRunRoot").orNull?.let {
++    reports.junitXml.outputLocation.set(file(it).resolve("junit"))
++  }
++  testClassesDirs = integrationTestSourceSet.output.classesDirs
++  classpath = integrationTestSourceSet.runtimeClasspath
++  useJUnitPlatform()
++  val scenario = providers.gradleProperty("reqwsS0Scenario").getOrElse("input")
++  require(scenario in setOf("input", "performance"))
++  filter { includeTestsMatching(if (scenario == "input") "com.reqws.goland.ComposeHostProbeTest" else "com.reqws.goland.S0PerformanceProbeTest") }
++  systemProperty("reqws.s0.foregroundHandshake", providers.gradleProperty("reqwsS0ForegroundHandshake").getOrElse("false"))
++  systemProperty("reqws.s0.variant", providers.gradleProperty("reqwsS0Variant").getOrElse("compose"))
++  systemProperty("java.awt.headless", "false")
++  systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
++  systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
++  systemProperty("reqws.plugin.version", releaseNotesVersion)
++  doFirst {
++    val (runRoot, profile) = requireLocalIdeLauncher()
++    require(candidateArchive.isPresent)
++    systemProperty("reqws.plugin.archive", file(candidateArchive.get()).absolutePath)
++    systemProperty("reqws.plugin.expectedSha256", providers.gradleProperty("reqwsPluginSha256").get())
++    systemProperty("reqws.integration.root", runRoot.absolutePath)
++    systemProperty("reqws.local.profile", profile.absolutePath)
++    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
++  }
++}
+--- a/integrations/goland/settings.gradle.kts
++++ b/integrations/goland/settings.gradle.kts
+@@ -6,7 +6,9 @@
+     mavenCentral()
+   }
+   plugins {
+-    id("org.jetbrains.kotlin.jvm") version "2.3.20"
++    val kotlinVersion = "2.3.20"
++    id("org.jetbrains.kotlin.jvm") version kotlinVersion
++    id("org.jetbrains.kotlin.plugin.compose") version kotlinVersion
+   }
+ }
+
+--- /dev/null
++++ b/integrations/goland/src/composeUiTest/kotlin/com/reqws/goland/ui/ReqwsComposeProbeLabelTest.kt
+@@ -0,0 +1,38 @@
++package com.reqws.goland.ui
++
++import androidx.compose.runtime.CompositionLocalProvider
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.test.assertTextEquals
++import androidx.compose.ui.test.junit4.v2.createComposeRule
++import androidx.compose.ui.test.onNodeWithTag
++import org.jetbrains.jewel.foundation.theme.LocalContentColor
++import org.jetbrains.jewel.foundation.theme.LocalTextStyle
++import org.junit.Rule
++import org.junit.Test
++
++class ReqwsComposeProbeLabelTest {
++  @get:Rule val compose = createComposeRule()
++
++  @Test fun preservesLiteralUnicodeLabel() {
++    val label = "<html>repo & 👩‍💻 é</html>"
++    compose.setContent {
++      CompositionLocalProvider(LocalTextStyle provides TextStyle.Default, LocalContentColor provides Color.Black) {
++        ReqwsComposeProbeLabel(label)
++      }
++    }
++    compose.onNodeWithTag("reqws.label").assertTextEquals(label)
++  }
++
++  @Test fun observesUpdatedState() {
++    val label = mutableStateOf("before")
++    compose.setContent {
++      CompositionLocalProvider(LocalTextStyle provides TextStyle.Default, LocalContentColor provides Color.Black) {
++        ReqwsComposeProbeLabel(label.value)
++      }
++    }
++    compose.runOnIdle { label.value = "after" }
++    compose.onNodeWithTag("reqws.label").assertTextEquals("after")
++  }
++}
+--- /dev/null
++++ b/integrations/goland/src/integrationTest/kotlin/com/reqws/goland/ComposeHostProbeTest.kt
+@@ -0,0 +1,223 @@
++package com.reqws.goland
++
++import com.intellij.driver.client.Driver
++import com.intellij.driver.client.Remote
++import com.intellij.driver.model.OnDispatcher
++import com.intellij.driver.sdk.Project
++import com.intellij.driver.client.utility
++import com.intellij.driver.client.service
++import com.intellij.driver.sdk.ProjectRootManager
++import com.intellij.driver.sdk.getModules
++import com.intellij.driver.sdk.getPlugin
++import com.intellij.driver.sdk.isPluginLoaded
++import com.intellij.driver.sdk.openToolWindow
++import com.intellij.driver.sdk.singleProject
++import com.intellij.driver.sdk.ui.components.common.ideFrame
++import com.intellij.driver.sdk.ui.components.common.toolwindows.projectView
++import com.intellij.driver.sdk.waitFor
++import com.intellij.driver.sdk.isProjectOpened
++import com.intellij.driver.sdk.ui.components.common.dialogs.licenseDialog
++import com.intellij.ide.starter.driver.engine.runIdeWithDriver
++import com.intellij.ide.starter.ide.IDETestContext
++import com.intellij.ide.starter.project.LocalProjectInfo
++import com.intellij.ide.starter.runner.Starter
++import org.junit.jupiter.api.Assertions.assertEquals
++import org.junit.jupiter.api.Assertions.assertFalse
++import org.junit.jupiter.api.Assertions.assertTrue
++import org.junit.jupiter.api.BeforeAll
++import org.junit.jupiter.api.Test
++import org.junit.jupiter.api.TestInstance
++import java.nio.file.Files
++import java.nio.file.Path
++import java.nio.file.StandardOpenOption
++import java.security.MessageDigest
++import kotlin.io.path.writeText
++import kotlin.time.Duration.Companion.minutes
++import kotlin.time.Duration.Companion.seconds
++
++@TestInstance(TestInstance.Lifecycle.PER_CLASS)
++class ComposeHostProbeTest {
++  private val root = Path.of(System.getProperty("reqws.integration.root"))
++  private val archive = Path.of(System.getProperty("reqws.plugin.archive"))
++  private val environment = LocalIdeEnvironment()
++  private val processes = mutableSetOf<Long>()
++  private val candidateDigest = requireNotNull(System.getProperty("reqws.plugin.expectedSha256"))
++
++  @BeforeAll
++  fun prepareEnvironment() {
++    environment.prepareHost()
++    check(digest() == candidateDigest) { "Candidate changed before the host started" }
++  }
++
++  @Test
++  fun realComposeInputAndContentRecreation() {
++    val fixture = WorkspaceFixture(root)
++    withIde(context("compose-s0", fixture.shell)) {
++      val reqws = service<ReqwsRemoteService>(singleProject())
++      waitFor("fixture live projection is ready", 2.minutes) {
++        val state = reqws.getState()
++        state.getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED") && state.getValidatedProjectionDigest() != null
++      }
++      val start = System.nanoTime()
++      openToolWindow("ReqWS")
++      val button = ideFrame().x { byAttribute("testtag", "reqws.sync") }
++      waitFor("actual Compose button", 30.seconds) { button.present() }
++      Files.writeString(root.resolve("first-open-ms.txt"), ((System.nanoTime() - start) / 1_000_000).toString())
++      withContext(OnDispatcher.EDT) { utility<S0AppIcon>().getInstance().requestFocus() }
++      val frame = utility<S0WindowManager>().getInstance().getFrame(singleProject())
++      waitFor("test IDE owns OS focus", 10.seconds) { frame.isActive() }
++      if (System.getProperty("reqws.s0.foregroundHandshake") == "true") {
++        Files.writeString(root.resolve("ready-for-input"), "ready")
++        waitFor("foreground controller acknowledged the isolated window", 2.minutes) {
++          Files.isRegularFile(root.resolve("foreground-ready"))
++        }
++      }
++      val screenshot = Path.of(requireNotNull(utility<S0ScreenCapture>().takeFullScreenshot("s0-input-before")))
++      check(screenshot.toRealPath().startsWith(root) && Files.size(screenshot) > 0)
++      button.strictClick()
++      waitFor("real click produced state", 30.seconds) {
++        ideFrame().x { and(byAttribute("testtag", "reqws.label"), byAttribute("text", "1")) }.present()
++      }
++      waitFor("Compose button has keyboard focus", 10.seconds) {
++        frame.isActive() && ideFrame().x { and(byAttribute("testtag", "reqws.sync"), byAttribute("focused", "true")) }.present()
++      }
++      button.keyboard { space() }
++      waitFor("focused keyboard activation produced state", 30.seconds) {
++        ideFrame().x { and(byAttribute("testtag", "reqws.label"), byAttribute("text", "2")) }.present()
++      }
++      val manager = service<S0ToolWindowManager>(singleProject())
++      val window = requireNotNull(manager.getToolWindow("ReqWS"))
++      repeat(20) {
++        withContext(OnDispatcher.EDT) { window.hide(null) }
++        openToolWindow("ReqWS")
++        waitFor("show retains Compose control", 10.seconds) { button.present() }
++        withContext(OnDispatcher.EDT) {
++          window.getContentManager().removeAllContents(true)
++          new(S0Factory::class).createToolWindowContent(singleProject(), window)
++        }
++        openToolWindow("ReqWS")
++        waitFor("rebuilt Compose content", 10.seconds) {
++          ideFrame().x { and(byAttribute("testtag", "reqws.label"), byAttribute("text", "0")) }.present()
++        }
++      }
++      button.click()
++      waitFor("rebuilt content accepts real input", 10.seconds) {
++        ideFrame().x { and(byAttribute("testtag", "reqws.label"), byAttribute("text", "1")) }.present()
++      }
++      fixture.assertDiskPreserved()
++    }
++  }
++
++  private fun context(name: String, project: Path): IDETestContext = Starter.newContext(
++    "reqws-$name", environment.testCase(LocalProjectInfo(project, isReusable = true)),
++    preserveSystemDir = true,
++  ).apply {
++    environment.configure(this, project)
++    pluginConfigurator.installPluginFromPath(archive).assertPluginIsInstalled("com.reqws.workspace")
++  }
++
++  private fun withIde(context: IDETestContext, block: Driver.() -> Unit) {
++    check(digest() == candidateDigest) { "Candidate changed before launch" }
++    environment.recordLaunchRequested()
++    val run = try {
++      context.runIdeWithDriver(runTimeout = 10.minutes) {
++        environment.configureRun(this)
++        // The bundled periodic diagnostic paints windows into BufferedImage;
++        // Metal shared textures cannot render into that offscreen configuration.
++        // Keep IDE errors enabled and capture actual screen pixels in this test.
++        addVMOptionsPatch { clearSystemProperty("ide.performance.screenshot") }
++      }
++    } catch (failure: Exception) {
++      environment.reportPermissionBlock(failure)
++      environment.block("IDE_START_UNAVAILABLE", "The isolated IDE could not start; inspect private diagnostics for authorization, graphical-session or permission blockers.", failure)
++    }
++    val pid = run.process.id.toLong()
++    check(processes.add(pid)) { "Cold startup reused a process" }
++    event(pid, "started")
++    try {
++      try {
++        environment.verifyRuntimeDirectories(run.driver)
++      } catch (failure: Exception) {
++        environment.reportPermissionBlock(failure)
++        environment.block("IDE_DRIVER_UNAVAILABLE", "The isolated IDE/Driver could not establish a verified session; inspect local startup, authorization and permission diagnostics.", failure)
++      }
++      val result = run.useDriverAndCloseIde(closeIdeTimeout = 1.minutes) {
++        try {
++          waitFor("local IDE project opened without an authorization dialog", 2.minutes) {
++            if (licenseDialog().present()) environment.block("IDE_AUTHORIZATION_REQUIRED",
++              "The dedicated test IDE requires authorization. Use the local prepare command and sign in, or configure the optional License Server.")
++            isProjectOpened()
++          }
++        } catch (failure: SecurityException) {
++          environment.block("IDE_PERMISSION_DENIED", "The local IDE/Driver requires graphical automation permissions.", failure)
++        } catch (failure: Exception) {
++          environment.reportPermissionBlock(failure)
++          environment.block("PROJECT_START_UNRESOLVED", "The local IDE did not reach an opened project; authorization/startup readiness is unconfirmed. See private diagnostics.", failure)
++        }
++        assertTrue(isPluginLoaded("com.reqws.workspace"))
++        assertEquals(System.getProperty("reqws.plugin.version"), getPlugin("com.reqws.workspace")?.getVersion())
++        block()
++      }
++      check(result.exitCode == 0 && result.failureError == null) { "IDE process failed: ${result.failureError}" }
++      check(!run.process.isAlive) { "IDE process leaked after shutdown" }
++      environment.checkIdeErrors()
++      check(digest() == candidateDigest) { "Candidate changed during integration" }
++      event(pid, "passed")
++    } catch (failure: Exception) {
++      environment.reportPermissionBlock(failure)
++      throw failure
++    } finally {
++      if (run.process.isAlive) {
++        run.forceKill()
++        event(pid, "forced-kill")
++        error("IDE process required forced cleanup")
++      }
++      event(pid, "exited")
++    }
++  }
++
++  private fun digest() = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(archive))
++    .joinToString("") { "%02x".format(it.toInt() and 0xff) }
++
++  private fun event(pid: Long, phase: String) {
++    Files.writeString(root.resolve("processes.tsv"), "$pid\t$phase\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++  }
++}
++
++@Remote("com.intellij.openapi.wm.ToolWindowManager")
++interface S0ToolWindowManager { fun getToolWindow(id: String): S0ToolWindow? }
++@Remote("com.intellij.openapi.wm.ToolWindow")
++interface S0ToolWindow {
++  fun isVisible(): Boolean
++  fun getContentManagerIfCreated(): S0ContentManager?
++  fun getContentManager(): S0ContentManager
++  fun hide(runnable: Runnable?)
++}
++@Remote("com.intellij.ui.content.ContentManager")
++interface S0ContentManager {
++  fun getContentCount(): Int
++  fun removeAllContents(dispose: Boolean)
++}
++@Remote("com.reqws.goland.ui.ReqwsToolWindowFactory", plugin = "com.reqws.workspace")
++interface S0Factory { fun createToolWindowContent(project: Project, window: S0ToolWindow) }
++
++@Remote("com.intellij.ui.AppIcon")
++interface S0AppIcon {
++  fun getInstance(): S0AppIcon
++  fun requestFocus()
++}
++@Remote("com.intellij.openapi.wm.WindowManager")
++interface S0WindowManager {
++  fun getInstance(): S0WindowManager
++  fun getFrame(project: Project): S0Frame
++}
++@Remote("javax.swing.JFrame")
++interface S0Frame {
++  fun isActive(): Boolean
++  fun getGraphicsConfiguration(): S0GraphicsConfiguration
++  fun getWidth(): Int
++  fun getHeight(): Int
++}
++
++@Remote("com.jetbrains.performancePlugin.commands.TakeScreenshotCommandKt", plugin = "com.jetbrains.performancePlugin")
++interface S0ScreenCapture { fun takeFullScreenshot(folder: String): String? }
+--- /dev/null
++++ b/integrations/goland/src/integrationTest/kotlin/com/reqws/goland/S0PerformanceProbeTest.kt
+@@ -0,0 +1,247 @@
++package com.reqws.goland
++
++import com.intellij.driver.client.Driver
++import com.intellij.driver.client.Remote
++import com.intellij.driver.model.OnDispatcher
++import com.intellij.driver.sdk.Project
++import com.intellij.driver.client.utility
++import com.intellij.driver.client.service
++import com.intellij.driver.sdk.ProjectRootManager
++import com.intellij.driver.sdk.getModules
++import com.intellij.driver.sdk.getPlugin
++import com.intellij.driver.sdk.isPluginLoaded
++import com.intellij.driver.sdk.openToolWindow
++import com.intellij.driver.sdk.singleProject
++import com.intellij.driver.sdk.ui.components.common.ideFrame
++import com.intellij.driver.sdk.ui.components.common.toolwindows.projectView
++import com.intellij.driver.sdk.waitFor
++import com.intellij.driver.sdk.isProjectOpened
++import com.intellij.driver.sdk.ui.components.common.dialogs.licenseDialog
++import com.intellij.ide.starter.driver.engine.runIdeWithDriver
++import com.intellij.ide.starter.ide.IDETestContext
++import com.intellij.ide.starter.project.LocalProjectInfo
++import com.intellij.ide.starter.runner.Starter
++import org.junit.jupiter.api.Assertions.assertEquals
++import org.junit.jupiter.api.Assertions.assertFalse
++import org.junit.jupiter.api.Assertions.assertTrue
++import org.junit.jupiter.api.BeforeAll
++import org.junit.jupiter.api.Test
++import org.junit.jupiter.api.TestInstance
++import java.nio.file.Files
++import java.nio.file.Path
++import java.nio.file.StandardOpenOption
++import java.security.MessageDigest
++import kotlin.io.path.writeText
++import kotlin.time.Duration.Companion.minutes
++import kotlin.time.Duration.Companion.seconds
++
++@TestInstance(TestInstance.Lifecycle.PER_CLASS)
++class S0PerformanceProbeTest {
++  private val root = Path.of(System.getProperty("reqws.integration.root"))
++  private val archive = Path.of(System.getProperty("reqws.plugin.archive"))
++  private val environment = LocalIdeEnvironment()
++  private val processes = mutableSetOf<Long>()
++  private val candidateDigest = requireNotNull(System.getProperty("reqws.plugin.expectedSha256"))
++
++  @BeforeAll
++  fun prepareEnvironment() {
++    environment.prepareHost()
++    check(digest() == candidateDigest) { "Candidate changed before the host started" }
++  }
++
++  @Test
++  fun performanceBaseline() {
++    val variant = System.getProperty("reqws.s0.variant")
++    require(variant in setOf("swing", "compose"))
++    repeat(3) { round ->
++      val fixture = WorkspaceFixture(Files.createDirectories(root.resolve("round-$round")))
++      withIde(context("$variant-perf-$round", fixture.shell)) {
++        val reqws = service<ReqwsRemoteService>(singleProject())
++        waitFor("fixture live projection is ready", 2.minutes) {
++          val state = reqws.getState()
++          state.getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED") && state.getValidatedProjectionDigest() != null
++        }
++        val window = requireNotNull(service<S0ToolWindowManager>(singleProject()).getToolWindow("ReqWS"))
++        withContext(OnDispatcher.EDT) {
++          check(!window.isVisible() && (window.getContentManagerIfCreated()?.getContentCount() ?: 0) == 0) {
++            "First-open measurement requires an unopened Tool Window"
++          }
++        }
++        val start = System.nanoTime()
++        openToolWindow("ReqWS")
++        val control = if (variant == "compose") ideFrame().x { byAttribute("testtag", "reqws.sync") }
++          else ideFrame().x { and(byAttribute("class", "ReqwsPrimaryButton"), byAttribute("accessiblename", "Sync Now")) }
++        waitFor("first-open enabled control", 30.seconds) { control.present() && control.isEnabled() }
++        Files.writeString(root.resolve("first-open.tsv"), "$round\t${(System.nanoTime()-start)/1_000_000}\n",
++          StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++        withContext(OnDispatcher.EDT) { utility<S0AppIcon>().getInstance().requestFocus() }
++        val frame = utility<S0WindowManager>().getInstance().getFrame(singleProject())
++        waitFor("test IDE owns OS focus", 10.seconds) { frame.isActive() }
++        withContext(OnDispatcher.EDT) {
++          val transform = frame.getGraphicsConfiguration().getDefaultTransform()
++          val laf = utility<S0UiManager>().getLookAndFeel().getID()
++          Files.writeString(root.resolve("graphics.tsv"),
++            "$round\t${frame.getWidth()}\t${frame.getHeight()}\t${transform.getScaleX()}\t${transform.getScaleY()}\t$laf\n",
++            StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++        }
++        captureScreen("$variant-$round-before")
++        measure(round, "initial")
++        Thread.sleep(30_000)
++        sampleIdle(round, "before")
++        repeat(20) { cycle ->
++          withContext(OnDispatcher.EDT) { window.hide(null) }
++          openToolWindow("ReqWS")
++          waitFor("shown control", 10.seconds) { control.present() }
++          measure(round, "hide-show-$cycle")
++        }
++        repeat(20) { cycle ->
++          withContext(OnDispatcher.EDT) {
++            window.getContentManager().removeAllContents(true)
++            new(S0Factory::class).createToolWindowContent(singleProject(), window)
++          }
++          openToolWindow("ReqWS")
++          waitFor("rebuilt control", 10.seconds) { control.present() && control.isEnabled() }
++          measure(round, "recreate-$cycle")
++        }
++        Thread.sleep(30_000)
++        sampleIdle(round, "after")
++        captureScreen("$variant-$round-after")
++        fixture.assertDiskPreserved()
++      }
++    }
++  }
++
++  private fun Driver.captureScreen(name: String) {
++    val path = Path.of(requireNotNull(utility<S0ScreenCapture>().takeFullScreenshot("s0-$name")))
++    check(path.toRealPath().startsWith(root) && Files.size(path) > 0) { "Missing actual-screen diagnostic" }
++    Files.writeString(root.resolve("screenshots.tsv"), "$name\t$path\n",
++      StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++  }
++
++  private fun Driver.sampleIdle(round: Int, phase: String) {
++    repeat(13) { sample ->
++      if (sample > 0) Thread.sleep(5_000)
++      measure(round, "$phase-$sample")
++    }
++  }
++
++  private fun Driver.measure(round: Int, phase: String) {
++    val management = utility<S0ManagementFactory>()
++    val pid = management.getRuntimeMXBean().getPid()
++    val cpu = management.getOperatingSystemMXBean().getProcessCpuTime()
++    check(pid > 0 && cpu >= 0) { "IDE JVM did not expose process metrics" }
++    if (phase == "initial") {
++      Files.writeString(root.resolve("measurement-pids.tsv"), "$round\t$pid\n",
++        StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++    }
++    val ps = ProcessBuilder("/bin/ps", "-o", "rss=", "-p", pid.toString()).start()
++    val rss = ps.inputStream.bufferedReader().readText().trim().toLong()
++    check(ps.waitFor() == 0)
++    val heap = utility<S0ManagementFactory>().getMemoryMXBean().getHeapMemoryUsage()
++    Files.writeString(root.resolve("metrics.tsv"),
++      "$round\t$phase\t${System.nanoTime()}\t$cpu\t$rss\t${heap.getUsed()}\t${heap.getCommitted()}\n",
++      StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++  }
++
++  private fun context(name: String, project: Path): IDETestContext = Starter.newContext(
++    "reqws-$name", environment.testCase(LocalProjectInfo(project, isReusable = true)),
++    preserveSystemDir = true,
++  ).apply {
++    environment.configure(this, project)
++    pluginConfigurator.installPluginFromPath(archive).assertPluginIsInstalled("com.reqws.workspace")
++  }
++
++  private fun withIde(context: IDETestContext, block: Driver.() -> Unit) {
++    check(digest() == candidateDigest) { "Candidate changed before launch" }
++    environment.recordLaunchRequested()
++    val run = try {
++      context.runIdeWithDriver(runTimeout = 10.minutes) {
++        environment.configureRun(this)
++        // The bundled periodic diagnostic paints windows into BufferedImage;
++        // Metal shared textures cannot render into that offscreen configuration.
++        // Keep IDE errors enabled and capture actual screen pixels in this test.
++        addVMOptionsPatch { clearSystemProperty("ide.performance.screenshot") }
++      }
++    } catch (failure: Exception) {
++      environment.reportPermissionBlock(failure)
++      environment.block("IDE_START_UNAVAILABLE", "The isolated IDE could not start; inspect private diagnostics for authorization, graphical-session or permission blockers.", failure)
++    }
++    val pid = run.process.id.toLong()
++    check(processes.add(pid)) { "Cold startup reused a process" }
++    event(pid, "started")
++    try {
++      try {
++        environment.verifyRuntimeDirectories(run.driver)
++      } catch (failure: Exception) {
++        environment.reportPermissionBlock(failure)
++        environment.block("IDE_DRIVER_UNAVAILABLE", "The isolated IDE/Driver could not establish a verified session; inspect local startup, authorization and permission diagnostics.", failure)
++      }
++      val result = run.useDriverAndCloseIde(closeIdeTimeout = 1.minutes) {
++        try {
++          waitFor("local IDE project opened without an authorization dialog", 2.minutes) {
++            if (licenseDialog().present()) environment.block("IDE_AUTHORIZATION_REQUIRED",
++              "The dedicated test IDE requires authorization. Use the local prepare command and sign in, or configure the optional License Server.")
++            isProjectOpened()
++          }
++        } catch (failure: SecurityException) {
++          environment.block("IDE_PERMISSION_DENIED", "The local IDE/Driver requires graphical automation permissions.", failure)
++        } catch (failure: Exception) {
++          environment.reportPermissionBlock(failure)
++          environment.block("PROJECT_START_UNRESOLVED", "The local IDE did not reach an opened project; authorization/startup readiness is unconfirmed. See private diagnostics.", failure)
++        }
++        assertTrue(isPluginLoaded("com.reqws.workspace"))
++        assertEquals(System.getProperty("reqws.plugin.version"), getPlugin("com.reqws.workspace")?.getVersion())
++        block()
++      }
++      check(result.exitCode == 0 && result.failureError == null) { "IDE process failed: ${result.failureError}" }
++      check(!run.process.isAlive) { "IDE process leaked after shutdown" }
++      environment.checkIdeErrors()
++      check(digest() == candidateDigest) { "Candidate changed during integration" }
++      event(pid, "passed")
++    } catch (failure: Exception) {
++      environment.reportPermissionBlock(failure)
++      throw failure
++    } finally {
++      if (run.process.isAlive) {
++        run.forceKill()
++        event(pid, "forced-kill")
++        error("IDE process required forced cleanup")
++      }
++      event(pid, "exited")
++    }
++  }
++
++  private fun digest() = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(archive))
++    .joinToString("") { "%02x".format(it.toInt() and 0xff) }
++
++  private fun event(pid: Long, phase: String) {
++    Files.writeString(root.resolve("processes.tsv"), "$pid\t$phase\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND)
++  }
++}
++
++@Remote("java.lang.management.ManagementFactory")
++interface S0ManagementFactory {
++  fun getMemoryMXBean(): S0MemoryMXBean
++  fun getRuntimeMXBean(): S0RuntimeMXBean
++  fun getOperatingSystemMXBean(): S0OperatingSystemMXBean
++}
++@Remote("java.lang.management.RuntimeMXBean")
++interface S0RuntimeMXBean { fun getPid(): Long }
++@Remote("com.sun.management.OperatingSystemMXBean")
++interface S0OperatingSystemMXBean { fun getProcessCpuTime(): Long }
++@Remote("java.lang.management.MemoryMXBean")
++interface S0MemoryMXBean { fun getHeapMemoryUsage(): S0MemoryUsage }
++@Remote("java.lang.management.MemoryUsage")
++interface S0MemoryUsage {
++  fun getUsed(): Long
++  fun getCommitted(): Long
++}
++
++@Remote("java.awt.GraphicsConfiguration")
++interface S0GraphicsConfiguration { fun getDefaultTransform(): S0Transform }
++@Remote("java.awt.geom.AffineTransform")
++interface S0Transform { fun getScaleX(): Double; fun getScaleY(): Double }
++@Remote("javax.swing.UIManager")
++interface S0UiManager { fun getLookAndFeel(): S0LookAndFeel }
++@Remote("javax.swing.LookAndFeel")
++interface S0LookAndFeel { fun getID(): String }
+--- /dev/null
++++ b/integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsComposeProbeButton.kt
+@@ -0,0 +1,19 @@
++package com.reqws.goland.ui
++
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.testTag
++import org.jetbrains.jewel.ui.component.DefaultButton
++import org.jetbrains.jewel.ui.component.Text
++
++@Composable
++internal fun ReqwsComposeProbeButton(label: String, onClick: () -> Unit) {
++  DefaultButton(onClick = onClick, modifier = Modifier.testTag("reqws.sync")) {
++    ReqwsComposeProbeLabel(label)
++  }
++}
++
++@Composable
++internal fun ReqwsComposeProbeLabel(label: String) {
++  Text(label, modifier = Modifier.testTag("reqws.label"))
++}
+--- a/integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowFactory.kt
++++ b/integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowFactory.kt
+@@ -4,7 +4,14 @@
+ import com.intellij.openapi.project.Project
+ import com.intellij.openapi.wm.ToolWindow
+ import com.intellij.openapi.wm.ToolWindowFactory
+-import com.intellij.ui.content.ContentFactory
++import com.reqws.goland.ReqwsBundle
++import org.jetbrains.jewel.bridge.addComposeTab
++import androidx.compose.runtime.*
++import androidx.compose.foundation.layout.Column
++import com.intellij.openapi.diagnostic.Logger
++import com.intellij.openapi.Disposable
++import java.util.concurrent.atomic.AtomicInteger
++import java.util.concurrent.atomic.AtomicBoolean
+ import com.reqws.goland.project.ReqwsProjectDetector
+ import com.reqws.goland.project.ReqwsProjectService
+
+@@ -23,12 +30,41 @@
+     if (!project.isDisposed && !toolWindow.isDisposed) {
+       toolWindow.setAvailable(ReqwsToolWindowViewModel.from(service.state).visible)
+     }
+-    val panel = ReqwsToolWindowPanel(
+-      project = project,
+-      service = service,
+-    )
+-    val content = ContentFactory.getInstance().createContent(panel, null, false)
+-    content.setDisposer(panel)
+-    toolWindow.contentManager.addContent(content)
++    val disposed = AtomicBoolean(false)
++    val before = toolWindow.contentManager.contents.toSet()
++    toolWindow.addComposeTab(isCloseable = true, focusOnClickInside = true) {
++      DisposableEffect(Unit) {
++        LOG.info("S0 composition active=${compositions.incrementAndGet()}")
++        onDispose { LOG.info("S0 composition active=${compositions.decrementAndGet()}") }
++      }
++      var clicks by remember { mutableStateOf(0) }
++      Column {
++        ReqwsComposeProbeButton(
++          label = ReqwsBundle.message("action.syncNow"),
++          onClick = {
++            if (!disposed.get() && !project.isDisposed && !toolWindow.isDisposed) {
++              service.refresh()
++              clicks++
++              LOG.info("S0 click count=$clicks")
++            }
++          },
++        )
++        ReqwsComposeProbeLabel(clicks.toString())
++      }
++    }
++    val content = toolWindow.contentManager.contents.single { it !in before }
++    val listener = service.addListener { }
++    LOG.info("S0 listener active=${listeners.incrementAndGet()}")
++    content.setDisposer(Disposable {
++      if (disposed.compareAndSet(false, true)) {
++        listener.close()
++        LOG.info("S0 listener active=${listeners.decrementAndGet()}")
++      }
++    })
++  }
++  companion object {
++    private val LOG = Logger.getInstance(ReqwsToolWindowFactory::class.java)
++    private val listeners = AtomicInteger()
++    private val compositions = AtomicInteger()
+   }
+ }
+--- a/integrations/goland/src/main/resources/META-INF/plugin.xml
++++ b/integrations/goland/src/main/resources/META-INF/plugin.xml
+@@ -22,6 +22,7 @@
+   <depends>com.intellij.modules.platform</depends>
+   <depends>com.intellij.modules.goland</depends>
+   <depends>com.intellij.modules.vcs</depends>
++  <depends>com.intellij.modules.compose</depends>
+
+   <extensions defaultExtensionNs="com.intellij">
+     <directoryIndexExcludePolicy implementation="com.reqws.goland.loading.shell.ReqwsShellExcludePolicy" />
+--- /dev/null
++++ b/scripts/check_compose_artifact.py
+@@ -0,0 +1,64 @@
++"""S0 opt-in check for a Compose candidate; does not build, install or launch it."""
++
++import argparse
++import io
++from pathlib import Path
++import xml.etree.ElementTree as ET
++from zipfile import ZipFile
++
++from plugin_release import validate_plugin
++
++
++HOST_OR_TEST_PACKAGES = (
++    'androidx/compose/', 'org/jetbrains/compose/', 'org/jetbrains/jewel/',
++    'org/jetbrains/skiko/', 'org/jetbrains/skia/', 'kotlin/', 'kotlinx/coroutines/',
++    'org/junit/', 'junit/', 'org/hamcrest/', 'com/intellij/driver/',
++    'com/intellij/ide/starter/', 'com/jetbrains/performancePlugin/remotedriver/',
++)
++NATIVE_SUFFIXES = ('.dylib', '.so', '.dll')
++S0_TEST_CLASSES = (
++    'com/reqws/goland/ComposeHostProbeTest', 'com/reqws/goland/S0',
++    'com/reqws/goland/ui/ReqwsComposeProbeLabelTest',
++)
++
++
++def check_compose_artifact(path, version):
++    # Preserve the existing identity, descriptor, ZIP containment and size checks.
++    result = validate_plugin(path, version)
++    classes = 0
++    with ZipFile(path) as archive:
++        for entry in archive.infolist():
++            if entry.filename.endswith(NATIVE_SUFFIXES):
++                raise ValueError('Compose candidate must use the host native runtime')
++            if not entry.filename.endswith('.jar'):
++                continue
++            with ZipFile(io.BytesIO(archive.read(entry))) as jar:
++                for name in jar.namelist():
++                    if name.endswith(NATIVE_SUFFIXES):
++                        raise ValueError('Compose candidate must use the host native runtime')
++                    # Inspect class paths rather than JAR names, including shaded JARs
++                    # whose entries retain their original package names.
++                    logical_name = name
++                    if name.startswith('META-INF/versions/'):
++                        logical_name = name.split('/', 3)[-1]
++                    if logical_name.endswith('.class'):
++                        classes += 1
++                        if logical_name.startswith(HOST_OR_TEST_PACKAGES + S0_TEST_CLASSES):
++                            raise ValueError(f'Bundled host/test class: {logical_name}')
++                    if name == 'META-INF/plugin.xml':
++                        descriptor = ET.fromstring(jar.read(name))
++                        compose = [node for node in descriptor.findall('depends')
++                                   if (node.text or '').strip() == 'com.intellij.modules.compose']
++                        if len(compose) != 1 or compose[0].get('optional', 'false') != 'false':
++                            raise ValueError('Exactly one required Compose module dependency is needed')
++    if not classes:
++        raise ValueError('Compose candidate contains no classes')
++    return {'version': result['version'], 'classes': classes}
++
++
++if __name__ == '__main__':
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--archive', type=Path, required=True)
++    parser.add_argument('--version', required=True)
++    args = parser.parse_args()
++    print(check_compose_artifact(args.archive, args.version))
+--- /dev/null
++++ b/scripts/run_compose_s0.py
+@@ -0,0 +1,132 @@
++"""Disposable S0 host runner; reuses the owned-profile boundaries, not the V10 report."""
++import argparse
++import json
++import os
++import re
++from statistics import median
++from check_compose_artifact import check_compose_artifact
++from pathlib import Path
++import sys
++import tempfile
++import xml.etree.ElementTree as ET
++from run_local_ide import (ROOT, EnvironmentBlocked, local_only, optional_license_server,
++    initialize_profile, checked_path, lock_profile, isolate_project_state,
++    validate_plugin, read_policy, write_json, execute, session_closed, digest)
++
++parser = argparse.ArgumentParser()
++parser.add_argument('--profile', type=Path, required=True)
++parser.add_argument('--archive', type=Path, required=True)
++parser.add_argument('--version', required=True)
++parser.add_argument('--scenario', choices=['input', 'performance'], default='input')
++parser.add_argument('--variant', choices=['compose', 'swing'], default='compose')
++parser.add_argument('--foreground-handshake', action='store_true')
++args = parser.parse_args()
++if args.scenario == 'input' and args.variant != 'compose':
++    parser.error('Input scenario requires the Compose candidate')
++run = Path(tempfile.mkdtemp(prefix='reqws-compose-host-')).resolve()
++run.chmod(0o700)
++(run/'run-root.txt').write_text(str(run)+'\n')
++report = {'scope':'compose-s0', 'status':'not-run', 'scenario':args.scenario, 'variant':args.variant, 'captureProtocol':'actual-screen-v2'}
++try:
++    local_only()
++    server = optional_license_server()
++    policy = read_policy()
++    profile, metadata = initialize_profile(args.profile, policy)
++    with lock_profile(profile):
++        active = checked_path(profile/'active-session.json')
++        if active.exists():
++            raise EnvironmentBlocked('PREVIOUS_SESSION_UNCONFIRMED', 'Dedicated session remains unconfirmed')
++        archive = checked_path(args.archive)
++        candidate = validate_plugin(archive,args.version)
++        if args.variant == 'compose':
++            check_compose_artifact(archive, args.version)
++        report['candidate'] = {'path':str(archive),'sha256':candidate['sha256'],'version':args.version}
++        if not server and not (profile/'preparation-session.json').is_file():
++            raise EnvironmentBlocked('AUTHORIZATION_PREPARATION_REQUIRED','Dedicated authorization preparation required')
++        isolate_project_state(profile,run)
++        write_json(active,{'runRoot':str(run),'mode':'compose-s0'})
++        command = [str(ROOT/'integrations/goland/gradlew'),'-p',str(ROOT/'integrations/goland'),
++          'composeHostTest','--no-daemon','--no-configuration-cache','--console=plain',
++          '-Porg.jetbrains.intellij.platform.useCacheRedirector=false',
++          f'-PreqwsS0ForegroundHandshake={str(args.foreground_handshake).lower()}',
++          f'-PreqwsS0Scenario={args.scenario}', f'-PreqwsS0Variant={args.variant}',
++          f'-PreqwsLocalIdeProfile={profile}',f'-PreqwsLocalIdeRunRoot={run}',
++          f'-PreqwsPluginArchive={archive}',f'-PreleaseVersion={args.version}',
++          f"-PreqwsPluginSha256={candidate['sha256']}"]
++        print(f'S0 report: {run}/report.json',flush=True)
++        try:
++            code = execute(command,run/'host.log',1800,{**os.environ,
++              'REQWS_LOCAL_IDE_RUN_ROOT':str(run),'REQWS_LOCAL_IDE_PROFILE':str(profile)})
++        finally:
++            if session_closed(run,'run'):
++                active.unlink()
++        report['exitCode'] = code
++        if digest(archive) != candidate['sha256']:
++            raise ValueError('Candidate changed')
++        if (run/'environment-blocked.json').exists():
++            detail=json.loads((run/'environment-blocked.json').read_text())
++            raise EnvironmentBlocked(detail['code'],detail['message'])
++        if code != 0:
++            raise ValueError('Host failed; inspect host.log')
++        cases = [c for p in (run/'junit').glob('TEST-*.xml') for c in ET.parse(p).getroot().iter('testcase')]
++        expected_test = 'realComposeInputAndContentRecreation()' if args.scenario == 'input' else 'performanceBaseline()'
++        if len(cases)!=1 or cases[0].get('name')!=expected_test or any(c.find(t) is not None for c in cases for t in ['failure','error','skipped']):
++            raise ValueError('Required non-skipped S0 scenario did not pass')
++        events = [line.split('\t') for line in (run/'processes.tsv').read_text().splitlines()]
++        expected_processes = 1 if args.scenario == 'input' else 3
++        pids = list(dict.fromkeys(pid for pid, phase in events))
++        if len(pids) != expected_processes or any([phase for seen, phase in events if seen == pid] != ['started', 'passed', 'exited'] for pid in pids):
++            raise ValueError('Process cleanup did not pass')
++        lifecycle = []
++        for log in (run/'out/ide-tests/tests').rglob('idea.log'):
++            values = {}
++            for resource in ['listener'] + (['composition'] if args.variant == 'compose' else []):
++                counts = [int(v) for v in re.findall(rf'S0 {resource} active=(\d+)', log.read_text())]
++                if not counts or counts[-1] != 0 or min(counts) != 0 or max(counts) != 1 or counts.count(1) != counts.count(0) or counts.count(1) < 21:
++                    raise ValueError(f'{resource} lifecycle did not balance: {counts}')
++                if resource == 'listener' and counts.count(1) != 21:
++                    raise ValueError('Hide/show duplicated the listener')
++                values[resource] = {'created': counts.count(1), 'disposed': counts.count(0), 'maxActive': max(counts)}
++            lifecycle.append(values)
++        if len(lifecycle) != expected_processes:
++            raise ValueError('Missing IDE lifecycle log')
++        if args.scenario == 'performance':
++            rows = (run/'metrics.tsv').read_text().splitlines()
++            opens = (run/'first-open.tsv').read_text().splitlines()
++            if len(rows) != 201 or len(opens) != 3:
++                raise ValueError('Incomplete performance samples')
++            performance = []
++            for round_id in range(3):
++                samples = [line.split('\t') for line in rows if line.startswith(f'{round_id}\t')]
++                expected = {f'{phase}-{i}' for phase, count in [('before', 13), ('after', 13), ('hide-show', 20), ('recreate', 20)] for i in range(count)}
++                if {row[1] for row in samples} != expected | {'initial'}:
++                    raise ValueError('Incomplete performance phases')
++                item = {'round': round_id, 'firstOpenMs': int(opens[round_id].split('\t')[1])}
++                for phase in ['before', 'after']:
++                    selected = [row for row in samples if row[1].startswith(phase + '-')]
++                    elapsed = int(selected[-1][2]) - int(selected[0][2])
++                    cpu = int(selected[-1][3]) - int(selected[0][3])
++                    if elapsed < 60_000_000_000 or cpu < 0:
++                        raise ValueError('Invalid idle sampling duration or CPU counter')
++                    item[phase] = {'cpuPercent': cpu / elapsed * 100,
++                                   'rssMiB': median(int(row[4]) for row in selected) / 1024,
++                                   'heapMiB': median(int(row[5]) for row in selected) / (1024 ** 2)}
++                performance.append(item)
++            if len((run/'screenshots.tsv').read_text().splitlines()) != 6:
++                raise ValueError('Missing actual-screen diagnostics')
++            graphics = (run/'graphics.tsv').read_text().splitlines()
++            if len(graphics) != 3 or len({line.split('\t', 1)[1] for line in graphics}) != 1:
++                raise ValueError('Graphical measurement conditions changed')
++            report.update(performance=performance, graphics=graphics[0].split('\t')[1:])
++        report.update(status='passed',tests=1,skipped=0,processes=expected_processes,lifecycle=lifecycle,
++                      actualIde=json.loads((run/'actual-ide.json').read_text()))
++
++except EnvironmentBlocked as e:
++    report.update(status='environment-blocked',code=e.code,message=str(e))
++except Exception as e:
++    report.update(status='failed',message=str(e))
++finally:
++    write_json(run/'report.json',report)
++    print(json.dumps(report,ensure_ascii=False),flush=True)
++    print(f'S0 report: {run}/report.json',flush=True)
++sys.exit(0 if report['status']=='passed' else 2)

@@ -22,6 +22,7 @@ import org.jetbrains.intellij.platform.gradle.tasks.SignPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginSignatureTask
 import org.jetbrains.intellij.platform.gradle.tasks.ComposedJarTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.zip.ZipFile
@@ -31,6 +32,7 @@ import groovy.json.JsonSlurper
 
 plugins {
   id("org.jetbrains.kotlin.jvm")
+  id("org.jetbrains.kotlin.plugin.compose")
   id("org.jetbrains.intellij.platform")
 }
 
@@ -198,6 +200,7 @@ dependencies {
       validateSdk(localSdk, "compile")
       local(localSdk)
     }
+    composeUI()
     testFramework(TestFrameworkType.Platform)
     zipSigner("0.1.43")
     pluginVerifier(policy("pluginVerifierVersion"))
@@ -449,6 +452,10 @@ tasks.named("buildPlugin") { dependsOn(verifyCompatibilityDescriptor) }
 
 // Host-side Starter/Driver dependencies never extend production configurations.
 val integrationTestSourceSet = sourceSets.create("integrationTest")
+// The Compose compiler also visits Starter sources; keep its runtime compile-only there.
+integrationTestSourceSet.compileClasspath += configurations.compileClasspath.get().filter {
+  it.name == "intellij.libraries.compose.runtime.desktop.jar"
+}
 dependencies {
   val starterVersion = policy("starterVersion")
   listOf("ide-starter-squashed", "ide-starter-driver", "ide-starter-product-goland").forEach {
@@ -563,4 +570,97 @@ tasks.register<JavaExec>("prepareLocalIdeAuthorization") {
 val verifyBaselineTestReports by tasks.registering(Exec::class) {
   dependsOn("test")
   commandLine("python3", "../../scripts/check_junit_reports.py", "build/test-results/test")
+}
+
+
+// Local-only S1 Content lifecycle evidence. Does not rebuild or install a daily IDE.
+tasks.register<Test>("composeContentHostTest") {
+  notCompatibleWithConfigurationCache("Uses a fresh isolated local run directory")
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+  failOnNoDiscoveredTests = true
+  maxParallelForks = 1
+  testClassesDirs = integrationTestSourceSet.output.classesDirs
+  classpath = integrationTestSourceSet.runtimeClasspath
+  useJUnitPlatform()
+  filter {
+    includeTestsMatching("com.reqws.goland.ComposeContentLifecycleTest")
+    if (providers.gradleProperty("reqwsComposeHostInput").orNull == "true") {
+      includeTestsMatching("com.reqws.goland.ComposeHostInputTest")
+    }
+  }
+  systemProperty("junit.jupiter.extensions.autodetection.enabled", "false")
+  systemProperty("java.awt.headless", "false")
+  systemProperty("reqws.ui.version", policy("uiTestIdeVersion"))
+  systemProperty("reqws.ui.build", policy("uiTestIdeBuild"))
+  systemProperty("reqws.plugin.version", project.version.toString())
+  providers.gradleProperty("reqwsLocalIdeRunRoot").orNull?.let {
+    reports.junitXml.outputLocation.set(file(it).resolve("junit"))
+    reports.html.outputLocation.set(file(it).resolve("test-report"))
+  }
+  doFirst {
+    val (runRoot, profile) = requireLocalIdeLauncher()
+    require(candidateArchive.isPresent)
+    systemProperty("reqws.plugin.archive", file(candidateArchive.get()).absolutePath)
+    systemProperty("reqws.plugin.expectedSha256", providers.gradleProperty("reqwsPluginSha256").get())
+    systemProperty("reqws.integration.root", runRoot.absolutePath)
+    systemProperty("reqws.local.profile", profile.absolutePath)
+    systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+  }
+}
+
+
+// Independent S2 component tests use host classes, never a second production runtime.
+val composeUiTestSourceSet = sourceSets.create("composeUiTest")
+composeUiTestSourceSet.compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+composeUiTestSourceSet.runtimeClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+kotlin.target.compilations.getByName("composeUiTest").associateWith(kotlin.target.compilations.getByName("main"))
+dependencies {
+  add(composeUiTestSourceSet.implementationConfigurationName, "junit:junit:4.13.2")
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-junit4-desktop:1.11.0") { isTransitive = false }
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-desktop:1.11.0") { isTransitive = false }
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.10.2") { isTransitive = false }
+  val os = System.getProperty("os.name").lowercase()
+  val arch = System.getProperty("os.arch").lowercase()
+  val nativePlatform = when {
+    os.contains("mac") && arch in setOf("aarch64", "arm64") -> "macos-arm64"
+    os.contains("mac") && arch in setOf("amd64", "x86_64") -> "macos-x64"
+    os.contains("linux") && arch in setOf("amd64", "x86_64") -> "linux-x64"
+    else -> error("Compose test rendering is not configured for $os/$arch")
+  }
+  add(composeUiTestSourceSet.runtimeOnlyConfigurationName,
+    "org.jetbrains.skiko:skiko-awt-runtime-$nativePlatform:0.144.5") { isTransitive = false }
+}
+fun Test.configureComposeTest() {
+  providers.gradleProperty("reqwsComposeReportRoot").orNull?.let { root ->
+    reports.junitXml.outputLocation.set(file(root).resolve("$name/junit"))
+    reports.html.outputLocation.set(file(root).resolve("$name/html"))
+    systemProperty("reqws.compose.reports", file(root).absolutePath)
+  }
+  // Reuse the SDK's JBR launcher, not a generic build JVM or a complete IDE.
+  javaLauncher.set(tasks.named<RunIdeTask>("runIde").flatMap { it.runtimeLauncher })
+  outputs.upToDateWhen { false }
+  outputs.cacheIf { false }
+  timeout.set(Duration.ofMinutes(10))
+  testClassesDirs = composeUiTestSourceSet.output.classesDirs
+  classpath = composeUiTestSourceSet.runtimeClasspath
+  systemProperty("java.awt.headless", "false")
+  useJUnit()
+  failOnNoDiscoveredTests = true
+  maxParallelForks = 1
+}
+
+tasks.register<Test>("composeUiTest") {
+  configureComposeTest()
+  filter { excludeTestsMatching("*ReqwsComposeFailureProbeTest") }
+}
+
+tasks.register<Test>("composeUiFailureProbeTest") {
+  configureComposeTest()
+  filter { includeTestsMatching("*ReqwsComposeFailureProbeTest") }
+}
+
+tasks.register<Test>("composeUiEmptyProbeTest") {
+  configureComposeTest()
+  filter { includeTestsMatching("com.reqws.goland.ui.DeliberatelyAbsentComposeTest") }
 }

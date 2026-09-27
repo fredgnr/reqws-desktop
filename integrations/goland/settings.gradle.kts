@@ -6,7 +6,9 @@ pluginManagement {
     mavenCentral()
   }
   plugins {
-    id("org.jetbrains.kotlin.jvm") version "2.3.20"
+    val kotlinVersion = "2.3.20"
+    id("org.jetbrains.kotlin.jvm") version kotlinVersion
+    id("org.jetbrains.kotlin.plugin.compose") version kotlinVersion
   }
 }
 

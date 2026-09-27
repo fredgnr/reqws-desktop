@@ -44,8 +44,8 @@ def classify(paths):
 def aggregate(impact, results):
     if results.get('impact') != 'success':
         raise ValueError('Impact classification failed or was cancelled')
-    expected = {'targets', 'build', 'verification'} if impact['plugin'] else set()
-    for job in ('targets', 'build', 'verification'):
+    expected = {'targets', 'build', 'verification', 'compose'} if impact['plugin'] else set()
+    for job in ('targets', 'build', 'verification', 'compose'):
         if results.get(job) != ('success' if job in expected else 'skipped'):
             raise ValueError(f'{job} was missing, cancelled, failed or unexpectedly skipped')
     return 'passed' if expected else 'not-applicable: ' + impact['reason']

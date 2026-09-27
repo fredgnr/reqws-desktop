@@ -79,6 +79,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # S0 reconstruction tests archive a fixed historical commit.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Desktop dependencies
@@ -296,6 +298,7 @@ jobs:
         run: |
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports verifyForbiddenProductionSymbols \
             verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$PLUGIN_VERSION"
+          python3 scripts/check_compose_artifact.py --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
           python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
             --version "$PLUGIN_VERSION" --output integrations/goland/build/reports/api-baseline
           python3 scripts/prepare-goland-release.py --input "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$PLUGIN_VERSION"
@@ -320,6 +323,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  plugin-compose:
+    needs: impact
+    if: ${{ needs.impact.outputs.plugin == 'true' }}
+    uses: ./.github/workflows/goland-compose.yml
+
   plugin-verification:
     needs: [impact, plugin-targets, plugin-build]
     if: ${{ needs.impact.outputs.plugin == 'true' }}
@@ -333,7 +341,7 @@ jobs:
   goland-plugin:
     name: GoLand plugin checks
     if: ${{ always() }}
-    needs: [impact, plugin-targets, plugin-build, plugin-verification]
+    needs: [impact, plugin-targets, plugin-build, plugin-verification, plugin-compose]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -347,6 +355,7 @@ jobs:
           TARGETS_RESULT: ${{ needs.plugin-targets.result }}
           BUILD_RESULT: ${{ needs.plugin-build.result }}
           VERIFICATION_RESULT: ${{ needs.plugin-verification.result }}
+          COMPOSE_RESULT: ${{ needs.plugin-compose.result }}
         run: |
           python3 - <<'PYTHON'
           import os, sys
@@ -354,6 +363,6 @@ jobs:
           from ide_ci import aggregate
           print(aggregate({'plugin': os.environ['PLUGIN_REQUIRED'] == 'true', 'reason': 'Impact classifier found no plugin changes'},
             {key: os.environ[name] for key, name in [('impact', 'IMPACT_RESULT'), ('targets', 'TARGETS_RESULT'),
-              ('build', 'BUILD_RESULT'), ('verification', 'VERIFICATION_RESULT')]}))
+              ('build', 'BUILD_RESULT'), ('verification', 'VERIFICATION_RESULT'), ('compose', 'COMPOSE_RESULT')]}))
           PYTHON
           echo "Local IDE integration: not run by CI; see the separate candidate-bound local report." >> "$GITHUB_STEP_SUMMARY"

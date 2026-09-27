@@ -207,6 +207,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
 | 本机 Desktop→IDE | 真实 Desktop 保存、固定 GoLand 的模型/PFI/Project 与恢复 | 跨进程或图形集成受到影响时，在获准的专用 profile 对显式 ZIP 运行；不进入 CI。 |
 | Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选保留最低/固定代表目标，并冻结完整正式 API 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
+| GoLand Compose | 真实生产屏幕与独立 Jewel 组件测试 | UI 变更补跑 `composeUiTest`；SDK JBR 图形环境运行，独立CI与失败/空发现探针已接通。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -218,16 +219,19 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 Gradle 按 Wrapper 的明确版本和官方 HTTPS `distributionUrl` 管理，当前仍为 9.3.0；不设置 `distributionSha256Sum`，不增加替代 checksum 文件或预期值。保留 URL 校验、超时、缓存及既有 Wrapper JAR 验证；这不等于验证下载 ZIP 的预期字节。升级只维护明确版本，不改为动态版本或个人二进制。
 
-当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、Java/JVM 25；最低编译 SDK 为 GO 2026.2，固定本机 GUI 代表为 GO 2026.2.1.1。plugin ID 是 `com.reqws.workspace`，`since-build="262"`，无普通或 strict 上限。在仓库根目录执行：
+当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin JVM/Compose compiler 2.3.20、Java/JVM 25；最低编译 SDK 为 GO 2026.2，固定本机 GUI 代表为 GO 2026.2.1.1。plugin ID 是 `com.reqws.workspace`，`since-build="262"`，无普通或 strict 上限。在仓库根目录执行：
 
 ```bash
 npm run check:goland
 npm run package:goland
+./integrations/goland/gradlew -p integrations/goland composeUiTest
 ```
 
 `check:goland` 保留全部平台测试、源码/产物门禁和最低/固定目标，再对同一 ZIP 执行完整 API 矩阵。受控初始 JPS 接口例外只由 `scripts/run_ide_verifier.py` 结合精确报告与字节码裁决；原始 Gradle `verifyPlugin` 保留全部 failure levels，遇该授权使用仍返回非零，不能将原始失败当作脚本可以忽略任意错误的依据。`--baseline` 模式仅对应最低与固定代表两个目标，不代替完整矩阵。详见[插件 README](../../integrations/goland/README.md#build-and-verify)。
 
 `buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`，消费者读取 `build/release/plugin-archive.txt` 的精确产物路径；Gradle cache、sandbox 和 build output 均不可提交。完整 IDE 使用[本机独占入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，不绕过 profile 与授权保护直接运行。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
+
+生产使用 IDE 的 Compose/Jewel 运行时。Compose 内容目前使用状态 Mapper、Content 级 Presenter 和独立平台动作适配；列表选择不改变 Desktop 加载配置。`composeUiTest` 只使用测试专属主题/渲染依赖，不启动完整 IDE，也不证明系统 VoiceOver 或真实宿主键鼠通过。独立组件及失败/空发现探针由 `python3 scripts/check_compose_ui.py` 运行，`check:goland` 和独立 CI 任务也要求该门禁；CI 不启动完整 IDE。20轮 Content 隐藏/重建及冷恢复验证使用[插件 README](../../integrations/goland/README.md)中的确切 ZIP 入口，真实键鼠/主题/缩放/重载需本轮前台时段并显式添加 `--allow-input`；阶段边界见 [Compose 重构](../changes/goland-compose-rebuild/README.md)。旧 Swing 内容、ViewModel 和专属 dispatcher 已清理；领域/安全测试继续保留。
 
 ### 插件开发与验收边界
 
@@ -305,7 +309,7 @@ P12 导入必须使用 `security import -f pkcs12`；macOS 的自动格式识别
 
 证书有效期核对、P12/PEM 包装密码更新、Secrets 修复和身份迁移使用项目级 [reqws-signing-maintenance](../../.agents/skills/reqws-signing-maintenance/SKILL.md)。既有身份从指定私有备份的明确 commit 临时恢复；不重新建立固定 home/桌面备份。只更新包装密码不改公开 CER 或 pin；续签/换密钥按身份迁移处理，不能预设旧客户端继续接受。完成备份读回恢复后清理本地秘密材料，保留源码公开 CER；技能不自动授权发布或真实安装。
 
-CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。发布脚本回归使用 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
+CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。运行发布脚本回归的 CI `project-checks` 与 Release `checks` 各自使用 `fetch-depth: 0`，因为 S0 复现测试需通过 `git archive` 读取固定历史基线；其他 job 的完整 checkout 不能为它们提供 Git 对象。回归命令为 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
 
 ## 10. 调试与安全操作
 

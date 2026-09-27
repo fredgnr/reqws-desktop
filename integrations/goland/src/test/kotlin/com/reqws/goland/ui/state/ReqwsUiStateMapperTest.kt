@@ -1,5 +1,6 @@
-package com.reqws.goland.ui
+package com.reqws.goland.ui.state
 
+import com.reqws.goland.ui.presentation.formatDetailsText
 import com.reqws.goland.ReqwsBundle
 import com.reqws.goland.manifest.ManifestDiagnostic
 import com.reqws.goland.manifest.ManifestErrorCode
@@ -22,11 +23,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Path
 
-class ReqwsToolWindowViewModelTest {
+class ReqwsUiStateMapperTest {
   @Test
   fun `user root coverage exposes a compact status and separate explanation only for covered repositories`() {
     val snapshot = snapshot()
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = snapshot,
@@ -44,7 +45,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `maps synchronized snapshots to localized resource keys`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = snapshot(),
@@ -70,7 +71,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `keeps the previous snapshot visible for an invalid manifest`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.ERROR,
         snapshot = snapshot(),
@@ -84,14 +85,13 @@ class ReqwsToolWindowViewModelTest {
     assertEquals(ReqwsStatusTone.ERROR, model.statusTone)
     assertEquals("MANIFEST_INVALID_JSON", model.errorCode)
     assertTrue(model.preservedSnapshot)
+    assertTrue(requireNotNull(formatDetailsText(model)).contains("MANIFEST_INVALID_JSON"))
+    assertTrue(requireNotNull(formatDetailsText(model)).contains(ReqwsBundle.message("message.preservedModel")))
     assertEquals(
       listOf("repository.loaded", "repository.missing"),
       model.repositories.map { it.statusKey },
     )
     assertTrue(model.copyDiagnosticsEnabled)
-    val details = formatDetailsText(model)
-    assertTrue(details.orEmpty().contains("MANIFEST_INVALID_JSON"))
-    assertTrue(details.orEmpty().contains(ReqwsBundle.message("message.preservedModel")))
   }
 
   @Test
@@ -114,7 +114,7 @@ class ReqwsToolWindowViewModelTest {
       },
     )
 
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = untrustedSnapshot,
@@ -128,7 +128,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `hides an initial read before a ReqWS manifest is found`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(lifecycle = ReqwsLifecycleState.READING),
     )
 
@@ -137,7 +137,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `keeps a previous snapshot visible while rereading the manifest`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.READING,
         snapshot = snapshot(),
@@ -156,7 +156,7 @@ class ReqwsToolWindowViewModelTest {
       ReqwsLifecycleState.READING,
       ReqwsLifecycleState.SYNCHRONIZING,
     ).forEach { lifecycle ->
-      val model = ReqwsToolWindowViewModel.from(
+      val model = ReqwsUiStateMapper.map(
         ReqwsProjectState(
           lifecycle = lifecycle,
           snapshot = snapshot,
@@ -177,7 +177,7 @@ class ReqwsToolWindowViewModelTest {
   fun `does not render a stable lifecycle as synced without current-service projection proof`() {
     val snapshot = snapshot()
 
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = snapshot,
@@ -201,7 +201,7 @@ class ReqwsToolWindowViewModelTest {
       ReqwsLifecycleState.READING,
       ReqwsLifecycleState.SYNCHRONIZING,
     ).forEach { lifecycle ->
-      val model = ReqwsToolWindowViewModel.from(
+      val model = ReqwsUiStateMapper.map(
         ReqwsProjectState(
           lifecycle = lifecycle,
           snapshot = snapshot,
@@ -220,7 +220,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `disables every action after disposal`() {
-    val model = ReqwsToolWindowViewModel.from(ReqwsProjectState.DISPOSED)
+    val model = ReqwsUiStateMapper.map(ReqwsProjectState.DISPOSED)
 
     assertFalse(model.visible)
     assertFalse(model.syncEnabled)
@@ -231,7 +231,7 @@ class ReqwsToolWindowViewModelTest {
   @Test
   fun `maps progress warning and terminal lifecycles to accessible status tones`() {
     val tones = ReqwsLifecycleState.entries.associateWith { lifecycle ->
-      ReqwsToolWindowViewModel.from(ReqwsProjectState(lifecycle)).statusTone
+      ReqwsUiStateMapper.map(ReqwsProjectState(lifecycle)).statusTone
     }
 
     assertEquals(ReqwsStatusTone.NEUTRAL, tones[ReqwsLifecycleState.INACTIVE])
@@ -246,7 +246,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `keeps the Safe Mode status compact and exposes a separate recovery hint`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SAFE_MODE_BLOCKED,
         snapshot = snapshot(),
@@ -260,7 +260,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `shows actionable read-only Git Root diagnostics without claiming the model was preserved`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot(),
@@ -291,7 +291,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `does not label repositories active when the live project content failed to converge`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot(),
@@ -318,7 +318,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `does not invent a project-content layer for an unknown failure field`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot(),
@@ -339,7 +339,7 @@ class ReqwsToolWindowViewModelTest {
       ReqwsLifecycleState.DEGRADED to ReqwsStableErrorCode.OWNERSHIP_CONFLICT,
       ReqwsLifecycleState.ERROR to ReqwsStableErrorCode.PROJECT_MODEL_APPLY_FAILED,
     ).forEach { (lifecycle, errorCode) ->
-      val model = ReqwsToolWindowViewModel.from(
+      val model = ReqwsUiStateMapper.map(
         ReqwsProjectState(
           lifecycle = lifecycle,
           snapshot = snapshot(),
@@ -358,7 +358,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `shows a missing repository when it disappears during the VCS inspection`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot(),
@@ -378,7 +378,7 @@ class ReqwsToolWindowViewModelTest {
   @Test
   fun `shows inspection failures as unavailable instead of active or unconfigured`() {
     val snapshot = snapshot()
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.DEGRADED,
         snapshot = snapshot,
@@ -397,7 +397,7 @@ class ReqwsToolWindowViewModelTest {
   @Test
   fun `fails closed when an inspection omits a present repository index`() {
     val snapshot = snapshot()
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SYNCHRONIZED,
         snapshot = snapshot,
@@ -416,7 +416,7 @@ class ReqwsToolWindowViewModelTest {
 
   @Test
   fun `keeps Safe Mode guidance ahead of read-only Git Root diagnostics`() {
-    val model = ReqwsToolWindowViewModel.from(
+    val model = ReqwsUiStateMapper.map(
       ReqwsProjectState(
         lifecycle = ReqwsLifecycleState.SAFE_MODE_BLOCKED,
         snapshot = snapshot(),
@@ -431,6 +431,62 @@ class ReqwsToolWindowViewModelTest {
 
     assertEquals(null, model.vcsDiagnosticCode)
     assertEquals("message.safeModeHint", model.statusDetailKey)
+  }
+
+  @Test
+  fun `stable ids survive same names reorder and removal and published rows are snapshots`() {
+    val original = snapshot()
+    val rows = original.repositories.map { it.copy(repository = it.repository.copy(name = "same")) }.toMutableList()
+    val state = ReqwsProjectState(ReqwsLifecycleState.SYNCHRONIZED, snapshot = original.copy(repositories = rows))
+    val first = ReqwsUiStateMapper.map(state)
+    rows.reverse()
+    val second = ReqwsUiStateMapper.map(state)
+    assertEquals(listOf("repo_api", "repo_worker"), first.repositories.map { it.catalogRepositoryId })
+    assertEquals(listOf("repo_worker", "repo_api"), second.repositories.map { it.catalogRepositoryId })
+    rows.removeAt(0)
+    assertEquals(2, first.repositories.size)
+    assertEquals(listOf("repo_api"), ReqwsUiStateMapper.map(state).repositories.map { it.catalogRepositoryId })
+  }
+
+  @Test
+  fun `all lifecycles map their action policy and unconfirmed counts fail closed`() {
+    ReqwsLifecycleState.entries.forEach { lifecycle ->
+      val model = ReqwsUiStateMapper.map(ReqwsProjectState(lifecycle, snapshot = snapshot()))
+      assertEquals(lifecycle, model.lifecycle)
+      assertEquals(0, model.loadedRepositoryCount)
+      assertEquals(lifecycle !in setOf(ReqwsLifecycleState.INACTIVE, ReqwsLifecycleState.READING, ReqwsLifecycleState.DISPOSED), model.syncEnabled)
+      assertEquals(lifecycle !in setOf(ReqwsLifecycleState.INACTIVE, ReqwsLifecycleState.DISPOSED), model.openManifestEnabled)
+      assertEquals(model.openManifestEnabled, model.copyDiagnosticsEnabled)
+    }
+  }
+
+  @Test
+  fun `loading selection directory presence and projection proof remain independent`() {
+    val original = snapshot()
+    val root = original.canonicalProjectRoot
+    for (ids in listOf(emptyList(), listOf("repo_api"), listOf("repo_worker"), listOf("repo_api", "repo_worker"))) {
+      val loading = com.reqws.goland.loading.contract.LoadingSnapshot(
+        original,
+        com.reqws.goland.loading.contract.VerifiedBinding("workspace", "binding", root, root.resolve(".reqws/ide/goland"), emptyList()),
+        com.reqws.goland.loading.contract.GoLandProject("workspace", "binding", 1,
+          com.reqws.goland.loading.contract.GoLandSelection.Selected(ids), "2026-09-27T00:00:00Z"),
+        emptyList(), "loading-digest",
+      )
+      val snapshot = original.copy(loading = loading)
+      for (confirmed in listOf(false, true)) {
+        val model = ReqwsUiStateMapper.map(ReqwsProjectState(
+          ReqwsLifecycleState.SYNCHRONIZED, snapshot = snapshot,
+          validatedProjectionDigest = snapshot.digestSha256.takeIf { confirmed },
+        ))
+        assertEquals(if (confirmed && "repo_api" in ids) 1 else 0, model.loadedRepositoryCount)
+        assertEquals(when {
+          "repo_api" !in ids -> "repository.notLoaded"
+          !confirmed -> "repository.projectContentUnavailable"
+          else -> "repository.loaded"
+        }, model.repositories[0].statusKey)
+        assertEquals(if ("repo_worker" in ids) "repository.missing" else "repository.notLoaded", model.repositories[1].statusKey)
+      }
+    }
   }
 
   private fun snapshot(): ManifestSnapshot {

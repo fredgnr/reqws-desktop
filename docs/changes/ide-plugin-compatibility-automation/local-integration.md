@@ -62,7 +62,7 @@ npm run check:goland:desktop -- \
   --version 0.1.7
 ```
 
-等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。原 S4 三项套件结果见 [S4 记录](../playwright-regression-automation/implementation-2026-09-26.md#s4-本机联动)；当前四项 v7 的两轮正向、故意失败及保留范围见 [V 记录](../playwright-regression-automation/verification-v-2026-09-26.md)，不得沿用旧通过结论。
+等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。原 S4 三项套件结果见 [S4 记录](../playwright-regression-automation/implementation-2026-09-26.md#s4-本机联动)；此前四项 v7 的两轮正向、故意失败及保留范围见 [V 记录](../playwright-regression-automation/verification-v-2026-09-26.md)，不得沿用旧通过结论。
 
 Driver 通过本轮 UUID 和递增序号请求 Desktop 创建五个普通文本 Git 工作区及保存加载选择。Desktop UI 是成功路径上 manifest/binding 的唯一 writer；初建走真实“保存并打开 GoLand”到 Main/EditorLauncher，只有最后 OS spawn 被隔离 adapter 记录，Starter 使用该次观测的合法 shell。它不证明 LaunchServices。Driver 独立回读文件并观察普通 Project 树、模块根、ProjectFileIndex、加载数量和 live digest。四个场景组要求九个独立、正常退出的 IDE 进程和 32 条逐步投影证据：
 
@@ -75,9 +75,9 @@ Driver 通过本轮 UUID 和递增序号请求 Desktop 创建五个普通文本 
 
 同进程重开必须记录目标 Project 已关闭、精确目标路径已从打开集合消失，以及实际欢迎页中的唯一 Recent Projects 项。固定 Driver 的单元格读取器不能读取新版 renderer 文本，宿主改为只读专用 `recentProjects.xml` 并保存原始快照：近期项目全集只能包含精确 fixture 路径及可选的隐藏欢迎项目，实际 UI 只能有一个项目行且显示名称与该记录唯一匹配。点击前再次核对，点击后核对同一 JVM PID 和目标路径；不猜测首行。允许 IDE 自动创建专用 `GoLandWorkspace` 欢迎项目，不能要求所有打开项目为空。任何额外路径、未知身份或 UI 歧义均保留诊断并失败。原始记录的 config 与启动前报告的 profile ID、固定 IDE 和专用身份 marker 交叉核对；重读报告时该 config 与 marker 仍须可读，不读取账号或许可内容。
 
-当前 `acceptanceVersion=7` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张独立组件图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
+当前 `acceptanceVersion=8` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张原生区域图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
 
-通过证据使用真实 IDE Swing root pane 的 `printAll` 图像；侧车绑定实际 JVM PID、项目、frame 标题和尺寸，门禁检查完整 PNG chunk/CRC 与有界解压。它不证明 macOS 窗口装饰或遮挡。正常退出和周期全屏采集已关闭，但固定 SDK 在异常或超时时仍可能生成含其他窗口的全屏诊断图。此次用户已明确允许它们仅留私有测试目录；不得上传、展示为 IDE 通过证据或把本次许可当作发布授权。
+通过证据采集方式在 Compose 候选上改为标准 JDK Robot 直接读取专用 IDE root pane 的屏幕区域（v8）。旧 Swing printAll 无法绘制宿主 Metal 纹理；不切换渲染后端、不隐藏 Compose。采集前后要求该 IDE 已处于 active 状态、项目/PID/区域坐标与尺寸不变，且不主动激活窗口；不满足就失败，不能用 focus 补偿 G2 的后台刷新。侧车绑定实际 JVM PID、项目、frame 标题、屏幕区域、active 状态和尺寸，门禁继续检查完整 PNG chunk/CRC 与有界解压。原始图仍需检查可见内容与遮挡；active 本身不能证明没有其他窗口覆盖。正常退出和周期全屏采集保持关闭，异常全屏诊断仅留私有测试目录。当前实跑范围与截图限制见[Compose S4记录](../goland-compose-rebuild/s4-verification.md#当前冻结候选与原生验收)；旧 v7 原始记录保留，不能替代新候选完整套件。
 
 Starter 的 ZIP reader 需要可写句柄，解包失败时还可能删除输入。因此两个 suite 都先将显式候选按原字节复制到本轮私有 `candidate/plugin.zip`（0600），只把该副本交给 Starter；调用方原 ZIP 可以保持只读。报告分别记录原件和安装副本，安装前后及通过前检查摘要一致，副本丢失/被改写均失败；不重建、重签或修改原候选。
 

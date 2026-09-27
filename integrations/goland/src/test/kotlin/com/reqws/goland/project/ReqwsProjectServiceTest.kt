@@ -14,7 +14,7 @@ import com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard
 import com.reqws.goland.sync.SyncCandidateApplier
 import com.reqws.goland.sync.SyncTrigger
 import com.reqws.goland.ui.ReqwsToolWindowAvailabilityController
-import com.reqws.goland.ui.ReqwsToolWindowViewModel
+import com.reqws.goland.ui.state.ReqwsUiStateMapper
 import com.reqws.goland.vcs.ReqwsVcsConfigurationMonitor
 import com.reqws.goland.vcs.VcsRepositoryInspection
 import com.reqws.goland.vcs.VcsRepositoryStatus
@@ -1220,7 +1220,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(previousValidatedDigest, service.state.validatedProjectionDigest)
       assertEquals(ReqwsStableErrorCode.REFRESH_FAILED, service.state.lastError?.code)
       assertEquals(previousSnapshot.digestSha256, service.state.lastError?.digestSha256)
-      assertTrue(ReqwsToolWindowViewModel.from(service.state).preservedSnapshot)
+      assertTrue(ReqwsUiStateMapper.map(service.state).preservedSnapshot)
       assertEquals(1, applyCount.get())
     } finally {
       service.dispose()
@@ -1270,7 +1270,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       )
       awaitCondition("initial validated projection") {
         service.state.validatedProjectionDigest != null &&
-          ReqwsToolWindowViewModel.from(service.state).repositories.single().statusKey ==
+          ReqwsUiStateMapper.map(service.state).repositories.single().statusKey ==
           "repository.loaded"
       }
 
@@ -1286,7 +1286,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertNull(service.state.validatedProjectionDigest)
       assertEquals(
         "repository.projectContentUnavailable",
-        ReqwsToolWindowViewModel.from(service.state).repositories.single().statusKey,
+        ReqwsUiStateMapper.map(service.state).repositories.single().statusKey,
       )
 
       Files.writeString(manifest, "{")
@@ -1299,7 +1299,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           service.state.lastError?.code == "MANIFEST_INVALID_JSON"
       }
 
-      val readErrorView = ReqwsToolWindowViewModel.from(service.state)
+      val readErrorView = ReqwsUiStateMapper.map(service.state)
       assertNull(service.state.validatedProjectionDigest)
       assertEquals(
         "repository.projectContentUnavailable",
@@ -1385,7 +1385,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           service.state.lastError?.code == "MANIFEST_INVALID_JSON"
       }
 
-      val finalView = ReqwsToolWindowViewModel.from(service.state)
+      val finalView = ReqwsUiStateMapper.map(service.state)
       assertNull(service.state.validatedProjectionDigest)
       assertEquals(
         "repository.projectContentUnavailable",
@@ -1448,7 +1448,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
           service.state.lifecycle == ReqwsLifecycleState.SYNCHRONIZED &&
           service.state.validatedProjectionDigest == null
       }
-      val cancelledView = ReqwsToolWindowViewModel.from(service.state)
+      val cancelledView = ReqwsUiStateMapper.map(service.state)
       assertNull(service.state.lastError)
       assertEquals("state.degraded", cancelledView.statusKey)
       assertEquals(
@@ -1463,7 +1463,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       awaitCondition("projection proof recovery after cancellation") {
         applyCount.get() == 3 && service.state.validatedProjectionDigest != null
       }
-      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      val recoveredView = ReqwsUiStateMapper.map(service.state)
       assertEquals("state.synchronized", recoveredView.statusKey)
       assertEquals("repository.loaded", recoveredView.repositories.single().statusKey)
     } finally {
@@ -1707,7 +1707,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(1, registrationCloseCount.get())
       assertNull(service.state.lastError)
       assertNotNull(service.state.lastAppliedDigest)
-      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      val recoveredView = ReqwsUiStateMapper.map(service.state)
       assertTrue(recoveredView.visible)
       assertTrue(recoveredView.syncEnabled)
       assertEquals(false, availabilityChanges.first())
@@ -1765,7 +1765,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertSame(previousSnapshot, service.state.snapshot)
       assertEquals(previousDigest, service.state.lastAppliedDigest)
       assertNull(service.state.lastError)
-      val restoredView = ReqwsToolWindowViewModel.from(service.state)
+      val restoredView = ReqwsUiStateMapper.map(service.state)
       assertTrue(restoredView.visible)
       assertTrue("Sync Now stayed disabled after $cancellationDescription", restoredView.syncEnabled)
 
@@ -1959,7 +1959,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertEquals(2, waitCount.get())
       assertEquals(2, probeCount.get())
       assertEquals(appliedDigestBefore, project.service<ReqwsSyncPersistence>().lastAppliedDigest())
-      assertTrue(ReqwsToolWindowViewModel.from(service.state).syncEnabled)
+      assertTrue(ReqwsUiStateMapper.map(service.state).syncEnabled)
       Thread.sleep(NO_CHURN_WINDOW_MILLIS)
       assertEquals(1, applyCount.get())
       assertEquals(2, probeCount.get())
@@ -2668,7 +2668,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       }
       assertNull(service.state.lastError)
       assertNotNull(service.state.lastAppliedDigest)
-      val recoveredView = ReqwsToolWindowViewModel.from(service.state)
+      val recoveredView = ReqwsUiStateMapper.map(service.state)
       assertTrue(recoveredView.visible)
       assertTrue(recoveredView.syncEnabled)
       assertEquals(false, availabilityChanges.first())
@@ -3234,7 +3234,7 @@ class ReqwsProjectServiceTest : BasePlatformTestCase() {
       assertSame(stableSnapshot, service.state.snapshot)
       assertEquals(stableDigest, service.state.lastAppliedDigest)
       assertNull(service.state.lastError)
-      assertTrue(ReqwsToolWindowViewModel.from(service.state).syncEnabled)
+      assertTrue(ReqwsUiStateMapper.map(service.state).syncEnabled)
 
       allowSecondApply.countDown()
       awaitCondition("older manual apply completed after cancellation rollback") {

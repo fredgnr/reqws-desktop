@@ -163,14 +163,14 @@ class ImpactTests(unittest.TestCase):
         self.assertTrue(classify(['docs/new.md', 'integrations/goland/build.gradle.kts'])['localIntegrationRecommended'])
 
     def test_required_failed_cancelled_skipped_or_missing_child_never_passes(self):
-        results = dict.fromkeys(['impact', 'targets', 'build', 'verification'], 'success')
+        results = dict.fromkeys(['impact', 'targets', 'build', 'verification', 'compose'], 'success')
         self.assertEqual(aggregate({'plugin': True}, results), 'passed')
         for key in results:
             for state in ('failure', 'cancelled', 'skipped', None):
                 with self.subTest(key=key, state=state), self.assertRaises(ValueError):
                     aggregate({'plugin': True}, {**results, key: state})
         self.assertTrue(aggregate({'plugin': False, 'reason': 'docs'}, {
-            'impact': 'success', 'targets': 'skipped', 'build': 'skipped', 'verification': 'skipped'}).startswith('not-applicable'))
+            'impact': 'success', 'targets': 'skipped', 'build': 'skipped', 'verification': 'skipped', 'compose': 'skipped'}).startswith('not-applicable'))
 
     def test_workflows_use_same_candidate_without_api_parallel_cap(self):
         ci = load_yaml('.github/workflows/ci.yml')['jobs']

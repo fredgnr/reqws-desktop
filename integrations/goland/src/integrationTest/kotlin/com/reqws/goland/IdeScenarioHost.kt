@@ -121,7 +121,7 @@ internal class IdeScenarioHost {
   }
 
   fun assertProjection(driver: Driver, fixture: ProjectionFixture, selected: Set<String> = fixture.selected,
-    phase: String = "projection") = with(driver) {
+    phase: String = "projection", inspectReqwsContent: Boolean = true) = with(driver) {
     fixture.verifyInputs()
     assertEquals(fixture.selected, selected)
     val expectedDigest = fixture.expectedProjectionDigest()
@@ -197,17 +197,34 @@ internal class IdeScenarioHost {
         (!fixture.hasLateFiles || paths.any { it.takeLast(3) == listOf("repo-a", "docs", "late-repo.txt") } == ("repo-a" in selected)) &&
         (selected + fixture.userCoveredRepositories).all { repo -> paths.any { it.takeLast(3) == listOf(repo, "docs", "probe.txt") } }
     }
-    openToolWindow("ReqWS")
-    val count = ideFrame().x { byVisibleText("Loaded repositories: ${selected.size}") }
-    // UI text must agree too; model convergence alone is not a Project-panel/UI pass.
-    waitFor("ReqWS loaded count", 30.seconds) { count.present() }
-    if (fixture.userCoveredRepositories.isNotEmpty()) {
-      val repositories = ideFrame().x { byJavaClass("com.reqws.goland.ui.ReqwsToolWindowPanel") }
-        .x { byJavaClass("com.reqws.goland.ui.ReqwsRepositoryList") }
-      waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
-        if (!repositories.present()) false else {
-          val texts = repositories.getAllTexts().map { it.text }
-          "Included via User Project Root" in texts && fixture.userCoveredRepositories.all { it in texts }
+    if (inspectReqwsContent) {
+      openToolWindow("ReqWS")
+      val count = ideFrame().x { byVisibleText("Loaded repositories: ${selected.size}") }
+      // UI assertions stay required in legacy/Desktop scenarios; the unopened
+      // Content scenario opts out explicitly while preserving model/PFI/tree checks.
+      waitFor("ReqWS loaded count", 30.seconds) { count.present() }
+      for (repository in fixture.userCoveredRepositories) {
+        val tag = "reqws.repository.${fixture.repositories.getValue(repository)}"
+        val row = ideFrame().x { byAttribute("testtag", tag) }
+        var lastObservation: Pair<Map<String, String>, Map<String, String>>? = null
+        waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
+          if (!row.present()) false else {
+            val attributes = composeAttributes(tag)
+            // Status owns a separate merged semantics node; its visible text is
+            // intentionally not merged into the selectable repository row.
+            val status = composeAttributes("$tag.status")
+            val observation = attributes to status
+            if (observation != lastObservation) {
+              Files.writeString(root.resolve("desktop-user-coverage-ui.jsonl"), json.writeValueAsString(mapOf(
+                "project" to fixture.shell.toString(), "revision" to fixture.revision, "tag" to tag,
+                "row" to attributes, "status" to status,
+              )) + "\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+              lastObservation = observation
+            }
+            val description = attributes["contentdescription"].orEmpty()
+            repository in description.lines() && "Included via User Project Root" in description.lines() &&
+              repository in attributes["text"].orEmpty().split(" || ") && status["text"] == "Included via User Project Root"
+          }
         }
       }
     }
@@ -553,30 +570,29 @@ internal class IdeScenarioHost {
     val directory = Files.createDirectories(root.resolve("ide-component-captures"))
     check(directory.toRealPath() == directory)
     val file = Files.createFile(directory.resolve("${processes.last()}-$name-${UUID.randomUUID()}.png"))
-    // Render the actual test IDE Swing root pane, not the display underneath it.
-    // All invoked methods are public Driver or standard JDK APIs. No screen
-    // capture, focus requirement, cropping or reconstructed UI is involved.
-    val captured = withContext(OnDispatcher.EDT, LockSemantics.NO_LOCK) {
+    // Capture only the real visible IDE content: Swing printAll cannot render
+    // host Metal textures. Never activate the frame to satisfy this observation.
+    fun captureBounds() = withContext(OnDispatcher.EDT, LockSemantics.NO_LOCK) {
       val pane = nativeFrame.getRootPane()
-      check(pane.isShowing()) { "The test IDE root pane is not showing" }
-      val width = pane.getWidth()
-      val height = pane.getHeight()
-      check(width in 320..32768 && height in 200..32768 && width.toLong() * height <= 64L * 1024 * 1024)
-      val image = new(RemoteCaptureImage::class, width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
-      val graphics = image.createGraphics()
-      try { pane.printAll(graphics) } finally { graphics.dispose() }
-      check(pane.getWidth() == width && pane.getHeight() == height) { "IDE content resized while being captured" }
-      Triple(image, width, height)
+      check(nativeFrame.isActive() && pane.isShowing()) { "The test IDE must already be active for a region capture" }
+      val bounds = java.awt.Rectangle(pane.getLocationOnScreen(), java.awt.Dimension(pane.getWidth(), pane.getHeight()))
+      check(bounds.width in 320..32768 && bounds.height in 200..32768 && bounds.width.toLong() * bounds.height <= 64L * 1024 * 1024)
+      bounds
     }
-    check(utility<RemoteCaptureImageIO>().write(captured.first, "png", new(RemoteCaptureFile::class, file.toString())))
+    val bounds = captureBounds()
+    // Robot may wait for rendering, so capture outside the IDE EDT.
+    val image = new(RemoteCaptureRobot::class).createScreenCapture(bounds)
+    check(captureBounds() == bounds) { "IDE content moved or changed activity while being captured" }
+    check(utility<RemoteCaptureImageIO>().write(image, "png", new(RemoteCaptureFile::class, file.toString())))
     check(file.toRealPath() == file && Files.isRegularFile(file) && Files.size(file) in 33..50L * 1024 * 1024)
     val decoded = requireNotNull(javax.imageio.ImageIO.read(file.toFile())) { "IDE component PNG is not readable" }
-    check(decoded.width == captured.second && decoded.height == captured.third)
+    check(decoded.width == bounds.width && decoded.height == bounds.height)
     check(requireNotNull(frame.project).getBasePath() == project.toString()) { "The captured project changed" }
     Files.writeString(file.resolveSibling("${file.fileName}.json"), json.writeValueAsString(mapOf(
-      "schemaVersion" to 1, "captureKind" to "swing-root-pane-print-all", "project" to project.toString(), "pid" to actualPid,
+      "schemaVersion" to 2, "captureKind" to "active-ide-root-pane-screen-region", "project" to project.toString(), "pid" to actualPid,
       "frameProject" to requireNotNull(frame.project).getBasePath(), "frameTitle" to frameTitle,
       "width" to decoded.width, "height" to decoded.height,
+      "screenX" to bounds.x, "screenY" to bounds.y, "activeBefore" to true, "activeAfter" to true,
     )), StandardOpenOption.CREATE_NEW)
     file.toString()
   }
@@ -613,17 +629,17 @@ internal interface RemoteCapturePane {
   fun getWidth(): Int
   fun getHeight(): Int
   fun isShowing(): Boolean
-  fun printAll(graphics: RemoteCaptureGraphics)
+  fun getLocationOnScreen(): java.awt.Point
 }
 
-@Remote("java.awt.Graphics")
-internal interface RemoteCaptureGraphics { fun dispose() }
+@Remote("java.awt.Robot")
+internal interface RemoteCaptureRobot { fun createScreenCapture(bounds: java.awt.Rectangle): RemoteCaptureImage }
 
 @Remote("java.awt.image.RenderedImage")
 internal interface RemoteRenderedImage
 
 @Remote("java.awt.image.BufferedImage")
-internal interface RemoteCaptureImage : RemoteRenderedImage { fun createGraphics(): RemoteCaptureGraphics }
+internal interface RemoteCaptureImage : RemoteRenderedImage
 
 @Remote("java.io.File")
 internal interface RemoteCaptureFile

@@ -100,6 +100,8 @@ jobs:
       - name: Check out tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # S0 reconstruction tests archive a fixed historical commit.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Desktop dependencies (read-only caches)
@@ -215,6 +217,7 @@ jobs:
         run: |
           ./integrations/goland/gradlew -p integrations/goland compileIntegrationTestKotlin test verifyBaselineTestReports \
             verifyPluginProjectConfiguration verifyPluginStructure exportPluginArchivePath --no-daemon -PreleaseVersion="$VERSION"
+          python3 scripts/check_compose_artifact.py --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" --version "$VERSION"
           python3 -u scripts/run_ide_verifier.py --baseline --archive "$(cat integrations/goland/build/release/plugin-archive.txt)" \
             --version "$VERSION" --output integrations/goland/build/reports/api-baseline
 
@@ -298,6 +301,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  plugin-compose:
+    needs: validate
+    uses: ./.github/workflows/goland-compose.yml
+
   plugin-verification:
     needs: [validate, goland-plugin, plugin-targets]
     uses: ./.github/workflows/goland-verification.yml
@@ -315,6 +322,7 @@ jobs:
       - package
       - goland-plugin
       - plugin-verification
+      - plugin-compose
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
