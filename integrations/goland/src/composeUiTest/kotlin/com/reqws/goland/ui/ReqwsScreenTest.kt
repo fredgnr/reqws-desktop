@@ -197,7 +197,7 @@ class ReqwsScreenTest {
     node("reqws.repository.root").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,
       ReqwsBundle.message("repository.userRootCoverage")))
     node("reqws.repository.root.detail", true).assertTextEquals(ReqwsBundle.message("repository.userRootCoverageDetail"))
-    node("reqws.repository.git.status", true).assertTextEquals(ReqwsBundle.message("repository.gitStatusUnavailable"))
+    node("reqws.repository.git.status.text", true).assertTextEquals(ReqwsBundle.message("repository.gitStatusUnavailable"))
     assertActionsFit()
   }
 
@@ -262,9 +262,22 @@ class ReqwsScreenTest {
       "gitStatusUnavailable", "notGit", "userRootCoverage").forEach { key ->
       compose.runOnIdle { state.value = state.value.copy(repositories = listOf(row("a", status = "repository.$key"))) }
       val layouts = mutableListOf<TextLayoutResult>()
-      node("reqws.repository.a.status", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+      node("reqws.repository.a.status.text", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
       assertEquals(ReqwsBundle.message("repository.$key"), layouts.single().layoutInput.text.text)
       assertFalse("$key status remains visible", layouts.single().hasVisualOverflow)
+    }
+  }
+
+  @Test fun summaryStatusIsAddressableInMergedSemanticsForEveryLifecycle() {
+    mount(width = 240)
+    listOf("inactive", "reading", "safeModeBlocked", "synchronizing", "synchronized", "degraded", "error", "disposed").forEach { key ->
+      compose.runOnIdle { state.value = state.value.copy(statusKey = "state.$key") }
+      val expected = ReqwsBundle.message("state.$key")
+      node("reqws.status").assertTextEquals(expected)
+        .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, expected))
+      val layouts = mutableListOf<TextLayoutResult>()
+      node("reqws.status.text", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+      assertFalse(layouts.single().hasVisualOverflow)
     }
   }
 

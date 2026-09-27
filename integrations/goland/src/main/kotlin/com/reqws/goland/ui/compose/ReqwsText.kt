@@ -88,11 +88,11 @@ internal fun ReqwsStatus(text: String, tone: ReqwsStatusTone, tag: String) {
     ReqwsStatusTone.NEUTRAL -> colors.text.normal
   }
   Row(
-    Modifier.fillMaxWidth().semantics(mergeDescendants = true) { stateDescription = text },
+    Modifier.fillMaxWidth().testTag(tag).semantics(mergeDescendants = true) { stateDescription = text },
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     Canvas(Modifier.size(6.dp)) { drawCircle(color) }
-    ReqwsLiteralText(text, tag, Modifier.weight(1f), color = color)
+    ReqwsLiteralText(text, "$tag.text", Modifier.weight(1f), color = color)
   }
 }
