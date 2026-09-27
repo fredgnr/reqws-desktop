@@ -41,7 +41,10 @@ jobs:
           retention-days: 14
 
   plugin-compose:
+    needs: targets
     uses: ./.github/workflows/goland-compose.yml
+    with:
+      source-ref: ${{ needs.targets.outputs.revision }}
 
   main-candidate:
     needs: targets

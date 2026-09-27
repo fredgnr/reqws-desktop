@@ -2,6 +2,10 @@ name: Standalone GoLand Compose components
 
 on:
   workflow_call:
+    inputs:
+      source-ref:
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.source-ref }}
       - uses: ./.github/actions/setup-goland
       - name: Render production components on SDK JBR and verify failure propagation
         run: python3 scripts/check_compose_ui.py --output integrations/goland/build/reports/compose-ci

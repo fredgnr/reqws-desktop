@@ -39,7 +39,6 @@ internal class LocalIdeEnvironment {
   private val config = profile.resolve("config")
   private val json = ObjectMapper()
   private val failures = CopyOnWriteArrayList<String>()
-  private var requestedLaunches = 0
   private val expected = mapOf("product" to "GO", "version" to System.getProperty("reqws.ui.version"),
     "build" to System.getProperty("reqws.ui.build"))
 
@@ -272,8 +271,12 @@ internal class LocalIdeEnvironment {
   }
 
   fun recordLaunchRequested() {
-    requestedLaunches += 1
-    Files.writeString(root.resolve("ide-launch-requested"), "$requestedLaunches\n")
+    // Several scenario classes share this run root, each with its own environment.
+    // The launcher holds the profile lock and Gradle uses a single test fork.
+    val marker = root.resolve("ide-launch-requested")
+    val previous = if (Files.exists(marker)) Files.readString(marker).trim().toInt() else 0
+    check(previous >= 0)
+    Files.writeString(marker, "${previous + 1}\n")
   }
 
   fun recordPreparationClosed() {

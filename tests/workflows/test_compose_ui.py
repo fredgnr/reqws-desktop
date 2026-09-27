@@ -62,7 +62,10 @@ class ComposeReportsTests(unittest.TestCase):
             self.assertNotIn(forbidden, json.dumps(workflow))
         release = load_yaml('.github/workflows/release.yml')['jobs']
         self.assertIn('plugin-compose', release['publish']['needs'])
-        self.assertIn('plugin-compose', load_yaml('.github/workflows/goland-weekly.yml')['jobs'])
+        weekly = load_yaml('.github/workflows/goland-weekly.yml')['jobs']['plugin-compose']
+        self.assertEqual(weekly['needs'], 'targets')
+        self.assertEqual(weekly['with']['source-ref'], '${{ needs.targets.outputs.revision }}')
+        self.assertEqual(workflow['steps'][0]['with']['ref'], '${{ inputs.source-ref }}')
 
 
 class ComposeHostReportsTests(unittest.TestCase):

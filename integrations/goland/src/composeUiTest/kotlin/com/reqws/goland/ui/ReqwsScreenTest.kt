@@ -155,8 +155,8 @@ class ReqwsScreenTest {
     state.value = state.value.copy(workspaceName = value, featureBranch = value,
       repositories = listOf(row("long", value, "repository.gitRootMissing")))
     mount(width = 240)
-    node("reqws.workspace").assertTextEquals("${ReqwsBundle.message("field.workspace")} $value")
-    node("reqws.branch").assertTextEquals("${ReqwsBundle.message("field.branch")} $value")
+    node("reqws.workspace").assertTextEquals(value)
+    node("reqws.branch").assertTextEquals(value)
     node("reqws.repository.long.name", true).assertTextEquals(value)
     val text = mutableListOf<TextLayoutResult>()
     node("reqws.repository.long.name", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(text) }
@@ -197,7 +197,7 @@ class ReqwsScreenTest {
     mount()
     node("reqws.workspace").performMouseInput { enter(center) }
     compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.workspace.tooltip").fetchSemanticsNodes().isNotEmpty() }
-    node("reqws.workspace.tooltip").assertTextEquals("${ReqwsBundle.message("field.workspace")} Workspace 项目")
+    node("reqws.workspace.tooltip").assertTextEquals("Workspace 项目")
   }
 
   @Test fun errorAndRepeatedCopyFeedbackRemainSeparateAndUpdatesClearTheFeedback() {
@@ -220,7 +220,8 @@ class ReqwsScreenTest {
     mount(width = 240)
     node("reqws.repository.root").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,
       ReqwsBundle.message("repository.userRootCoverage")))
-    node("reqws.repository.root.detail", true).assertTextEquals(ReqwsBundle.message("repository.userRootCoverageDetail"))
+    assertTrue(node("reqws.repository.root").fetchSemanticsNode().config[SemanticsProperties.ContentDescription]
+      .any { ReqwsBundle.message("repository.userRootCoverageDetail") in it })
     node("reqws.repository.git.status.text", true).assertTextEquals(ReqwsBundle.message("repository.gitStatusUnavailable"))
     assertActionsFit()
   }
@@ -257,13 +258,22 @@ class ReqwsScreenTest {
     compose.runOnIdle { density.value = Density(1.25f, 1.5f) }
     assertActionsFit()
     node("reqws.sync").assertTextContains(ReqwsBundle.message("action.syncNow"))
+    screenshot("scaled")
     for (key in listOf("action.syncNow", "action.openManifest", "action.copyDiagnostics")) {
       val layouts = mutableListOf<TextLayoutResult>()
       compose.onNodeWithText(ReqwsBundle.message(key), useUnmergedTree = true)
         .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-      assertFalse("$key scaled text remains complete: ${layouts.single().size}, lines=${layouts.single().lineCount}", layouts.single().hasVisualOverflow)
+      val result = layouts.single()
+      // Link's paragraph may keep the offered width while its node shrink-wraps
+      // the actual text. Check every rendered line, including the final character.
+      assertFalse("$key keeps all lines", result.multiParagraph.didExceedMaxLines)
+      assertEquals(result.layoutInput.text.length, result.getLineEnd(result.lineCount - 1))
+      for (line in 0 until result.lineCount) {
+        assertFalse(result.isLineEllipsized(line))
+        assertTrue("$key keeps its complete width", result.getLineRight(line) <= result.size.width + 1f)
+        assertTrue("$key keeps its complete height", result.getLineBottom(line) <= result.size.height + 1f)
+      }
     }
-    screenshot("scaled")
   }
 
   @Test fun repositoryHeadingAndCountHaveSeparateNonOverlappingBounds() {
@@ -289,15 +299,18 @@ class ReqwsScreenTest {
     state.value = state.value.copy(repositories = listOf(row("a")))
     mount()
     val one = node("reqws.repositoryList").fetchSemanticsNode().boundsInRoot.height
+    assertEquals(40f, one, 1f)
+    node("reqws.repositoryScrollbar").assertDoesNotExist()
     compose.runOnIdle { state.value = state.value.copy(repositories = listOf(row("a"), row("b"))) }
     val two = node("reqws.repositoryList").fetchSemanticsNode().boundsInRoot.height
     assertTrue(two > one)
     compose.runOnIdle { state.value = state.value.copy(repositories = List(100) { row("r$it") }) }
-    assertTrue(node("reqws.repositoryList").fetchSemanticsNode().boundsInRoot.height <= 320f)
+    assertEquals(240f, node("reqws.repositoryList").fetchSemanticsNode().boundsInRoot.height, 1f)
+    node("reqws.repositoryScrollbar").assertIsDisplayed()
     assertActionsFit()
   }
 
-  @Test fun everyProductionRepositoryStatusRetainsVisibleTextAtNarrowWidth() {
+  @Test fun everyProductionRepositoryStatusRetainsCompleteSemanticsAtNarrowWidth() {
     state.value = state.value.copy(repositories = listOf(row("a")))
     mount(width = 240)
     listOf("loaded", "notLoaded", "missing", "projectContentUnavailable", "gitRootMissing", "gitRootConflict",
@@ -306,7 +319,11 @@ class ReqwsScreenTest {
       val layouts = mutableListOf<TextLayoutResult>()
       node("reqws.repository.a.status.text", true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
       assertEquals(ReqwsBundle.message("repository.$key"), layouts.single().layoutInput.text.text)
-      assertFalse("$key status remains visible", layouts.single().hasVisualOverflow)
+      val status = node("reqws.repository.a.status.text", true).fetchSemanticsNode().boundsInRoot
+      val row = node("reqws.repository.a").fetchSemanticsNode().boundsInRoot
+      assertTrue(status.width > 0 && status.left >= row.left && status.right <= row.right)
+      node("reqws.repository.a").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,
+        ReqwsBundle.message("repository.$key")))
     }
   }
 
@@ -333,12 +350,13 @@ class ReqwsScreenTest {
     assertTrue(expected.contains(ReqwsBundle.message("message.preservedModel")))
     node("reqws.diagnostics").assertTextEquals(expected).assertContentDescriptionEquals(expected)
     node("reqws.copyFeedback").assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
-    node("reqws.diagnostics").performScrollTo().performMouseInput { enter(center) }
+    node("reqws.diagnostics").performMouseInput { enter(center) }
     compose.waitUntil(5_000) { compose.onAllNodesWithTag("reqws.diagnostics.tooltip").fetchSemanticsNodes().isNotEmpty() }
     node("reqws.diagnostics.tooltip").assertTextEquals(expected)
     val diagnostics = node("reqws.diagnostics").fetchSemanticsNode().boundsInRoot
     val footer = node("reqws.actions").fetchSemanticsNode().boundsInRoot
-    assertTrue(diagnostics.bottom <= footer.top)
+    assertTrue(diagnostics.top >= footer.top)
+    assertTrue(diagnostics.bottom <= node("reqws.sync").fetchSemanticsNode().boundsInRoot.top)
     assertActionsFit()
     compose.runOnIdle { state.value = state.value.copy(diagnosticsCopied = false, errorCode = "NEW_ERROR") }
     node("reqws.copyFeedback").assertDoesNotExist()
@@ -357,7 +375,7 @@ class ReqwsScreenTest {
         ReqwsBundle.message("repository.userRootCoverageDetail")).joinToString("\n")
       assertTrue(expected in row.fetchSemanticsNode().config[SemanticsProperties.ContentDescription])
       val bounds = row.fetchSemanticsNode().boundsInRoot
-      for (tag in listOf("name", "detail", "status.text")) {
+      for (tag in listOf("name", "status.text")) {
         val child = node("reqws.repository.root.$tag", true).fetchSemanticsNode().boundsInRoot
         assertTrue(child.left >= bounds.left && child.right <= bounds.right)
       }
@@ -381,6 +399,44 @@ class ReqwsScreenTest {
     node("reqws.repository.a").performSemanticsAction(SemanticsActions.RequestFocus) { it() }
     node("reqws.repository.a").performKeyInput { pressKey(Key.Spacebar) }
     node("reqws.repository.a").assertIsSelected()
+  }
+
+
+  @Test fun legacyVisualHierarchyKeepsStatusAboveCardsAndDiagnosticsAbovePrimaryAndLinks() {
+    state.value = state.value.copy(workspaceName = "ReqWS automation", featureBranch = "fixture",
+      lifecycle = ReqwsLifecycleState.DEGRADED, statusKey = "state.degraded", statusTone = ReqwsStatusTone.WARNING,
+      loadedRepositoryCount = 2, errorCode = null, vcsDiagnosticCode = "VCS_CONFIGURATION_MISMATCH",
+      statusDetailKey = "message.vcsManualConfigurationRequired", repositories = listOf(
+        row("a", "repo-a").copy(statusTone = ReqwsStatusTone.SUCCESS),
+        row("b", "repo-b").copy(statusTone = ReqwsStatusTone.SUCCESS)))
+    mount(width = 432, height = 820)
+    val status = node("reqws.status").fetchSemanticsNode().boundsInRoot
+    val summary = node("reqws.summary").fetchSemanticsNode().boundsInRoot
+    val repositories = node("reqws.repositories").fetchSemanticsNode().boundsInRoot
+    assertTrue(status.bottom < summary.top)
+    assertTrue(status.width < summary.width)
+    assertTrue(summary.bottom < repositories.top)
+    node("reqws.workspace").assertTextEquals("ReqWS automation")
+      .assertContentDescriptionEquals("${ReqwsBundle.message("field.workspace")} ReqWS automation")
+    node("reqws.branch").assertTextEquals("fixture")
+    val row = node("reqws.repository.a").fetchSemanticsNode().boundsInRoot
+    val name = node("reqws.repository.a.name", true).fetchSemanticsNode().boundsInRoot
+    val rowStatus = node("reqws.repository.a.status", true).fetchSemanticsNode().boundsInRoot
+    assertEquals(40f, row.height, 1f)
+    assertTrue(name.right <= rowStatus.left)
+    val sync = node("reqws.sync").fetchSemanticsNode().boundsInRoot
+    val open = node("reqws.openManifest").fetchSemanticsNode().boundsInRoot
+    val copy = node("reqws.copyDiagnostics").fetchSemanticsNode().boundsInRoot
+    assertTrue(node("reqws.diagnostics").fetchSemanticsNode().boundsInRoot.bottom < sync.top)
+    assertTrue(sync.height >= 36f)
+    assertTrue(open.width < sync.width && copy.width < sync.width)
+    assertTrue(sync.bottom < open.top && open.bottom < copy.top)
+    assertEquals(sync.center.x, open.center.x, 1f)
+    assertEquals(sync.center.x, copy.center.x, 1f)
+    assertActionsFit()
+    screenshot("legacy-layout")
+    compose.runOnIdle { dark.value = true }
+    screenshot("legacy-layout-dark")
   }
 
   private fun screenshot(name: String) {

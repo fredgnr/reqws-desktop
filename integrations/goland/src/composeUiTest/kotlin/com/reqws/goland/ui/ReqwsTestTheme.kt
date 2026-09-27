@@ -14,6 +14,9 @@ import kotlin.time.Duration.Companion.milliseconds
 import org.jetbrains.jewel.foundation.*
 import org.jetbrains.jewel.foundation.theme.*
 import org.jetbrains.jewel.ui.component.styling.*
+import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import org.jetbrains.jewel.ui.icon.LocalNewUiChecker
+import org.jetbrains.jewel.ui.icon.NewUiChecker
 
 // Test-only public Jewel tokens. Production receives the IDE's bridge theme; no standalone
 // theme artifact or platform application is created by component tests.
@@ -33,7 +36,7 @@ internal fun ReqwsTestTheme(dark: Boolean, content: @Composable () -> Unit) {
   val error = Color(0xffe05050)
   val colors = GlobalColors(BorderColors(border, accent, border),
     OutlineColors(accent, warning, error, warning, error),
-    TextColors(foreground, foreground, border, border, foreground, error, warning),
+    TextColors(foreground, foreground, border, border, border, error, warning),
     if (dark) testDarkPanel else testLightPanel, background)
   fun button(primary: Boolean): ButtonStyle {
     val bg = SolidColor(if (primary) accent else background)
@@ -46,6 +49,7 @@ internal fun ReqwsTestTheme(dark: Boolean, content: @Composable () -> Unit) {
   }
   OverrideDarkMode(dark) {
     CompositionLocalProvider(
+      LocalNewUiChecker provides NewUiChecker { true },
       LocalGlobalColors provides colors,
       LocalGlobalMetrics provides GlobalMetrics(1.dp, 24.dp),
       LocalContentColor provides foreground,
@@ -53,6 +57,19 @@ internal fun ReqwsTestTheme(dark: Boolean, content: @Composable () -> Unit) {
       LocalDisabledAppearanceValues provides DisabledAppearanceValues(0, 0, 100),
       LocalDefaultButtonStyle provides button(true),
       LocalOutlinedButtonStyle provides button(false),
+      LocalSelectableLazyColumnStyle provides SelectableLazyColumnStyle(40.dp,
+        SimpleListItemStyle(SimpleListItemColors(background, background, accent, accent,
+          foreground, foreground, Color.White, Color.White),
+          SimpleListItemMetrics(PaddingValues(0.dp), PaddingValues(0.dp), CornerSize(0.dp), 8.dp))),
+      LocalScrollbarStyle provides ScrollbarStyle(
+        ScrollbarColors(border, foreground, border, foreground, Color.Transparent, Color.Transparent,
+          Color.Transparent, Color.Transparent, background, background, background, background),
+        ScrollbarMetrics(CornerSize(4.dp), 24.dp), TrackClickBehavior.NextPage,
+        ScrollbarVisibility.AlwaysVisible(14.dp, PaddingValues(3.dp), PaddingValues(3.dp),
+          0.milliseconds, 0.milliseconds, background, background)),
+      LocalLinkStyle provides LinkStyle(LinkColors(accent, border, accent, accent, accent, accent),
+        LinkMetrics(CornerSize(2.dp), 4.dp, DpSize(16.dp, 16.dp)),
+        LinkIcons(AllIconsKeys.General.ArrowDown, AllIconsKeys.General.ExternalTools), LinkUnderlineBehavior.ShowOnHover),
       LocalTooltipStyle provides TooltipStyle(TooltipColors(background, foreground, border, Color.Transparent),
         TooltipMetrics.defaults(showDelay = 10.milliseconds, regularDisappearDelay = 10_000.milliseconds, fullDisappearDelay = 30_000.milliseconds), TooltipAutoHideBehavior.Never),
       content = content,

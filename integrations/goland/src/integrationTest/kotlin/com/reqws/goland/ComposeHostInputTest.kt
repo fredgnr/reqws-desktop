@@ -11,11 +11,14 @@ import com.intellij.driver.sdk.openToolWindow
 import com.intellij.driver.sdk.singleProject
 import com.intellij.driver.sdk.ui.boundsOnScreen
 import com.intellij.driver.sdk.ui.getClipboardText
+import com.intellij.driver.sdk.ui.copyToClipboard
+import java.awt.event.KeyEvent
 import com.intellij.driver.sdk.ui.components.common.ideFrame
 import com.intellij.driver.sdk.ui.components.settings.clickOkBtnAndCloseDialog
 import com.intellij.driver.sdk.ui.components.settings.openPluginsSettings
 import com.intellij.driver.sdk.ui.components.settings.pluginsSettingsPage
 import com.intellij.driver.sdk.waitFor
+import com.intellij.ide.starter.ide.IDETestContext
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -36,6 +39,7 @@ class ComposeHostInputTest {
   @Test fun productionActionsThemeAndScaleUseRealInput() {
     val fixture = WorkspaceFixture(host.root)
     val context = host.context("compose-real-input", fixture.shell).apply {
+      isolateComposePluginState(host.root)
       applyVMOptionsPatch { addSystemProperty("reqws.sync.trace", true) }
     }
     host.withIde(context) {
@@ -48,11 +52,40 @@ class ComposeHostInputTest {
       var before = manualReads()
       node("reqws.sync").strictClick()
       waitFor("pointer click caused a manual domain read", 30.seconds) { manualReads() > before }
+      waitFor("manual pointer synchronization finished", 30.seconds) {
+        service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED")
+      }
+      node("reqws.copyDiagnostics").strictClick()
+      focused("reqws.copyDiagnostics")
+      recordFocus("before-reverse-tab")
+      node("reqws.copyDiagnostics").keyboard {
+        pressing(KeyEvent.VK_SHIFT) {
+          recordFocus("shift-down")
+          tab()
+          recordFocus("tab-sent")
+        }
+      }
+      recordFocus("shift-up")
+      focused("reqws.openManifest")
+      node("reqws.openManifest").keyboard { pressing(KeyEvent.VK_SHIFT) { tab() } }
       focused("reqws.sync")
       before = manualReads()
       node("reqws.sync").keyboard { space() }
       waitFor("Space caused another manual domain read", 30.seconds) { manualReads() > before }
-      node("reqws.sync").keyboard { tab() }
+      waitFor("manual keyboard synchronization finished", 30.seconds) {
+        service<ReqwsRemoteService>(singleProject()).getState().getLifecycle().name() in setOf("SYNCHRONIZED", "DEGRADED")
+      }
+      node("reqws.copyDiagnostics").strictClick()
+      focused("reqws.copyDiagnostics")
+      recordFocus("before-reverse-tab")
+      node("reqws.copyDiagnostics").keyboard {
+        pressing(KeyEvent.VK_SHIFT) {
+          recordFocus("shift-down")
+          tab()
+          recordFocus("tab-sent")
+        }
+      }
+      recordFocus("shift-up")
       focused("reqws.openManifest")
       node("reqws.openManifest").keyboard { enter() }
       waitFor("Enter opened the exact fixture manifest", 30.seconds) {
@@ -92,8 +125,13 @@ class ComposeHostInputTest {
             waitFor("real IDE scale applied", 30.seconds) { settings.getCurrentIdeScale() == scale }
             // Re-query the real semantics after host theme/scale recomposition.
             focused("reqws.copyDiagnostics")
+            val sentinel = "reqws-compose-keyboard-$dark-$scale"
+            copyToClipboard(sentinel)
+            assertEquals(sentinel, getClipboardText().toString())
             node("reqws.copyDiagnostics").keyboard { space() }
-            waitFor("copy still works after theme and scale changes", 10.seconds) { node("reqws.copyFeedback").present() }
+            waitFor("fresh copy works after theme and scale changes", 10.seconds) {
+              node("reqws.copyFeedback").present() && getClipboardText().toString() == clipboard
+            }
             val bounds = node("reqws.screen").boundsOnScreen
             for (tag in listOf("reqws.sync", "reqws.openManifest", "reqws.copyDiagnostics")) {
               assertTrue(bounds.contains(node(tag).boundsOnScreen), "$tag remains inside the rendered content")
@@ -119,32 +157,40 @@ class ComposeHostInputTest {
   @Test fun settingsDisableAndEnableReleaseAndRecreateProductionContent() {
     val fixture = WorkspaceFixture(host.root)
     val context = host.context("compose-dynamic-reload", fixture.shell).apply {
+      isolateComposePluginState(host.root)
       applyVMOptionsPatch { addSystemProperty("reqws.sync.trace", true) }
     }
     host.withIde(context) {
       host.assertProjection(this, fixture)
       focusContent()
-      // Hold only the platform Content, not a plugin service/presenter/classloader.
-      val oldContent = withContext(OnDispatcher.EDT) {
-        service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS")!!
+      // Dynamic unload clears Disposer history for ordinary Disposable objects.
+      // Platform CheckedDisposable markers retain their own permanent disposed bit.
+      val disposalMarkers = withContext(OnDispatcher.EDT) {
+        val content = service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS")!!
           .getContentManager().getContents().single()
+        val disposer = utility<ComposeHostDisposer>()
+        listOf(disposer.newCheckedDisposable(content), disposer.newCheckedDisposable(content.getDisposer()))
       }
-      setPluginEnabled(false)
-      waitFor("plugin dynamically unloaded without restarting the IDE", 1.minutes) { !isPluginLoaded("com.reqws.workspace") }
-      assertTrue(utility<ComposeHostDisposer>().isDisposed(oldContent))
-      assertFalse(node("reqws.screen").present())
-      fixture.select(emptyList())
-      setPluginEnabled(true)
-      waitFor("plugin dynamically loaded in the same IDE", 1.minutes) { isPluginLoaded("com.reqws.workspace") }
-      host.assertProjection(this, fixture)
-      focusContent()
-      assertEquals(1, ideFrame().xx { byAttribute("testtag", "reqws.screen") }.list().size)
-      node("reqws.copyDiagnostics").strictClick()
-      waitFor("reloaded content accepts actual input", 10.seconds) { node("reqws.copyFeedback").present() }
-      fixture.select(listOf("repo-a", "repo-b"))
-      host.assertProjection(this, fixture)
-      fixture.assertDiskPreserved()
-      record("dynamic-reload", "unloaded content-disposed loaded empty-restored actual-click full-restored")
+      try {
+        setPluginEnabled(false)
+        waitFor("plugin dynamically unloaded without restarting the IDE", 1.minutes) { !isPluginLoaded("com.reqws.workspace") }
+        waitFor("old Content and session are disposed after unload", 30.seconds) { disposalMarkers.all { it.isDisposed() } }
+        assertFalse(node("reqws.screen").present())
+        fixture.select(emptyList())
+        setPluginEnabled(true)
+        waitFor("plugin dynamically loaded in the same IDE", 1.minutes) { isPluginLoaded("com.reqws.workspace") }
+        host.assertProjection(this, fixture)
+        focusContent()
+        assertEquals(1, ideFrame().xx { byAttribute("testtag", "reqws.screen") }.list().size)
+        node("reqws.copyDiagnostics").strictClick()
+        waitFor("reloaded content accepts actual input", 10.seconds) { node("reqws.copyFeedback").present() }
+        fixture.select(listOf("repo-a", "repo-b"))
+        host.assertProjection(this, fixture)
+        fixture.assertDiskPreserved()
+        record("dynamic-reload", "unloaded content-disposed loaded empty-restored actual-click full-restored")
+      } finally {
+        setPluginEnabled(true)
+      }
     }
   }
 
@@ -163,6 +209,15 @@ class ComposeHostInputTest {
     waitFor("dedicated fixture owns the focused frame", 10.seconds) {
       cast(ideFrame().component, RemoteCaptureFrame::class).isActive()
     }
+  }
+
+  private fun Driver.recordFocus(stage: String) {
+    val focus = utility<ComposeHostFocusManager>().getCurrentKeyboardFocusManager()
+    val owner = focus.getFocusOwner()?.toString().orEmpty().replace('\t', ' ').replace('\n', ' ')
+    val permanent = focus.getPermanentFocusOwner()?.toString().orEmpty().replace('\t', ' ').replace('\n', ' ')
+    val semantics = ideFrame().xx { byAttribute("focused", "true") }.list()
+      .flatMap { it.getAllTexts().map { text -> text.text } }.joinToString(" | ")
+    record("focus-$stage", "owner=$owner permanent=$permanent semantics=$semantics")
   }
 
   private fun Driver.node(tag: String) = ideFrame().x { byAttribute("testtag", tag) }
@@ -205,6 +260,31 @@ interface ComposeHostUISettings {
   fun fireUISettingsChanged()
 }
 @Remote("com.intellij.openapi.util.Disposer")
-interface ComposeHostDisposer { fun isDisposed(content: ComposeLifecycleContent): Boolean }
+interface ComposeHostDisposer {
+  fun newCheckedDisposable(parent: ComposeLifecycleContent): ComposeHostCheckedDisposable
+  fun newCheckedDisposable(parent: ComposeLifecycleOwner): ComposeHostCheckedDisposable
+}
+@Remote("com.intellij.openapi.util.CheckedDisposable")
+interface ComposeHostCheckedDisposable { fun isDisposed(): Boolean }
 @Remote("com.jetbrains.performancePlugin.commands.TakeScreenshotCommandKt", plugin = "com.jetbrains.performancePlugin")
 interface ComposeHostScreenCapture { fun takeFullScreenshot(folder: String): String? }
+
+/** Settings UI may persist a disabled plugin even if dynamic unloading fails.
+ * Keep that setting in this run, never in the reusable authorization profile. */
+internal fun IDETestContext.isolateComposePluginState(root: Path) {
+  val disabled = pluginConfigurator.disabledPluginsPath.toAbsolutePath().normalize()
+  check(disabled.startsWith(root) && !Files.isSymbolicLink(disabled))
+  Files.createDirectories(disabled.parent)
+  if (!Files.exists(disabled)) Files.writeString(disabled, "", StandardOpenOption.CREATE_NEW)
+  check("com.reqws.workspace" !in Files.readAllLines(disabled))
+  applyVMOptionsPatch { addSystemProperty("disabled.plugins.file.path", disabled) }
+}
+
+@Remote("java.awt.KeyboardFocusManager")
+interface ComposeHostFocusManager {
+  fun getCurrentKeyboardFocusManager(): ComposeHostFocusManager
+  fun getFocusOwner(): ComposeHostFocusComponent?
+  fun getPermanentFocusOwner(): ComposeHostFocusComponent?
+}
+@Remote("java.awt.Component")
+interface ComposeHostFocusComponent { override fun toString(): String }

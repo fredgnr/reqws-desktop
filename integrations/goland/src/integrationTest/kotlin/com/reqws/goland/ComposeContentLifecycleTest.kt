@@ -29,18 +29,19 @@ class ComposeContentLifecycleTest {
   @Test fun contentLifecycleIsIndependentOfProjectSynchronization() {
     val fixture = WorkspaceFixture(host.root)
     val context = host.context("compose-content-lifecycle", fixture.shell).apply {
+      isolateComposePluginState(host.root)
       applyVMOptionsPatch { addSystemProperty("reqws.sync.trace", true) }
     }
     host.withIde(context) {
       val reqws = service<ReqwsRemoteService>(singleProject())
       val window = requireNotNull(service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS"))
-      host.assertProjection(this, fixture)
+      host.assertProjection(this, fixture, inspectReqwsContent = false)
       withContext(OnDispatcher.EDT) {
         assertTrue(window.getContentManagerIfCreated()?.getContentCount() in listOf(null, 0))
       }
       for (selected in listOf(listOf("repo-a"), emptyList(), listOf("repo-a", "repo-b"))) {
         fixture.select(selected)
-        host.assertProjection(this, fixture)
+        host.assertProjection(this, fixture, inspectReqwsContent = false)
         withContext(OnDispatcher.EDT) {
           assertTrue(window.getContentManagerIfCreated()?.getContentCount() in listOf(null, 0))
         }
@@ -88,14 +89,14 @@ class ComposeContentLifecycleTest {
           StandardOpenOption.CREATE, StandardOpenOption.APPEND)
       }
       fixture.select(emptyList())
-      host.assertProjection(this, fixture)
+      host.assertProjection(this, fixture, inspectReqwsContent = false)
       fixture.assertDiskPreserved()
     }
     // The exact same fixture and candidate start in a fresh process with an empty model.
     host.withIde(context) {
-      host.assertProjection(this, fixture)
+      host.assertProjection(this, fixture, inspectReqwsContent = false)
       fixture.select(listOf("repo-a", "repo-b"))
-      host.assertProjection(this, fixture)
+      host.assertProjection(this, fixture, inspectReqwsContent = false)
       openToolWindow("ReqWS")
       waitFor("cold process recreates its own production content", 30.seconds) {
         ideFrame().xx { byAttribute("testtag", "reqws.screen") }.list().size == 1
@@ -123,7 +124,9 @@ interface ComposeLifecycleContentManager {
 @Remote("com.reqws.goland.ui.ReqwsToolWindowFactory", plugin = "com.reqws.workspace")
 interface ComposeLifecycleFactory { fun createToolWindowContent(project: Project, window: ComposeLifecycleToolWindow) }
 @Remote("com.intellij.ui.content.Content")
-interface ComposeLifecycleContent { fun getDisposer(): ComposeLifecycleOwner }
+interface ComposeLifecycleContent {
+  fun getDisposer(): ComposeLifecycleOwner
+}
 @Remote("com.reqws.goland.ui.platform.ReqwsContentSession", plugin = "com.reqws.workspace")
 interface ComposeLifecycleOwner {
   fun isDisposed(): Boolean

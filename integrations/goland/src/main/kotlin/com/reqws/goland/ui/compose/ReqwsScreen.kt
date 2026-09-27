@@ -3,6 +3,10 @@ package com.reqws.goland.ui.compose
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Alignment
+import com.reqws.goland.ReqwsBundle
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,9 +30,13 @@ internal fun ReqwsScreen(state: ReqwsUiState, onAction: (ReqwsUiAction) -> Unit)
     Column(
       Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp)
         .testTag("reqws.body"),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+      verticalArrangement = Arrangement.Top,
     ) {
+      ReqwsStatus(ReqwsBundle.message(state.statusKey), state.statusTone, "reqws.status",
+        modifier = Modifier.align(Alignment.End), pill = true)
+      Spacer(Modifier.height(8.dp))
       ReqwsSummary(state)
+      Spacer(Modifier.height(12.dp))
       ReqwsRepositories(state.repositories)
     }
     ReqwsActions(state, onAction)

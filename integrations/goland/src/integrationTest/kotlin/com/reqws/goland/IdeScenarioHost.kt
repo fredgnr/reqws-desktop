@@ -121,7 +121,7 @@ internal class IdeScenarioHost {
   }
 
   fun assertProjection(driver: Driver, fixture: ProjectionFixture, selected: Set<String> = fixture.selected,
-    phase: String = "projection") = with(driver) {
+    phase: String = "projection", inspectReqwsContent: Boolean = true) = with(driver) {
     fixture.verifyInputs()
     assertEquals(fixture.selected, selected)
     val expectedDigest = fixture.expectedProjectionDigest()
@@ -197,17 +197,18 @@ internal class IdeScenarioHost {
         (!fixture.hasLateFiles || paths.any { it.takeLast(3) == listOf("repo-a", "docs", "late-repo.txt") } == ("repo-a" in selected)) &&
         (selected + fixture.userCoveredRepositories).all { repo -> paths.any { it.takeLast(3) == listOf(repo, "docs", "probe.txt") } }
     }
-    openToolWindow("ReqWS")
-    val count = ideFrame().x { byVisibleText("Loaded repositories: ${selected.size}") }
-    // UI text must agree too; model convergence alone is not a Project-panel/UI pass.
-    waitFor("ReqWS loaded count", 30.seconds) { count.present() }
-    if (fixture.userCoveredRepositories.isNotEmpty()) {
-      val repositories = ideFrame().x { byJavaClass("com.reqws.goland.ui.ReqwsToolWindowPanel") }
-        .x { byJavaClass("com.reqws.goland.ui.ReqwsRepositoryList") }
-      waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
-        if (!repositories.present()) false else {
-          val texts = repositories.getAllTexts().map { it.text }
-          "Included via User Project Root" in texts && fixture.userCoveredRepositories.all { it in texts }
+    if (inspectReqwsContent) {
+      openToolWindow("ReqWS")
+      val count = ideFrame().x { byVisibleText("Loaded repositories: ${selected.size}") }
+      // UI assertions stay required in legacy/Desktop scenarios; the unopened
+      // Content scenario opts out explicitly while preserving model/PFI/tree checks.
+      waitFor("ReqWS loaded count", 30.seconds) { count.present() }
+      for (repository in fixture.userCoveredRepositories) {
+        val row = ideFrame().x { byAttribute("testtag", "reqws.repository.${fixture.repositories.getValue(repository)}") }
+        waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
+          row.present() && row.getAllTexts().map { it.text }.let { texts ->
+            "Included via User Project Root" in texts && repository in texts
+          }
         }
       }
     }

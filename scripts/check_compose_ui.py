@@ -45,6 +45,7 @@ def run(output):
     output.mkdir(parents=True, exist_ok=False)
     report = {'status': 'failed', 'scope': 'standalone-compose', 'completeIde': 'not-started',
               'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+              'workingTreeDirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True)),
               'prHead': os.environ.get('REQWS_PR_HEAD_SHA'), 'runs': {}}
     try:
         for task in ('composeUiTest', 'composeUiFailureProbeTest', 'composeUiEmptyProbeTest'):
