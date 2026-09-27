@@ -7,11 +7,11 @@ updated: 2026-09-27
 
 # Compose S0 技术验证记录（2026-09-26）
 
-本记录固定 S0 的实际源码、依赖、检查及失败证据。2026-09-27 重新验证已打通真实输入和内容循环，并取得同机性能基线与冻结预算。独立审查确认两批 Compose 对照均出现一次循环后 CPU 超限；该问题尚未解释，G0 当前为 **blocked**，不进入 S1。
+本记录固定 S0 的实际源码、依赖、功能检查及审查证据。2026-09-27 用户明确取消性能门禁后，现有证据中没有未关闭的 S0 功能问题，验收结论调整为 **G0 pass、S0 completed**；S1–S4 尚未开始。
 
 ## 1. 候选与范围
 
-工作分支为 `feat/plugin_rebuild_compose`，实施基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85`，开始时工作树干净。可复现源码、工具及验证记录固定于本地提交 `7ad3387`，独立 Reviewer 审查该提交；随后只补充审查结论与索引。用户在本轮授权执行 S0，取代初始文档 PR 的“不构建、不启动测试 IDE”限制；没有授权日常 IDE 安装、发布或提高最低版本。
+工作分支为 `feat/plugin_rebuild_compose`，实施基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85`，开始时工作树干净。可复现源码、工具及验证记录固定于本地提交 `7ad3387`，独立 Reviewer 审查该提交；审查记录提交为 `0c27483`；本次仅按用户新要求调整验收范围、报告与索引，源码、测试 harness 及候选 ZIP 均未改变。用户在本轮授权执行 S0，取代初始文档 PR 的“不构建、不启动测试 IDE”限制；没有授权日常 IDE 安装、发布或提高最低版本。
 
 生产工作树仍使用原有 Swing UI。最小 Compose 候选在独立临时源码副本构建：固定 Git 基线加[验证补丁](../../../tests/fixtures/goland-compose-s0/probe.patch)，由[暂存脚本](../../../scripts/stage_compose_probe.py)重建。补丁是可复现的实验源码，不是已合入生产的 UI，也不是运行时回退开关。正式构建不应用补丁，测试控制代理只在 `integrationTest` 中。
 
@@ -105,92 +105,38 @@ wrapper 的 `addNotify/removeNotify` 管理 AWT focus listener；这只能解释
 
 重建缺陷修复保存在 `probe.patch`：补全 descriptor；挂载与 Content 获取成功后才注册观察 listener。宿主入口在 Compose 模式先执行产物检查，缺声明的实际失败 ZIP 已被拒绝。暂存回归同时核对 Compose 依赖必需且唯一、Swing 基线不含该依赖，避免再次遗漏实验源文件。
 
-## 6. Swing 性能方法与预算状态
+## 6. 验收范围调整与历史观察
 
-CMP-V11 的完整 IDE Swing 基线已于 2026-09-27 通过，运行 `2l_nqtbw`，1 个用例覆盖 3 个新进程，0 skipped；每进程 listener 创建/释放 21/21、最大活动数 1，均正常退出。首开从发出打开命令到 Driver 找到 enabled 控件；不是像素首次呈现或点击往返时间。
+2026-09-27 用户明确要求“不再考虑性能相关的门禁”，并在不存在功能问题时将验收转为通过。[技术方案](technical-design.md)、[测试方案](test-plan.md)及 S0/S4 任务已同步：首开耗时、CPU、内存采样和预算不参与 G0–G4 判定，不再要求性能基线、对比、归因或复测。内容隐藏/重建、监听与 composition 释放、项目关闭和进程退出仍按功能正确性验收。
 
-| 轮次 | 首开 ms | CPU 启动后 / 循环后（单核 %） | RSS 启动后 / 循环后 MiB | 堆启动后 / 循环后 MiB |
-|---|---:|---:|---:|---:|
-| 1 | 1499 | 20.50 / 11.60 | 2063.88 / 2054.36 | 511.22 / 684.28 |
-| 2 | 1488 | 14.29 / 10.26 | 2278.86 / 2167.64 | 558.63 / 364.65 |
-| 3 | 1464 | 18.76 / 11.74 | 2286.92 / 2309.81 | 462.00 / 407.00 |
+旧门禁下，两批 Compose 测量各有一次循环后 CPU 超限，Main 与 Reviewer 当时据此将 G0 记为 blocked；完整数表与当时结论保存在 Git 提交 `0c27483`，原始本地日志不改写。该项现在移出验收范围，不再是待关闭问题；本次没有将旧数值比较改成 pass，也没有据此认定性能改善或证明原因在 Compose。
 
-窗口均为 1400×918、2× 显示变换，LookAndFeel ID 为 `LookAndFeelThemeAdapter`，期间没有切换主题。CPU 为整个 IDE 的观察窗平均值；RSS/堆为 13 个样本的中位数。新 system 目录会触发 IDE 自身索引和启动后台任务，原始索引日志单独保留，不将语言工具链或索引就绪作为 ReqWS 同步成功门槛。观察窗没有用户交互，不表示 IDE 所有后台工作为零。
+测量调试暴露的宿主问题已经修复并经过最终功能复核：在 EDT 使用公开 `getContentManagerIfCreated()`；按真实 Driver 节点修正 Swing 选择器；采样改用目标 IDE 自身公开 MXBean。测试插件周期截图的离屏 `paint` 曾触发 Metal 图形异常；V2 仅清除测试诊断选项 `ide.performance.screenshot`，改用公开 `TakeScreenshotCommandKt.takeFullScreenshot` 获取实际屏幕像素，仍执行 IDE 错误失败检查。最终输入运行 `1sih9ai7` 使用该 V2 协议并通过，没有修改生产渲染设置或抑制异常。
 
-预算冻结时间为 `2026-09-27T00:34:10.068083+00:00`，在 Compose 性能运行之前。以下规则用于相同代表环境、fixture 和三轮协议；它们是后续回归上限，不是性能改善声明。完整精度留在本地 `performance-budget.json`，表中显示两位小数。
-
-| 指标 | 冻结上限 | 计算方法 |
-|---|---:|---|
-| 首开 | 5000 ms | max(5000 ms, Swing 最慢轮 × 2) |
-| 启动后 CPU | 22.50% | max(3%, 该窗 Swing 最大值 + 2 个百分点) |
-| 循环后 CPU | 13.74% | max(3%, 该窗 Swing 最大值 + 2 个百分点) |
-| 循环前后 RSS 中位数增长 | 128.00 MiB | max(128 MiB, Swing 最大增长 × 1.5) |
-| 循环前后堆中位数增长 | 259.59 MiB | max(64 MiB, Swing 最大增长 × 1.5) |
-| 循环后 RSS 中位数 | 2565.81 MiB | Swing 该窗最大值 + 256 MiB |
-| 循环后堆中位数 | 812.28 MiB | Swing 该窗最大值 + 128 MiB |
-
-首开 5 秒为冷载入工程上限；CPU 留出 2 个百分点的测量与宿主波动，内存保留有界的缓存/原生渲染空间。一次堆增长不能证明泄漏；重复 listener、活动 composition 累积、持续异常负载、关闭后悬挂进程仍是独立硬失败。S4 必须用完整 Compose UI 重新对照，不能借用最小探针结果。
-
-2026-09-27 已实现独立 `S0PerformanceProbeTest.performanceBaseline`，Swing/Compose 各 3 个新进程；每轮预热 30 秒、5 秒间隔采样 60 秒，完成独立的 20 次隐藏/显示与 20 次重建，再预热 30 秒、采样 60 秒。通过测试 IDE 自身的公开 MXBean 获取 PID、累计进程 CPU 和堆使用/已提交字节，以该 PID 用 `ps` 读取 RSS；记录每次循环及一个初始样本，不强制 GC。窗口尺寸、显示变换缩放和 LookAndFeel ID 同时记录。CPU 为进程累计 CPU 时间除以单调时钟的经过时间，100% 表示一个核心；它包括 IDE 后台活动和测量开销，不等于插件单独的 CPU。Swing 只加 listener 计数日志，不改业务行为。上述 V1 基线与预算已经冻结。首轮 Compose 性能运行 `h1b0pgm0` 在约 60 秒处由测试插件的周期截图触发 Skiko/Metal `Unsupported graphics configuration: BufferedImageGraphicsConfig`，即使收集了首轮样本也判为 fail，不计入成功对照。实际 SDK 字节码证实 `ide.performance.screenshot` 存在即每分钟调用 `captureComponent`，把整个窗口 `paint` 到 BufferedImage。
-
-修正后的 V2 协议只在 S0 测试启动参数中清除此诊断选项，改用测试侧公开 `TakeScreenshotCommandKt.takeFullScreenshot` 获取实际屏幕像素；没有修改生产渲染设置，也没有抑制 IDE 错误。Swing 与 Compose 均须重新用 V2 运行；V1 预算文件保留，新预算按相同公式计算后逐项取旧上限与新值的较小者，禁止放宽。V2 匹配基线 `_v74cwmt` 已通过：1 用例、3 新进程、201 个采样点、6 张实际屏幕诊断图；各轮 listener 均 21/21 配对，最大活动数 1。V2 预算冻结于 `2026-09-27T00:55:59.154188+00:00`，在 V2 Compose 运行之前。启动后与循环后分别统计 CPU，不用启动尾部负载放宽后一个观察窗。
-
-性能入口调试中以下失败均正常退出、未计入基线：`mvl_oaoh` 的懒创建检查误用 `getContentManager()` 且不在 EDT，已改用 EDT 上的公开 `getContentManagerIfCreated()`；`eu0d3pc3` 的 Swing 类型选择器不匹配真实 Driver 节点，已按实际 class/accessiblename 修正；`09xsc6aa` 的外部 `ProcessHandle.Info` 没有提供所需数据，已改为目标 IDE 自身的 MXBean。没有屏蔽 IDE 异常，也没有将不完整样本写入预算。
-
-### V2 匹配基线与预算
-
-| Swing 轮次 | 首开 ms | CPU 启动后 / 循环后 % | RSS 启动后 / 循环后 MiB | 堆启动后 / 循环后 MiB |
-|---|---:|---:|---:|---:|
-| 1 | 1421 | 20.75 / 10.16 | 2297.02 / 2050.41 | 485.79 / 609.13 |
-| 2 | 1407 | 15.52 / 13.31 | 2306.92 / 2153.98 | 473.48 / 522.86 |
-| 3 | 1381 | 14.81 / 11.02 | 2116.02 / 2094.02 | 525.33 / 613.81 |
-
-最终使用的 V2 上限（不大于 V1）：`firstOpenMs` = 5000.00, `beforeCpuPercent` = 22.50, `afterCpuPercent` = 13.74, `rssGrowthMiB` = 128.00, `heapGrowthMiB` = 185.02, `steadyRssMiB` = 2409.98, `steadyHeapMiB` = 741.81。CPU 单位为单核百分比，时间为 ms，内存为 MiB。完整精度见本地 `performance-budget-v2.json`。此处仍是共享桌面上的同机工程基线，未宣称实验室隔离或统计上的性能提升。
-
-V2 Compose 首次对照 `7i7bi6vo` 的宿主场景通过：1 用例、3 个正常退出的新进程、201 个采样点、6 张实际屏幕诊断图，未再出现图形异常。各轮 listener 21/21、composition 41/41 配对且最大活动数均为 1。数值预算为 **20/21 项通过、1 项失败**：第 2 轮循环后 CPU 15.57% 超过冻结的 13.74%，其余首开、CPU 与内存项通过。
-
-| Compose 轮次 | 首开 ms | CPU 启动后 / 循环后 % | RSS 启动后 / 循环后 MiB | 堆启动后 / 循环后 MiB |
-|---|---:|---:|---:|---:|
-| 1 | 1704 | 17.01 / 9.45 | 2291.86 / 2177.92 | 453.50 / 412.96 |
-| 2 | 1672 | 15.74 / 15.57 | 2304.38 / 2085.05 | 487.71 / 355.75 |
-| 3 | 1765 | 18.12 / 10.21 | 2327.86 / 2203.59 | 464.99 / 385.50 |
-
-超限轮最后三个 5 秒区间 CPU 分别约 43.29%、38.93%、33.72%；其时间范围与 IDE 保存全局 SDK/Library entities、组件设置的日志重合。该相关性不能证明因果，也不足以将失败改为噪声。保留同一 ZIP、V2 协议和冻结预算另跑三轮，复测 `9q78sin2` 的 3 个宿主场景均通过，但数值仍为 20/21 项通过，第 1 轮循环后 CPU 16.85% 再次超限。两批共 6 轮中有 2 轮超出冻结上限；不以三轮平均值代替逐轮上限，也不放宽阈值。
-
-| Compose 复测轮次 | 首开 ms | CPU 启动后 / 循环后 % | RSS 启动后 / 循环后 MiB | 堆启动后 / 循环后 MiB |
-|---|---:|---:|---:|---:|
-| 1 | 1811 | 14.31 / 16.85 | 2189.53 / 2054.59 | 489.79 / 371.10 |
-| 2 | 1769 | 16.04 / 10.46 | 2257.33 / 2311.66 | 474.00 / 572.77 |
-| 3 | 1690 | 16.28 / 10.08 | 2250.77 / 2232.95 | 519.98 / 369.80 |
-
-首开与全部内存项通过，六轮资源计数均配对且进程正常退出；没有观察到资源数累积。CPU 仍未形成稳定达标证据。这里只确认预算复测失败，不能单靠总进程 CPU 归因为 Compose，也不能据自动保存日志重合将失败忽略。后续需定位/区分宿主后台活动与 UI 开销，再在保留原结果和预算的前提下重新验证。
-
-## 7. G0 判定与继续条件
+## 7. G0 验收结论
 
 | 项目 | 状态 | 结论 |
 |---|---|---|
-| S0.1 | pass | 工具链、模块、API、旧测试意图及 3 轮匹配 Swing 基线已核对。 |
-| CMP-V01 / V02 | pass（最小探针范围） | 编译、模块/descriptor、隔离产物及受控负例有效；不代表完整迁移候选。 |
-| CMP-V03 / S0.3 | pass（最小探针范围） | 2 个组件用例、真实点击/焦点/键盘、20 次隐藏与重建及监听释放通过。 |
-| CMP-V11 | pass（S0 基线范围） | 基线与预算可复现且已冻结；完整 UI 对比仍属于 S4。本轮额外探针对比的循环后 CPU 在两批中各超限一次。 |
-| S0.4 / 独立 Reviewer | reviewed / 风险未关闭 | 固定提交 `7ad3387` 已完成只读独立审查；无代码阻塞项，重复 CPU 预算失败为 P1 验收阻塞。 |
-| G0 | blocked | 保留现有 Swing UI 和全部门禁，S1–S4 仍 planned。 |
+| S0.1 | pass | 工具链、模块、公开 API 与旧测试意图已核对，最低版本仍为整个 262 系列。 |
+| CMP-V01 / V02 / S0.2 | pass（最小探针范围） | 编译、模块/descriptor、隔离产物及受控负例有效；不代表完整迁移候选。 |
+| CMP-V03 / S0.3 | pass（最小探针范围） | 2 个组件用例、真实点击/焦点/键盘、重建后实际点击通过。 |
+| CMP-V11 | pass（最小宿主范围） | 20 次隐藏/显示和 20 次内容重建完成；listener 21/21、composition 41/41，各自最大活动数 1，关闭后归零且进程正常退出。 |
+| S0.4 / 独立 Reviewer | completed | 固定提交 `7ad3387` 的只读独立审查已完成，无代码或功能阻塞项；原性能阻塞按用户新要求移出验收范围。 |
+| G0 / S0 | pass / completed | 当前必需的 S0 功能、依赖、兼容与生命周期验证成立，满足进入 S1 的前置条件。S1–S4 仍 planned。 |
 
-原 G0 对 V11 的明确要求是可复现基线与冻结预算，该项已满足；完整性能比较主要属于 S4。当前 blocked 是 Main 与 Reviewer 针对已经重复出现、尚未解释的预算失败作出的阶段决策，不表示已证明 Compose 持续高负载或泄漏，也不改写原计划的阶段分工。剩余为循环后 CPU 超限的归因与稳定达标证据，该缺口未关闭前不将 S0 标成 completed。
+本次由 Main 按更新后的验收范围核对已有同候选证据并调整结论，未重新运行 IDE，也未声称 Reviewer 在新规则下进行第二次审查。S0 仅证明最小宿主可行性，正式生产界面仍是 Swing；完整界面功能、动态卸载、VoiceOver、CI 图形环境等仍由后续阶段验证，不能借用本次 G0 通过将其标为完成。
 
 ### 独立审查记录
 
 用户明确授权的只读 Reviewer `/root/s0_review` 于 2026-09-27 审查 `7ad3387` 的 13 个变更文件、相关规范及限定的本地证据；未修改文件、执行测试、启动 IDE 或访问远端。请求 profile 为 `astra`，继承 Main 的实际 `gpt-6-astra` / `xhigh`，委派前已通过 Main 当前会话的可信 `turn_context` 核验，状态为 `verified`；配置摘要保存在忽略目录的 `review-model.json`，不是依据子代理自述认定模型。
 
-Reviewer 在内存将两份补丁逐 hunk 应用到固定基线，确认精确匹配、两种候选的宿主测试/测量方法一致，正式生产构建和最低 262 政策未变。审查核对了依赖隔离、实际 API 字节码与 disposer 接线、真实输入日志、V2 截图适配仍保留 IDE 错误失败检查，以及 58 个旧测试方法的迁移清单。最终输入计数为 1 → 2 → 重建后 1，listener 21/21、composition 41/41，最大活动数均为 1，进程正常退出。
+Reviewer 在内存将两份补丁逐 hunk 应用到固定基线，确认精确匹配、两种候选的宿主测试方法一致，正式生产构建和最低 262 政策未变。审查核对了依赖隔离、实际 API 字节码与 disposer 接线、真实输入日志、V2 截图适配仍保留 IDE 错误失败检查，以及 58 个旧测试方法的迁移清单。最终输入计数为 1 → 2 → 重建后 1，listener 21/21、composition 41/41，最大活动数均为 1，进程正常退出。
 
-独立复算 V1/V2 Swing 与两批 Compose 的全部原始样本，与现有 JSON 一致；V2 预算未放宽且冻结早于候选对比。Reviewer 确认两次循环后 CPU 分别为 15.573860% 和 16.852476%，超过 13.744078% 上限；结论为无代码阻塞项、保留这项 P1 验收阻塞，建议 G0 继续 blocked。自动保存日志与峰值重合不能消除失败，也不能证明 Compose 是原因。
-
-审查限制：366 个保留测试及 2 个组件测试核对到构建日志与 JUnit 汇总，未逐个重读原始 XML；未访问允许范围外的 ZIP、完整截图、用户配置或会话。动态卸载、VoiceOver、CI 图形环境、长期资源泄漏及完整 UI 性能仍未验证，现有计数和最小探针不替代这些覆盖。
+Reviewer 原结论为无代码阻塞项，仅在当时规则下将重复 CPU 超限列为 P1 验收阻塞；该历史结论保留在 `0c27483`，不冒充新规则下的审查结果。审查限制：366 个保留测试及 2 个组件测试核对到构建日志与 JUnit 汇总，未逐个重读原始 XML；未访问允许范围外的 ZIP、完整截图、用户配置或会话。
 
 ## 8. 本地证据与复现
 
-忽略目录 `integrations/goland/build/reports/compose-s0/` 保存本轮命令日志、API 注解/字节码摘录、Junit 汇总、冻结预算、两批比较结果、原始 TSV 及专用宿主报告；原完整宿主日志留在各 `reqws-compose-host-*` 私有目录。报告/截图可能含本机路径和其他应用画面，不将其加入 Git。临时文件日后不可用时应重新执行，不由本文推断仍有原始证据。
+忽略目录 `integrations/goland/build/reports/compose-s0/` 保存本轮命令日志、API 注解/字节码摘录、JUnit 汇总及专用宿主报告；旧性能预算、比较结果与原始 TSV 仅为历史诊断材料，不参与当前验收。原完整宿主日志留在各 `reqws-compose-host-*` 私有目录。报告/截图可能含本机路径和其他应用画面，不将其加入 Git。临时文件日后不可用时应重新执行，不由本文推断仍有原始证据。
 
 ```bash
 python3 scripts/stage_compose_probe.py
@@ -205,13 +151,9 @@ python3 "$PROBE/scripts/run_compose_s0.py" \
   --profile "$HOME/.reqws-ide-tests/goland-2026.2.1.1" \
   --archive <plugin-archive.txt中的绝对路径> --version 0.1.7 --foreground-handshake
 # 等待 ready-for-input，实际确认并置前该测试窗口后，在私有运行目录创建 foreground-ready。
-# 性能：用 --variant swing 暂存另一候选；分别编译/导出 ZIP 后运行同一个 performance 场景。
-python3 "$PROBE/scripts/run_compose_s0.py" \
-  --profile "$HOME/.reqws-ide-tests/goland-2026.2.1.1" \
-  --archive <对应候选的确切ZIP> --version 0.1.7 --scenario performance --variant compose
 ```
 
-该入口仅覆盖 S0 的输入与性能实验，每次执行一个用例，不接受其报告替代既有三组/九进程 V10 集成报告。有关组件测试和真实输入边界，分别参照[官方 Compose 测试说明](https://kotlinlang.org/docs/multiplatform/compose-desktop-ui-testing.html)和[Driver UI 测试说明](https://plugins.jetbrains.com/docs/intellij/integration-tests-ui.html)。
+该入口默认覆盖 S0 的输入与内容生命周期，每次执行一个用例，不接受其报告替代既有三组/九进程 V10 集成报告。补丁中保留的性能采样场景仅供可选诊断，不是必需验收步骤。有关组件测试和真实输入边界，分别参照[官方 Compose 测试说明](https://kotlinlang.org/docs/multiplatform/compose-desktop-ui-testing.html)和[Driver UI 测试说明](https://plugins.jetbrains.com/docs/intellij/integration-tests-ui.html)。
 
 ## 9. 旧用例逐项迁移清单
 

@@ -13,15 +13,18 @@ resolves dependencies nor starts tests or an IDE.
 Compose adds the aligned compiler, bundled modules, required descriptor dependency,
 a minimal Jewel content root and two independent semantic tests. Swing retains the
 original UI and business behavior, adding only listener lifetime counters. Both
-include the same host performance method: three new IDE processes, a first-open
+retain the same optional host performance method: three new IDE processes, a first-open
 measurement, 30-second warm-up, 60-second idle sampling at five-second intervals,
 20 hide/show cycles, 20 content recreations, another warm-up and idle sample.
 
 The local runner consumes an explicit ZIP and reuses the owned-profile and
 exact-archive checks. Compose also requires the opt-in artifact check before launch.
-Use `--scenario performance --variant swing` or `--scenario performance --variant compose`
-for measurements. Freeze the Swing-derived budget before the Compose comparison.
-The default scenario is Compose input and content recreation. Optional
+The default acceptance scenario is Compose input and content recreation. Performance
+gates were removed by user decision on 2026-09-27; timing, CPU, memory and budget
+comparisons are not required for S0 or later stages. The existing
+`--scenario performance --variant swing` and `--scenario performance --variant compose`
+options remain available for optional diagnostics. Historical measurement results
+are preserved without changing their outcomes. Optional
 `--foreground-handshake` waits for a controller to inspect and raise the isolated
 window, then create `foreground-ready` in the printed private run directory.
 The controller must observe `ready-for-input` first. The handshake does not invoke
