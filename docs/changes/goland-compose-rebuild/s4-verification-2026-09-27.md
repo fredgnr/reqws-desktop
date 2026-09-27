@@ -17,4 +17,10 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 
 ## 最终候选与验证
 
-完整保留门禁、清理后确切ZIP本机验证和独立审查尚待完成。S3证据不借给删除旧类后的新ZIP，当前不作完整重构GO结论。
+生产与测试固定提交为 `3c305f6`。`npm run check:goland` 已完整通过：39类、364项平台测试，0失败/错误/跳过；24组件及指定失败/空发现探针通过（干净提交报告 `run-z0fopdsy/evidence`），编译、禁用符号、结构/descriptor、326类ZIP隔离检查、最低/代表版2目标及新冻结完整7目标通过。完整日志在 `/private/tmp/reqws-compose-s4-final-check.log`，API原始报告在临时目录 `reqws-api-sl51nyrd`，候选身份保存在 `/private/tmp/reqws-compose-s4-candidate.json`；确切ZIP在全程保持不变。
+
+[CI 36294817036](https://github.com/fredgnr/reqws-desktop/actions/runs/36294817036) 属于 `3c305f6`，全部必需任务成功。独立Reviewer `/root/s3_review` 使用已核验的 `astra/gpt-6-astra/xhigh` 只读复核固定提交、364平台/24组件原始报告、2+7 API与候选一致性及远端结果，未发现必须修复的代码问题。直接删除检查另有130项回归通过、0跳过；文档检查通过28个索引、127个文件。
+
+当前组件方法 `everyProductionRepositoryStatusRetainsCompleteSemanticsAtNarrowWidth` 接续S2历史表中的 `everyProductionRepositoryStatusRetainsVisibleTextAtNarrowWidth`。改名反映恢复旧版紧凑省略布局后的真实断言：可见状态与完整语义/tooltip保持，不声称全部长文字同时在窄行完整绘制。S2历史记录不改写。
+
+清理后的新ZIP尚待本轮最终原生验收与报告审查。S3证据不借给删除旧类后的新ZIP，G4仍未通过。之前前台时段已结束且测试进程均退出；最终时段已向用户请求，未获确认前不启动IDE。文档提交不改变 `3c305f6` 的运行时输入或候选ZIP。
