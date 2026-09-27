@@ -38,6 +38,7 @@ class CleanupPrCacheTests(unittest.TestCase):
         self.assertEqual(actions, [
             'ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2',
             'toshimaru/delete-action-cache@a12c3ca71338e3312989302c48edeb5ce66293b7',
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1',
         ])
         self.assertNotIn('secrets.', WORKFLOW)
         self.assertIn('cancel-in-progress: false', WORKFLOW)

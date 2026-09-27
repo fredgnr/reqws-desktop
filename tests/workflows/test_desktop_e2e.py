@@ -527,7 +527,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(gate['name'], 'Checks and macOS package smoke')
         self.assertEqual(gate['if'], '${{ always() }}')
         self.assertIn('desktop-e2e', gate['needs'])
-        script = gate['steps'][-1]['run']
+        script = steps_after_telemetry(self, gate)[-1]['run']
         environment = {**os.environ, 'DOCS_ONLY': 'false', 'DESKTOP_REQUIRED': 'true', 'DOCS_RESULT': 'skipped',
                        'IMPACT_RESULT': 'success', 'CHECK_RESULT': 'success', 'PACKAGE_RESULT': 'success', 'E2E_RESULT': 'success'}
         passing = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT, env=environment, capture_output=True)
@@ -551,7 +551,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(smoke, package_runs)
         self.assertLess(next(index for index, step in enumerate(package_runs) if 'package:macos' in step), package_runs.index(smoke))
         for job in (source, packaged):
-            upload = job['steps'][-1]
+            upload = steps_after_telemetry(self, job)[-1]
             self.assertEqual(upload['if'], '${{ always() }}')
             self.assertLessEqual(upload['with']['retention-days'], 7)
             self.assertNotIn('/Users/runner', upload['with']['path'])

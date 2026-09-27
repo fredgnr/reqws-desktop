@@ -62,6 +62,24 @@ jobs:
           path: impact.json
           retention-days: 14
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   docs:
     name: Documentation checks
     needs: impact
@@ -88,6 +106,24 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
       - run: npm run docs:check
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   project-checks:
     needs: impact
@@ -149,6 +185,24 @@ jobs:
       - name: Run project checks
         run: npm run check
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   desktop-e2e:
     name: Desktop Electron regression
     needs: impact
@@ -193,6 +247,24 @@ jobs:
           path: |
             test-results
             playwright-report
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
           if-no-files-found: error
           retention-days: 7
 
@@ -244,6 +316,24 @@ jobs:
         with:
           name: ci-desktop-packaged
           path: test-results
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
           if-no-files-found: error
           retention-days: 7
 
@@ -317,6 +407,24 @@ jobs:
               ('checks', 'CHECK_RESULT'), ('package', 'PACKAGE_RESULT'), ('e2e', 'E2E_RESULT')]}))
           PYTHON
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-targets:
     name: Freeze official GoLand targets
     needs: impact
@@ -349,6 +457,24 @@ jobs:
           path: targets/targets.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   plugin-build:
     name: Baseline GoLand tests and candidate
@@ -412,6 +538,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-compose:
     needs: impact
     if: ${{ needs.impact.outputs.plugin == 'true' }}
@@ -466,3 +610,21 @@ jobs:
               ('build', 'BUILD_RESULT'), ('verification', 'VERIFICATION_RESULT'), ('compose', 'COMPOSE_RESULT')]}))
           PYTHON
           echo "Local IDE integration: not run by CI; see the separate candidate-bound local report." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7

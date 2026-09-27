@@ -23,9 +23,46 @@ TELEMETRY_STEP = {
 }
 
 
+EXPORT_STEP = {
+    'name': 'Export workflow telemetry', 'id': 'telemetry-export',
+    'if': '${{ always() }}', 'continue-on-error': True, 'timeout-minutes': 1,
+    'shell': 'bash', 'run': 'python3 scripts/export_workflow_telemetry.py',
+}
+UPLOAD_STEP = {
+    'name': 'Upload workflow telemetry',
+    'if': "${{ always() && steps.telemetry-export.outputs.file != '' }}",
+    'continue-on-error': True, 'timeout-minutes': 2,
+    'uses': 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+    'with': {
+        'name': '${{ steps.telemetry-export.outputs.artifact }}',
+        'path': '${{ steps.telemetry-export.outputs.file }}',
+        'if-no-files-found': 'error', 'retention-days': 7,
+    },
+}
+
+
+def inline_export():
+    return "python3 - <<'PYTHON'\n" + (ROOT / 'scripts/export_workflow_telemetry.py').read_text() + 'PYTHON\n'
+
+
+def steps_before_export(testcase, job):
+    """Exclude only the exact, bounded exporter pair; never a business gate."""
+    steps = job.get('steps', [])
+    testcase.assertGreaterEqual(len(steps), 3)
+    expected = dict(EXPORT_STEP)
+    if steps[-2].get('run') != expected['run']:
+        expected['run'] = inline_export()
+    testcase.assertEqual(steps[-2], expected)
+    testcase.assertEqual(steps[-1], UPLOAD_STEP)
+    for step in steps[-2:]:
+        testcase.assertIs(step['continue-on-error'], True)
+    testcase.assertFalse(any(step.get('id') == 'telemetry-export' for step in steps[:-2]))
+    return steps[:-2]
+
+
 def steps_after_telemetry(testcase, job):
     """Validate the exact first monitor, then retain every business step in order."""
-    steps = job.get('steps', [])
+    steps = steps_before_export(testcase, job)
     testcase.assertGreaterEqual(len(steps), 2)
     testcase.assertEqual(steps[0], TELEMETRY_STEP)
     testcase.assertIs(steps[0]['continue-on-error'], True)
@@ -35,22 +72,23 @@ def steps_after_telemetry(testcase, job):
 
 class TelemetryStepTests(unittest.TestCase):
     def fixture(self):
-        return {'steps': [copy.deepcopy(TELEMETRY_STEP), {'run': 'run-required-check'}]}
+        return {'steps': [copy.deepcopy(TELEMETRY_STEP), {'run': 'run-required-check'},
+                          copy.deepcopy(EXPORT_STEP), copy.deepcopy(UPLOAD_STEP)]}
 
     def test_preserves_business_steps_and_does_not_mutate_the_job(self):
         job = self.fixture()
-        job['steps'].append({'uses': 'actions/checkout@pinned-fixture'})
+        job['steps'].insert(-2, {'uses': 'actions/checkout@pinned-fixture'})
         before = copy.deepcopy(job)
         remaining = steps_after_telemetry(self, job)
-        self.assertEqual(remaining, before['steps'][1:])
+        self.assertEqual(remaining, before['steps'][1:-2])
         self.assertIs(remaining[0], job['steps'][1])
         self.assertEqual(job, before)
 
     def test_rejects_absent_reordered_and_duplicate_monitors(self):
-        monitor, business = self.fixture()['steps']
+        monitor, business, export, upload = self.fixture()['steps']
         for steps in ([], [monitor], [business], [business, monitor], [monitor, monitor, business]):
             with self.subTest(steps=steps), self.assertRaises(AssertionError):
-                steps_after_telemetry(self, {'steps': steps})
+                steps_after_telemetry(self, {'steps': steps + [export, upload]})
         with self.assertRaises(AssertionError):
             steps_after_telemetry(self, {})
 
@@ -87,6 +125,21 @@ class TelemetryStepTests(unittest.TestCase):
             self.assertFalse(any(step.get('continue-on-error') for step in remaining))
 
 
+    def test_export_pair_rejects_missing_reordered_duplicate_or_broadened_steps(self):
+        for mutation in ('missing', 'reordered', 'duplicate', 'script', 'path', 'pin', 'condition', 'blocking'):
+            job = self.fixture()
+            if mutation == 'missing': job['steps'].pop()
+            elif mutation == 'reordered': job['steps'][-2:] = job['steps'][-2:][::-1]
+            elif mutation == 'duplicate': job['steps'].insert(1, copy.deepcopy(EXPORT_STEP))
+            elif mutation == 'script': job['steps'][-2]['run'] = 'python3 other.py'
+            elif mutation == 'path': job['steps'][-1]['with']['path'] = '${{ runner.temp }}'
+            elif mutation == 'pin': job['steps'][-1]['uses'] = 'actions/upload-artifact@main'
+            elif mutation == 'condition': job['steps'][-2]['if'] = '${{ success() }}'
+            else: job['steps'][-1]['continue-on-error'] = False
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                steps_after_telemetry(self, job)
+
+
 class TelemetryWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -109,6 +162,8 @@ class TelemetryWorkflowTests(unittest.TestCase):
                 with self.subTest(workflow=path, job=name):
                     if 'runs-on' in job:
                         steps_after_telemetry(self, job)
+                        expected_run = inline_export() if path.endswith('/cleanup-pr-cache.yml') else EXPORT_STEP['run']
+                        self.assertEqual(job['steps'][-2]['run'], expected_run)
                         count += 1
                     else:
                         self.assertNotIn('steps', job)

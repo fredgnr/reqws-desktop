@@ -99,6 +99,24 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf '[release][validate] status=success version=%s commit=%s\n' "$version" "$tag_commit"
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   # Checks and both packages have independent workspaces. Only publish joins their gates.
   checks:
     name: Release project checks
@@ -159,6 +177,24 @@ jobs:
 
       - name: Run project checks
         run: npm run check
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   package:
     name: Package macOS (arm64)
@@ -224,6 +260,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   goland-plugin:
     name: Package and verify GoLand plugin
@@ -324,6 +378,24 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-targets:
     name: Freeze complete release API targets
     needs: validate
@@ -356,6 +428,24 @@ jobs:
           path: targets/targets.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   plugin-compose:
     needs: validate
@@ -557,6 +647,24 @@ jobs:
           start_release_stage publish-release
           gh release edit "$TAG" --draft=false
           release_creation_attempted=false
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
 
   publish-marketplace:

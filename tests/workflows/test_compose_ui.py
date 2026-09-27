@@ -53,7 +53,7 @@ class ComposeReportsTests(unittest.TestCase):
         ci = load_yaml('.github/workflows/ci.yml')['jobs']
         self.assertIn('plugin-compose', ci['goland-plugin']['needs'])
         self.assertEqual(ci['plugin-compose']['uses'], './.github/workflows/goland-compose.yml')
-        self.assertIn('COMPOSE_RESULT', ci['goland-plugin']['steps'][-1]['env'])
+        self.assertIn('COMPOSE_RESULT', steps_after_telemetry(self, ci['goland-plugin'])[-1]['env'])
         workflow = load_yaml('.github/workflows/goland-compose.yml')['jobs']['components']
         self.assertEqual(workflow['env']['CI'], 'true')
         self.assertIn('check_compose_ui.py', json.dumps(workflow))
