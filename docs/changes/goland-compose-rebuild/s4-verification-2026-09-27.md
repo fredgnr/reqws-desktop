@@ -31,14 +31,17 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 
 ## 当前冻结候选与剩余原生验收
 
-当前生产与测试候选为 `b86134b`。本轮真实IDE发现的大字号行高不增长、长tooltip无法移入滚动及Escape关闭问题已实施修复，阶段失败、实际修复范围和证据边界见[Product Design后续记录](product-design-2026-09-27.md#后台键盘修复与本轮恢复点)。
+当前生产候选仍为 `b86134b`；本时段修复仅在测试设施，最新测试提交 `ce729eb`，保留 ZIP `/private/tmp/reqws-native-final-b86134b.zip` 不变。此前生产完整门禁为364平台、30组件/环境、指定失败/空发现探针、332类产物隔离及2+7 API通过，独立Reviewer已核对固定源码、原始报告与同一ZIP。后续测试设施的直接检查为集成编译通过、25项报告校验测试通过；用户最新要求不关注CI结果，本轮不再等待或轮询CI。
 
-完整本地门禁已通过：364平台测试、30组件/环境测试及指定失败/空发现探针，332类ZIP隔离、编译/禁用符号和2+7 API。独立Reviewer已核对固定提交、原始报告和同一ZIP，未发现该范围内的阻塞；[代码CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36302813633)成功。候选是 `/private/tmp/reqws-native-final-b86134b.zip`，私有身份文件为 `/private/tmp/reqws-native-final-candidate.json`。
+| 范围 | 原始结果和适用性 | 当前结论 |
+|---|---|---|
+| legacy | `reqws-local-ide-2820ykoq`：3项、0失败/跳过，9进程通过并退出；独立审查同一ZIP。 | 本范围通过。 |
+| Compose | 最新 `reqws-compose-host-ybr_f_eb`：3项、1失败，4进程退出；实际键盘、重载、20轮生命周期通过。滚动观察在Dimension返回值适配处失败，尚未发滚轮。 | Rectangle/Number代理已修正并编译；完整字号/尾段/长列表/空提示待重跑，不能判完整通过。 |
+| Desktop | 最新 `reqws-local-ide-cl9ubc8x`：4项、1失败、0跳过，8进程退出；选择/冷启动、真实信任、损坏输入与恢复三项通过。用户覆盖停在状态文字观察，ordinary未执行。 | `ce729eb`已修正独立Status节点的精确观察；完整四项/九进程待重跑。 |
+| 独立审查 | Reviewer对测试修正确认未削减覆盖，逐图核对本轮33张原生区域图和侧车，确认候选与安装副本一致、两端进程退出。 | 不替代未完成的完整套件。 |
 
-新ZIP已尝试原生Compose验收，但在 `reqws-compose-host-vi3pndej` 发生测试外点定位失败和Marketplace TLS错误，整体未通过；完整tooltip尾段、长列表/空提示以及legacy、Desktop继续待验收，G4未通过。定位修正已编译，未重跑；测试进程全部退出、测试设置已恢复。当前需要用户检查Marketplace网络/代理连接，详细证据见[环境阻断记录](product-design-2026-09-27.md#继续验收时的环境阻断)。恢复入口是现有专用profile与显式候选ZIP，不能重新构建后沿用旧宿主报告。确认、登录、权限或环境事项需要用户协助时，按本会话规则说明恢复点并暂停goal；不自动等待或继续绕过。
+图片范围需准确保留：部分IDE通知遮挡底部操作；一张Dock悬停标签只影响状态栏；`98702-invalid-manifest-1-malformed-dee76080-e86b-4042-b409-10286967ddc6.png`显示索引等待占位，不能证明该时刻Compose完整。独立error-ui图已显示正确Error与稳定码，模型保留证据仍成立。不能将33张统一描述为所有UI均完整可见。
 
+修复使用公开Driver/标准Java API：等待窗口注册但不提前创建Content；读取真实Compose属性；滚动由实际Robot输入、只读可访问数值观察；区域采图前后核对active、项目/PID和几何，不调用focus补偿。完整失败历史与原始位置见[Product Design记录](product-design-2026-09-27.md#本时段结束与下一次复测)。无生产、catalog、依赖或兼容下限变化。
 
-最新恢复进度见[测试设施修正记录](product-design-2026-09-27.md#网络恢复后的测试设施修正)：同一 ZIP 的 legacy 已通过3项/9进程，Compose最新3项/1失败且重载和20周期通过；Desktop四项因旧Swing采图不支持Compose纹理失败。仅测试侧滚动观测和原生区域采图已修正并编译，25项报告检查通过，尚待真实复测。此前Marketplace阻断没有在本轮重载中再次发生；G4仍未通过。
-
-
-本时段最终原生状态：legacy完整3项/9进程通过；Compose键盘、重载和20轮生命周期已有同一ZIP通过记录，但新增滚动数值适配器修正后尚待完整运行；Desktop最新4项/1失败，8进程退出，选择/信任/损坏恢复三项通过。唯一Desktop失败为独立状态节点的观察位置，已按SDK语义修正，未重跑。详见[本时段收束记录](product-design-2026-09-27.md#本时段结束与下一次复测)。测试环境已退出，G4未通过，下一前台时段待确认。
+前台操作已收束，全部本轮测试进程退出、专用active-session标记为空。剩余原生复测需新的用户前台时段；VoiceOver继续豁免。S4保持in-progress，G4未通过。
