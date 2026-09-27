@@ -65,6 +65,12 @@ runs:
     # extracted SDKs, JBR transforms, candidates and reports are not this layer.
     - name: Set up shared Gradle dependency and DSL state
       uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      # At this pinned action revision, common-entry extraction ignores includes.
+      # Skip old extracted entries before restore, then explicitly remove these
+      # paths before post-save extraction. Raw SDK/JBR archives stay separate.
+      # Recheck sources/src/caching/gradle-home-extry-extractor.ts on action upgrades.
+      env:
+        GRADLE_BUILD_ACTION_SKIP_RESTORE: transforms,java-toolchains
       with:
         cache-read-only: ${{ steps.plan.outputs.shared-write != 'true' }}
         cache-cleanup: on-success
@@ -79,6 +85,9 @@ runs:
           caches/modules-2/files-2.1/go/goland
           caches/modules-2/files-2.1/com.jetbrains.intellij.goland/goland
           caches/modules-2/files-2.1/com.jetbrains/jbr
+          caches/transforms-*
+          caches/*/transforms
+          jdks
     - name: Restore only this hot SDK download
       if: steps.plan.outputs.sdk-hot == 'true'
       id: sdk
