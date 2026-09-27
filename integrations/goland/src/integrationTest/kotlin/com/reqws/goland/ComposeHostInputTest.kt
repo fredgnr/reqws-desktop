@@ -360,11 +360,13 @@ class ComposeHostInputTest {
           val body = node("reqws.body")
           val bodyBounds = stableBounds("reqws.body")
           val bodyRange = nativeVerticalScroll(bodyBounds)
-          wheelToEnd(body, bodyRange, Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
+          val bodyDirection = wheelToEnd(body, bodyRange, Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
           val list = node("reqws.repositoryList")
           val listBounds = stableBounds("reqws.repositoryList")
           val firstY = node("reqws.repository.repo-a").boundsOnScreen.y
-          wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme") {
+          // Reuse the direction just established by actual input. Probing the
+          // reverse direction at the list's start scrolls its parent backwards.
+          wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme", directionHint = bodyDirection) {
             "bodyCurrent=${bodyRange.current()} bodyMax=${bodyRange.maximum()}"
           }
           // Preserve the real font/scroll state even if the geometry assertion
@@ -440,7 +442,7 @@ class ComposeHostInputTest {
     return Rectangle(previous)
   }
 
-  private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String, surroundings: (() -> String)? = null) {
+  private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String, directionHint: Int = 0, surroundings: (() -> String)? = null): Int {
     val initial = range.current()
     val maximum = range.maximum()
     component.robot.moveMouse(point)
@@ -449,9 +451,10 @@ class ComposeHostInputTest {
     record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds} pointer=$enteredAt ${surroundings?.invoke().orEmpty()}")
     // Enter even a non-overflowing popup before Escape; the hover test must not
     // silently skip that real pointer transition just because no wheel is needed.
-    if (maximum <= initial + 0.5) return
+    if (maximum <= initial + 0.5) return 0
+    check(directionHint in listOf(-8, 0, 8))
     var direction = 0
-    for (step in listOf(8, -8)) {
+    for (step in if (directionHint == 0) listOf(8, -8) else listOf(directionHint)) {
       component.robot.moveMouse(point)
       val actual = utility<NativeMouseInfo>().getPointerInfo().getLocation()
       check(range.bounds.contains(actual)) { "Actual pointer $actual is outside ${range.bounds}" }
@@ -464,7 +467,7 @@ class ComposeHostInputTest {
       record("style-scroll-probe", "$label step=$step pointer=$actual current=${range.current()} max=${range.maximum()} ${surroundings?.invoke().orEmpty()}")
       if (moved) { direction = step; break }
     }
-    check(direction != 0) { "Neither real wheel direction moved $label" }
+    check(direction != 0) { "Actual wheel input did not move $label (directionHint=$directionHint)" }
     repeat(12) {
       if (range.current() < range.maximum() - 0.5) {
         component.robot.moveMouse(point)
@@ -474,6 +477,7 @@ class ComposeHostInputTest {
     }
     waitFor("real wheel reaches $label scroll end", 10.seconds) { range.current() >= range.maximum() - 0.5 }
     record("style-scroll-end", "$label current=${range.current()} max=${range.maximum()} direction=$direction ${surroundings?.invoke().orEmpty()}")
+    return direction
   }
 
   private fun replaceStyleManifest(path: Path, bytes: ByteArray) {
