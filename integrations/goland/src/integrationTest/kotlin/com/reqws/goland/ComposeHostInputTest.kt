@@ -306,6 +306,11 @@ class ComposeHostInputTest {
         waitFor("Escape dismisses the actual tooltip", 10.seconds) { !tooltip.present() }
         focused("reqws.copyDiagnostics")
         node("reqws.repositoryCount").moveMouse()
+        val leftAnchorAt = System.nanoTime()
+        waitFor("pointer settles outside the diagnostic hover source", 2.seconds) {
+          !node("reqws.diagnostics").boundsOnScreen.contains(utility<NativeMouseInfo>().getPointerInfo().getLocation()) &&
+            System.nanoTime() - leftAnchorAt >= 200_000_000
+        }
         node("reqws.diagnostics").moveMouse()
         waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
         // Driver can cache a detached semantics node while its reused host
@@ -420,7 +425,12 @@ class ComposeHostInputTest {
   private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String) {
     val initial = range.current()
     val maximum = range.maximum()
-    record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds}")
+    component.robot.moveMouse(point)
+    val enteredAt = utility<NativeMouseInfo>().getPointerInfo().getLocation()
+    check(range.bounds.contains(enteredAt)) { "Actual pointer $enteredAt is outside ${range.bounds}" }
+    record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds} pointer=$enteredAt")
+    // Enter even a non-overflowing popup before Escape; the hover test must not
+    // silently skip that real pointer transition just because no wheel is needed.
     if (maximum <= initial + 0.5) return
     var direction = 0
     for (step in listOf(8, -8)) {
