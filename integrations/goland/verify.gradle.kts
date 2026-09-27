@@ -31,6 +31,16 @@ require(target["product"] == "GO" && target["channel"] == "release" && target["r
 require(requestedTarget == "GO-${target["build"]}")
 require(candidateArchive.isFile && candidateArchive.length() > 0) { "Candidate archive missing" }
 val reports = file(providers.gradleProperty("reqwsVerificationReports").get())
+val runtimePin = Properties().apply {
+  file("verifier-runtime.properties").inputStream().use(::load)
+}
+fun runtimePolicy(key: String): String = requireNotNull(runtimePin.getProperty(key)) { "Missing runtime pin: $key" }
+listOf("compileIdeProduct", "compileIdeVersion", "compileIdeBuild").forEach { key ->
+  require(runtimePolicy(key) == policy(key)) { "Compile SDK changed; review the verifier JBR pin before proceeding" }
+}
+require(System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in listOf("amd64", "x86_64")) {
+  "The reviewed verification-only runtime is Linux x64; other hosts use the retained build path"
+}
 
 fun sdkInfo(sdk: java.io.File): Map<*, *> {
   val infoFile = listOf(sdk.resolve("product-info.json"), sdk.resolve("Resources/product-info.json"),
@@ -40,9 +50,14 @@ fun sdkInfo(sdk: java.io.File): Map<*, *> {
 
 dependencies {
   intellijPlatform {
-    // Keep the exact baseline bundled JBR for now. Runtime identity is exported
-    // below before attempting a separately pinned JBR-only download optimization.
-    goland(policy("compileIdeVersion"))
+    // VerifyPluginTask has a platform input even for an existing ZIP. Use the
+    // very same Maven SDK as the frozen target, not a second compile installer.
+    create(IntelliJPlatformType.GoLand, target["version"] as String) {
+      useInstaller = false
+    }
+    // Same release as the baseline bundled JBR, independently downloadable.
+    // The doFirst identity gate rejects missing downloads and runtime fallback.
+    jetbrainsRuntimeExplicit(runtimePolicy("runtimeArchive"))
     pluginVerifier(policy("pluginVerifierVersion"))
   }
 }
@@ -82,13 +97,17 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
     val runtime = runtimeDirectory.get().asFile
     val runtimeRelease = Properties().apply { runtime.resolve("release").inputStream().use(::load) }
     val identity = listOf("JAVA_VERSION", "JAVA_RUNTIME_VERSION", "IMPLEMENTOR", "OS_ARCH").associateWith {
-      runtimeRelease.getProperty(it)
+      requireNotNull(runtimeRelease.getProperty(it)) { "Runtime identity is missing: $it" }.removeSurrounding("\"")
+    }
+    identity.forEach { (key, value) ->
+      require(value == runtimePolicy(key)) { "Verifier runtime differs from the reviewed baseline JBR: $key" }
     }
     // Numeric/resource telemetry does not include runtime identity. Record only
     // these public fields, never credentials, environment dumps or command args.
     reports.parentFile.resolve("runtime.json").writeText(JsonOutput.prettyPrint(JsonOutput.toJson(mapOf(
       "schemaVersion" to 1, "mode" to "verification-only", "target" to requestedTarget,
-      "compileIdeBuild" to policy("compileIdeBuild"), "runtime" to identity,
+      "compileIdeBuild" to policy("compileIdeBuild"), "runtimeArchive" to runtimePolicy("runtimeArchive"),
+      "runtime" to identity,
     ))) + "\n")
     logger.lifecycle("Verification-only runtime: ${JsonOutput.toJson(identity)}")
   }

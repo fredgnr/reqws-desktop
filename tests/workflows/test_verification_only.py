@@ -57,12 +57,37 @@ class VerificationOnlyTests(unittest.TestCase):
 
     def test_baseline_jbr_and_public_runtime_identity_are_preserved(self):
         text = (PLUGIN / 'verify.gradle.kts').read_text()
-        self.assertIn('goland(policy("compileIdeVersion"))', text)
+        self.assertIn('jetbrainsRuntimeExplicit(runtimePolicy("runtimeArchive"))', text)
+        self.assertNotIn('goland(policy("compileIdeVersion"))', text)
+        self.assertIn('require(runtimePolicy(key) == policy(key))', text)
+        self.assertIn('"compileIdeProduct", "compileIdeVersion", "compileIdeBuild"', text)
+        self.assertIn('require(value == runtimePolicy(key))', text)
+        self.assertIn('requireNotNull(runtimeRelease.getProperty(it))', text)
         self.assertIn('val runtime = runtimeDirectory.get().asFile', text)
         self.assertIn('"JAVA_VERSION", "JAVA_RUNTIME_VERSION", "IMPLEMENTOR", "OS_ARCH"', text)
         self.assertIn('resolve("runtime.json")', text)
         self.assertNotIn('System.getenv()', text)
         self.assertNotIn('runtimeDirectory.set(', text)
+
+    def test_runtime_is_pinned_and_base_sdk_is_the_same_frozen_target(self):
+        text = (PLUGIN / 'verify.gradle.kts').read_text()
+        entries = [line.split('=', 1) for line in (PLUGIN / 'verifier-runtime.properties').read_text().splitlines()
+                   if line and not line.startswith('#')]
+        pin = dict(entries)
+        self.assertEqual(len(pin), len(entries))
+        self.assertEqual(pin, {
+            'compileIdeProduct': 'GO', 'compileIdeVersion': '2026.2', 'compileIdeBuild': '262.8665.270',
+            'runtimeArchive': 'jbr_jcef-25.0.3-linux-x64-b508.16',
+            'JAVA_VERSION': '25.0.3', 'JAVA_RUNTIME_VERSION': '25.0.3+9-b508.16',
+            'IMPLEMENTOR': 'JetBrains s.r.o.', 'OS_ARCH': 'x86_64',
+        })
+        # Both the task's platform input and the Verifier target use one SDK.
+        self.assertEqual(text.count('create(IntelliJPlatformType.GoLand, target["version"] as String)'), 2)
+        self.assertEqual(text.count('useInstaller = false'), 2)
+        self.assertIn('System.getProperty("os.name") == "Linux"', text)
+        self.assertIn('System.getProperty("os.arch") in listOf("amd64", "x86_64")', text)
+        for forbidden in ('jetbrainsRuntime()', 'JAVA_HOME', 'runtimeLauncher.set', 'javaLauncher.set'):
+            self.assertNotIn(forbidden, text)
 
     def test_only_api_execution_enables_the_alternative_script(self):
         # Use the existing parser to retain the workflow's real YAML semantics.
