@@ -4,7 +4,7 @@
 
 | 任务文档 | 状态 | 说明 |
 |---|---|---|
-| [S0 技术验证](s0-feasibility.md) | draft | 验证宿主依赖、真实输入、内容生命周期和测试运行时，确认后续迁移的前置条件。 |
+| [S0 技术验证](s0-feasibility.md) | active | S0 已完成、G0 已通过；宿主依赖、真实输入、内容生命周期和测试运行时验证满足后续迁移的前置条件。 |
 | [S1 状态与宿主](s1-state-and-host.md) | draft | 固定状态/操作契约，接入有序订阅与内容生命周期。 |
 | [S2 Compose 界面](s2-compose-ui.md) | draft | 替换完整内容界面并补齐语义、布局与可访问性测试。 |
 | [S3 自动化集成](s3-test-automation.md) | draft | 接入独立 UI 测试和本机 Driver，验证真实集成而非服务直调。 |

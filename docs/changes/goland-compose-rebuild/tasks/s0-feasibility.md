@@ -1,7 +1,7 @@
 ---
 title: S0 Compose 宿主与自动化技术验证
 type: technical-design
-status: draft
+status: active
 updated: 2026-09-27
 ---
 
