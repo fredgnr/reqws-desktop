@@ -15,10 +15,12 @@ import { AppStateStore } from '../services/app-state-store';
 import { BranchService } from '../services/branch-service';
 import {
   EditorLauncher,
+  type EditorLauncherDependencies,
   type WorkspacePaths,
 } from '../services/editor-launcher';
 import { GoLandWorkspaceService } from '../services/goland-workspace-service';
-import { GitRunner } from '../services/git-runner';
+import { GitRunner, type SpawnGitProcess } from '../services/git-runner';
+import { UpdateService, type UpdateServiceOptions } from '../services/update-service';
 import { OperationReporter } from '../services/operation-reporter';
 import { RepositoryService } from '../services/repository-service';
 import { DefaultSettingsService } from '../services/settings-service';
@@ -66,7 +68,12 @@ function normalizeGitUnavailable(error: unknown): ReqwsError {
 
 export interface MainServiceFactoryOptions {
   resolveGit?: () => Promise<GitRunner>;
+  spawnGitProcess?: SpawnGitProcess;
   getPreferredSystemLanguages?: () => readonly string[];
+  dialog?: RegisterIpcDependencies['dialog'];
+  editor?: Pick<EditorLauncherDependencies,
+    'spawnProcess' | 'homeDirectory' | 'systemApplicationsDirectory' | 'processEnvironment'>;
+  update?: Omit<UpdateServiceOptions, 'activity' | 'flush'>;
 }
 
 export async function createMainServices(
@@ -91,7 +98,7 @@ export async function createMainServices(
     message: 'Git is required for this operation but was not found.',
   });
   try {
-    git = await (options.resolveGit ?? (() => GitRunner.create(undefined, { activityGate })))();
+    git = await (options.resolveGit ?? (() => GitRunner.create(options.spawnGitProcess, { activityGate })))();
   } catch (error) {
     gitUnavailableError = normalizeGitUnavailable(error);
   }
@@ -127,6 +134,7 @@ export async function createMainServices(
   const editorLauncher = new EditorLauncher(
     resolveEditorWorkspacePaths,
     {
+      ...options.editor,
       resolveGitPath: git
         ? async () => git.gitPath
         : async () => Promise.reject(gitUnavailableError),
@@ -136,7 +144,9 @@ export async function createMainServices(
 
   return {
     activityGate,
-    updateService: await createUpdateService(activityGate, () => stateStore.flush()),
+    updateService: options.update
+      ? new UpdateService({ ...options.update, activity: activityGate, flush: () => stateStore.flush() })
+      : await createUpdateService(activityGate, () => stateStore.flush()),
     isTrustedUpdateSender: (event) => isTrustedReqwsWebContents(event.sender)
       && event.senderFrame !== null && event.senderFrame === event.sender.mainFrame,
     broadcastUpdateState: (state) => {
@@ -158,7 +168,7 @@ export async function createMainServices(
       buildWorkspaceService(new OperationReporter(event.sender)),
     editorLauncher,
     goLandWorkspaces,
-    dialog,
+    dialog: options.dialog ?? dialog,
     windowFromWebContents: (webContents) =>
       BrowserWindow.fromWebContents(webContents),
   };

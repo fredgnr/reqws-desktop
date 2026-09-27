@@ -21,6 +21,10 @@ import com.reqws.goland.loading.model.rootsJournalFile
 import com.reqws.goland.projectmodel.ProjectModelApplyException
 import com.reqws.goland.projectmodel.ProjectModelErrorCode
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
@@ -56,6 +60,76 @@ class ManagedRootsAdapterTest : HeavyPlatformTestCase() {
 
   override fun tearDown() {
     try { super.tearDown() } finally { if (::root.isInitialized) root.toFile().deleteRecursively() }
+  }
+
+  fun testInitialJpsWaitPrecedesIntentAndDoesNotHoldTheWriterLock() = awaitUpdate {
+    coroutineScope {
+      val entered = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      val applying = async {
+        ManagedRootsAdapter(project, { true }, awaitInitialJps = {
+          entered.complete(Unit)
+          release.await()
+        }).apply(reader.read(shell))
+      }
+      entered.await()
+      assertNoManagedIntent()
+      rootsJournalFile(shell).withStableParent { requireNotNull(it.tryAcquireExclusiveDirectoryLock()).close() }
+      release.complete(Unit)
+      assertEquals(setOf("one", "two"), applying.await().owned)
+    }
+  }
+
+  fun testCancelledInitialJpsWaitCannotWriteIntentOrCreateRoots() = awaitUpdate {
+    coroutineScope {
+      val entered = CompletableDeferred<Unit>()
+      val applying = async {
+        ManagedRootsAdapter(project, { true }, awaitInitialJps = {
+          entered.complete(Unit)
+          kotlinx.coroutines.awaitCancellation()
+        }).apply(reader.read(shell))
+      }
+      entered.await()
+      applying.cancelAndJoin()
+      assertNoManagedIntent()
+    }
+  }
+
+  fun testTrustOrGenerationRevocationDuringInitialJpsWaitCannotWrite() {
+    var allowed = true
+    val adapter = ManagedRootsAdapter(project, { allowed }, awaitInitialJps = { allowed = false })
+    val failure = awaitUpdate {
+      try { adapter.apply(reader.read(shell)); null }
+      catch (failure: kotlinx.coroutines.CancellationException) { failure }
+    }
+    assertNotNull(failure)
+    assertNoManagedIntent()
+  }
+
+  fun testBindingChangeDuringInitialJpsWaitCannotUseTheOldSelection() {
+    expectConflict(ManagedRootsAdapter(project, { true }, awaitInitialJps = { select() }))
+    assertNoManagedIntent()
+  }
+
+  fun testMissingOwnedRootAfterInitialJpsWaitCannotBeReclaimed() {
+    apply(ManagedRootsAdapter(project, { true }))
+    val journal = rootsJournalFile(shell).read()!!
+    val adapter = ManagedRootsAdapter(project, { true }, awaitInitialJps = {
+      WorkspaceModel.getInstance(project).update("Fixture JPS model replacement") { storage ->
+        val owned = storage.resolve(ModuleId(moduleName))!!.contentRoots.single { it.url.url.endsWith("/one") }
+        storage.removeEntity(owned)
+      }
+    })
+    expectConflict(adapter)
+    assertEquals(setOf("two"), contentNames())
+    assertEquals(journal, rootsJournalFile(shell).read())
+  }
+
+  private fun assertNoManagedIntent() {
+    assertNull(WorkspaceModel.getInstance(project).currentSnapshot.resolve(ModuleId(moduleName)))
+    assertFalse(Files.exists(shell.resolve(".idea/reqws-loaded-roots.json")))
+    assertFalse(Files.exists(shell.resolve(".idea/reqws")))
+    assertFalse(project.getService(com.reqws.goland.projectmodel.ReqwsProjectModelMutationGuard::class.java).isActive)
   }
 
   fun testTwoOneZeroTwoPreservesUserRootInManagedModule() {

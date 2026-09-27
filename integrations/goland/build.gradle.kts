@@ -13,6 +13,8 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.BuildPluginTask
@@ -47,6 +49,13 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
 
   @get:Input
   abstract val forbiddenSymbols: ListProperty<String>
+
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val apiExceptionPolicy: RegularFileProperty
+
+  @get:Inject
+  abstract val execOperations: ExecOperations
 
   @TaskAction
   fun verifySymbols() {
@@ -107,6 +116,13 @@ abstract class VerifyForbiddenProductionSymbolsTask : DefaultTask() {
           findings.forEach { appendLine("- $it") }
         }.trimEnd(),
       )
+    }
+
+    // The sole approved restricted API is checked by instruction, caller and
+    // descriptor in the composed bytes; no whole class/package is exempted.
+    execOperations.exec {
+      commandLine("python3", apiExceptionPolicy.get().asFile.absolutePath,
+        "--jar", composedJarFile.absolutePath, "--sources", sourceRootDirectory.absolutePath)
     }
 
     logger.lifecycle(
@@ -329,6 +345,7 @@ val verifyForbiddenProductionSymbols by tasks.registering(VerifyForbiddenProduct
   sourceRoot.set(layout.projectDirectory.dir("src/main"))
   composedJar.set(composedJarTask.flatMap { it.archiveFile })
   forbiddenSymbols.set(forbiddenProductionSymbols)
+  apiExceptionPolicy.set(layout.projectDirectory.file("../../scripts/ide_api_exception.py"))
 }
 
 tasks.named("check") {
@@ -457,6 +474,12 @@ val integrationTest by tasks.registering(Test::class) {
   testClassesDirs = integrationTestSourceSet.output.classesDirs
   classpath = integrationTestSourceSet.runtimeClasspath
   useJUnitPlatform()
+  val localSuite = providers.gradleProperty("reqwsLocalIdeSuite").getOrElse("legacy")
+  require(localSuite in setOf("legacy", "desktop")) { "Unknown local IDE suite" }
+  filter {
+    includeTestsMatching(if (localSuite == "desktop") "com.reqws.goland.DesktopWorkspaceIntegrationTest"
+      else "com.reqws.goland.WorkspaceIntegrationTest")
+  }
   maxParallelForks = 1
   failOnNoDiscoveredTests = true
   outputs.upToDateWhen { false }
@@ -481,6 +504,9 @@ val integrationTest by tasks.registering(Test::class) {
     systemProperty("reqws.integration.root", runRoot.absolutePath)
     systemProperty("reqws.local.profile", profile.absolutePath)
     systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
+    if (localSuite == "desktop") {
+      systemProperty("reqws.desktop.session", providers.gradleProperty("reqwsDesktopSession").get())
+    }
   }
 }
 
@@ -505,7 +531,8 @@ val verifyIdeIntegrationReports by tasks.registering(Exec::class) {
   doFirst {
     val (runRoot, _) = requireLocalIdeLauncher()
     commandLine("python3", "../../scripts/check_ide_test_reports.py",
-      runRoot.resolve("junit"), runRoot.resolve("run-root.txt"))
+      runRoot.resolve("junit"), runRoot.resolve("run-root.txt"),
+      providers.gradleProperty("reqwsLocalIdeSuite").getOrElse("legacy"))
   }
 }
 integrationTest.configure { finalizedBy(verifyIdeIntegrationReports) }

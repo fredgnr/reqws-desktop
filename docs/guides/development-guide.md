@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-22
+updated: 2026-09-27
 ---
 
 # ReqWS 开发指南
@@ -65,6 +65,13 @@ npm run test:integration
 npm run test:renderer
 npm run test:watch
 
+# 隔离 Electron 真实链路：每次重建 Main/preload/renderer，单 worker、无重试
+npm run test:e2e
+npm run test:e2e:smoke
+npm run test:e2e -- tests/e2e/desktop/workspaces.spec.ts
+# 两项故意失败及证据必须被严格识别，wrapper 本身才返回成功
+npm run test:e2e:negative
+
 # 专项一致性检查
 npm run i18n:check
 npm run docs:check
@@ -78,6 +85,14 @@ npm run package:goland
 
 `npm start` 的 Main 日志输出到启动终端。应用使用 single-instance lock；调试新实例前先退出已有 ReqWS，否则第二个进程会退出并聚焦原窗口。
 
+`test:e2e` 使用现有 Electron runtime、built renderer 和真实 IPC/Git/磁盘；需要图形会话及 loopback HTTPS 监听权限，数据仅在新建临时目录。不要用 `npm start` 或真实用户目录代替该入口。可用 `npm run test:e2e:smoke -- --repeat-each=20` 做独立进程稳定性检查；不得通过增加自动 retries、跳过失败测试或空选择制造通过。运行期间冻结相关源码，待进程与 trace 归档完成后再编辑。
+
+`test-results/<mode>-result.json` 记录源码身份、环境、实际选择器和计数，Playwright JSON/HTML、逐进程 trace/截图及 Main/Git/renderer/磁盘证据在 `test-results/` 和 `playwright-report/`。它们是诊断输出，不提交、不缓存成通过结果；故障探针的失败由外层 runner 核实后才计作门禁通过。进程清理只对本轮登记且 PID/进程组/内核启动时间仍一致的实例执行，确认退出后才清理拥有的临时目录。
+
+`test:e2e:packaged -- --app out/ReqWS-darwin-arm64/ReqWS.app` 仅允许真实 GitHub-hosted 一次性 macOS runner，消费同次构建的 ad-hoc 包，不重建或替换 Main，也不改变 fuse/签名。本机账户和已有 ReqWS 数据会被拒绝，禁止伪造 CI 环境绕过。source E2E、CI ad-hoc 包、personal-release 签名包及真实更新证据分别报告；旧断言的实际替代决定与保留边界见[逐项登记](../changes/playwright-regression-automation/manual-inventory.md)，候选、故障和稳定性见 [V 记录](../changes/playwright-regression-automation/verification-v-2026-09-26.md)。
+
+`check:goland:desktop -- --profile ... --archive ... --version ...` 是 S4 本机 Desktop→GoLand 联动入口，复用专用授权 profile 和显式 ZIP；只在获准本机环境执行，不进入 CI。它与原 `check:goland:integration` 分别记录 suite；启动、私有报告及当前待验项见[本机入口](../changes/ide-plugin-compatibility-automation/local-integration.md#desktop-真实-ui-联动)。
+
 ## 3. 代码结构与进程边界
 
 ```text
@@ -86,7 +101,8 @@ src/
     ipc/                 handler、输入校验和依赖装配
     services/            state、Git、branch、workspace、path、editor、settings
     create-window.ts     BrowserWindow 安全配置
-    index.ts             Electron 生命周期与 single-instance
+    bootstrap.ts         共用生命周期、锁前实例目录与 single-instance
+    index.ts             生产启动入口，无测试环境开关
   preload/               窄化的 contextBridge API
   renderer/              React 页面、组件、本地化资源和样式
   shared/                跨进程类型、Zod schema、channel、错误和纯函数
@@ -94,6 +110,7 @@ tests/
   unit/                  服务、schema、安全与跨进程契约
   integration/           真实临时 Git remote、workspace 和安装脚本
   renderer/              jsdom + Testing Library 用户交互
+  e2e/                   Playwright Electron/候选包与外置隔离 fixture
 scripts/                 i18n/docs 检查和 macOS package/install 脚手架
 integrations/goland/     独立 Kotlin/Gradle GoLand 插件、资源与平台测试
 docs/                    指南、需求包、规范和冻结历史资料
@@ -186,8 +203,10 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | Unit | schema、shared 工具、service、IPC/preload、安全与构建配置 | 修改对应模块时首先运行。 |
 | Integration | 真实临时 Git、分支语义、workspace 生命周期、回滚和安装脚本 | 修改 Git、文件系统、状态或安装行为时运行。 |
 | Renderer | 页面、对话框、i18n、错误与无障碍交互 | 修改 UI、文案或 preload 消费方时运行。 |
+| Electron E2E | built renderer 经真实 preload/Main/Git/磁盘完成普通业务链路 | 按受影响 D01–D12/验收 selector 运行；已验证等价的范围不再重复 Computer Use。 |
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
-| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选运行单一 GoLand GO-262.9437.286 目标；中间子任务按影响验证装配，不重复完整矩阵。 |
+| 本机 Desktop→IDE | 真实 Desktop 保存、固定 GoLand 的模型/PFI/Project 与恢复 | 跨进程或图形集成受到影响时，在获准的专用 profile 对显式 ZIP 运行；不进入 CI。 |
+| Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选保留最低/固定代表目标，并冻结完整正式 API 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -199,16 +218,16 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 
 Gradle 按 Wrapper 的明确版本和官方 HTTPS `distributionUrl` 管理，当前仍为 9.3.0；不设置 `distributionSha256Sum`，不增加替代 checksum 文件或预期值。保留 URL 校验、超时、缓存及既有 Wrapper JAR 验证；这不等于验证下载 ZIP 的预期字节。升级只维护明确版本，不改为动态版本或个人二进制。
 
-当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、GoLand 2026.2.1.1 target 与 Java/JVM 25；plugin ID 是 `com.reqws.workspace`，`since-build` 与 `until-build` 均为 `262.9437.286`。直接命令：
+当前工具链固定为 IntelliJ Platform Gradle Plugin 2.18.1、Gradle 9.3.0、Kotlin 2.3.20、Java/JVM 25；最低编译 SDK 为 GO 2026.2，固定本机 GUI 代表为 GO 2026.2.1.1。plugin ID 是 `com.reqws.workspace`，`since-build="262"`，无普通或 strict 上限。在仓库根目录执行：
 
 ```bash
-cd integrations/goland
-./gradlew test verifyForbiddenProductionSymbols verifyPluginProjectConfiguration verifyPluginStructure verifyPlugin
-./gradlew verifyForbiddenProductionSymbols buildPlugin
-./gradlew runIde
+npm run check:goland
+npm run package:goland
 ```
 
-`verifyPlugin` 对 GoLand GO-262.9437.286 执行 Plugin Verifier。`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`；Gradle cache、sandbox 和 build output 均不可提交。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
+`check:goland` 保留全部平台测试、源码/产物门禁和最低/固定目标，再对同一 ZIP 执行完整 API 矩阵。受控初始 JPS 接口例外只由 `scripts/run_ide_verifier.py` 结合精确报告与字节码裁决；原始 Gradle `verifyPlugin` 保留全部 failure levels，遇该授权使用仍返回非零，不能将原始失败当作脚本可以忽略任意错误的依据。`--baseline` 模式仅对应最低与固定代表两个目标，不代替完整矩阵。详见[插件 README](../../integrations/goland/README.md#build-and-verify)。
+
+`buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`，消费者读取 `build/release/plugin-archive.txt` 的精确产物路径；Gradle cache、sandbox 和 build output 均不可提交。完整 IDE 使用[本机独占入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，不绕过 profile 与授权保护直接运行。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
 ### 插件开发与验收边界
 
@@ -226,7 +245,7 @@ VCS 始终只读：生产代码不得调用 mapping writer、主动调用可改�
 
 使用普通文本 Git fixture，覆盖 manifest、仓库增删重加、自动/手动刷新、项目范围、错误恢复和配置保护。[任务入口](../changes/ide-plugin-language-decoupling/tasks/README.md)采用 S1 核心语义 → S2 调度/依赖收尾 → V 最终回归，默认同分支串行。直接打开 [S1](../changes/ide-plugin-language-decoupling/tasks/s1-core-sync-decoupling.md)或 [S2](../changes/ide-plugin-language-decoupling/tasks/s2-scheduling-dependency-cleanup.md)即可查看该步实施、实际受影响方法/类的最小回归和交接要求；最后按[独立 V 文档](../changes/ide-plugin-language-decoupling/testing/final-acceptance.md)在最终组合代码上执行完整插件与兼容检查，不再从总方案拼接步骤。代码引用扫描由现有构建门禁按有效输入集中执行，不在每个 GUI 动作后人工重复。
 
-真实 GUI 仅补自动化无法证明的必要集成，按[工作加载集合验收](../changes/goland-workspace-loading/test-plan.md)执行最小链。GoLand 原生 Git 全流程、代码补全/引用、Go Modules、GOROOT、用户项目 `go test`、运行或调试不再是常规门禁。移除仓库不是禁止运行磁盘上的代码；重新加入不保证语言运行配置即时恢复。发现可归因于 ReqWS 的真实范围错误仍需修复。
+真实完整 IDE 仍由固定 Starter/Driver 自动场景覆盖模型/PFI/Project 集成；[工作加载集合验收](../changes/goland-workspace-loading/test-plan.md)的每个旧断言按[替代登记](../changes/playwright-regression-automation/manual-inventory.md#4-goland-加载集合与原生-project-树)判定，未关闭项继续保留。Computer Use 只补现有自动证据无法证明的具体原生风险，不把一次故障扩大成全量手工回归。GoLand 原生 Git 全流程、代码补全/引用、Go Modules、GOROOT、用户项目 `go test`、运行或调试不再是常规门禁。移除仓库不是禁止运行磁盘上的代码；重新加入不保证语言运行配置即时恢复。发现可归因于 ReqWS 的真实范围错误仍需修复。
 
 首次打开/恢复、安全与并发回归仍按受影响层验证；版本特有 GUI、50+20 规模、sleep/wake、视觉/无障碍或长时间 idle 按改动风险选择，不机械重复旧全矩阵。测试、工件和实际 GUI 证据绑定候选；未运行项明确记录，不从历史 GO 或 ZIP 构建推出新候选通过。
 

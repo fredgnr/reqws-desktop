@@ -209,6 +209,39 @@ class ImpactTests(unittest.TestCase):
         self.assertIn('!cancelled()', weekly['jobs']['released-api']['if'])
         self.assertNotIn('needs.main-api.result', weekly['jobs']['released-api']['if'])
 
+    def test_every_baseline_entrypoint_retains_exact_archive_api_gate_and_reports(self):
+        for workflow, job_name in [('ci.yml', 'plugin-build'), ('goland-weekly.yml', 'main-candidate'),
+                                   ('release.yml', 'goland-plugin')]:
+            job = load_yaml('.github/workflows/' + workflow)['jobs'][job_name]
+            command = next(step['run'] for step in job['steps']
+                           if 'verifyPluginProjectConfiguration' in step.get('run', ''))
+            with self.subTest(workflow=workflow):
+                self.assertNotRegex(command, r'\bverifyPlugin\b')
+                self.assertIn('run_ide_verifier.py --baseline', command)
+                self.assertIn('--archive "$(cat integrations/goland/build/release/plugin-archive.txt)"', command)
+                for task in ('compileIntegrationTestKotlin', 'test', 'verifyBaselineTestReports',
+                             'verifyPluginProjectConfiguration', 'verifyPluginStructure', 'exportPluginArchivePath'):
+                    self.assertIn(task, command)
+                self.assertTrue(any('always()' in step.get('if', '')
+                                    and 'integrations/goland/build/reports' in step.get('with', {}).get('path', '')
+                                    for step in job['steps']))
+        reusable = json.dumps(load_yaml('.github/workflows/goland-verification.yml'))
+        self.assertNotIn('--baseline', reusable)
+        self.assertIn('--snapshot targets/targets.json', reusable)
+        local = (Path(__file__).resolve().parents[2] / 'scripts/check_goland.py').read_text()
+        self.assertIn("'--baseline'", local)
+        self.assertIn("'--snapshot'", local)
+        self.assertNotIn("'verifyPlugin',", local)
+
+    def test_all_gradle_failure_levels_and_composed_bytecode_gate_remain_enabled(self):
+        build = (Path(__file__).resolve().parents[2] / 'integrations/goland/build.gradle.kts').read_text()
+        for category in ('COMPATIBILITY_PROBLEMS', 'INVALID_PLUGIN', 'MISSING_DEPENDENCIES', 'INTERNAL_API_USAGES',
+                         'EXPERIMENTAL_API_USAGES', 'OVERRIDE_ONLY_API_USAGES', 'NON_EXTENDABLE_API_USAGES'):
+            self.assertIn('VerifyPluginTask.FailureLevel.' + category, build)
+        self.assertIn('scripts/ide_api_exception.py', build)
+        self.assertIn('"--jar", composedJarFile.absolutePath', build)
+        self.assertIn('"--sources", sourceRootDirectory.absolutePath', build)
+
 
 class IntegrationReportsTests(unittest.TestCase):
     def test_missing_skipped_zero_and_incomplete_scenarios_fail(self):

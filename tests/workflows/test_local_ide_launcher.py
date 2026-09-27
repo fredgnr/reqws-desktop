@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from ide_compatibility import digest, read_policy, write_json
 from run_local_ide import (EnvironmentBlocked, initialize_profile, isolate_project_state,
-                           local_only, lock_profile, optional_license_server, session_closed, verify_report)
+                           local_only, lock_profile, optional_license_server, session_closed, stage_candidate, verify_report)
 
 
 class LocalProfileTests(unittest.TestCase):
@@ -25,6 +25,26 @@ class LocalProfileTests(unittest.TestCase):
         with patch.dict(os.environ, {'CI': 'true'}, clear=True), self.assertRaises(EnvironmentBlocked) as error:
             local_only()
         self.assertEqual(error.exception.code, 'CI_NOT_ALLOWED')
+
+    def test_installer_receives_a_writable_private_copy_of_the_read_only_candidate(self):
+        archive = self.root / 'original.zip'; archive.write_bytes(b'original candidate'); archive.chmod(0o444)
+        run = self.root / 'run'; run.mkdir()
+        staged = stage_candidate(archive, run, digest(archive))
+        self.assertEqual(staged, run / 'candidate/plugin.zip')
+        self.assertEqual(staged.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(staged.read_bytes(), archive.read_bytes())
+        staged.unlink()  # Simulate Starter's destructive unpack-failure cleanup.
+        self.assertEqual(archive.read_bytes(), b'original candidate')
+        self.assertEqual(archive.stat().st_mode & 0o777, 0o444)
+
+    def test_staging_rejects_changed_bytes_links_and_existing_run_state(self):
+        archive = self.root / 'original.zip'; archive.write_bytes(b'candidate')
+        run = self.root / 'run'; run.mkdir()
+        with self.assertRaisesRegex(ValueError, 'bytes changed'): stage_candidate(archive, run, '0' * 64)
+        with self.assertRaises(FileExistsError): stage_candidate(archive, run, digest(archive))
+        linked = self.root / 'linked.zip'; linked.symlink_to(archive)
+        with self.assertRaises(EnvironmentBlocked): stage_candidate(linked, self.root, digest(archive))
+        self.assertEqual(archive.read_bytes(), b'candidate')
 
     def test_license_server_is_optional_and_never_accepts_url_credentials(self):
         with patch.dict(os.environ, {}, clear=True):

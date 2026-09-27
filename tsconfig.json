@@ -24,6 +24,7 @@
     "forge.env.d.ts",
     "vite.*.config.mts",
     "vitest.config.mts",
+    "playwright*.config.ts",
     "scripts/**/*.mts",
     "src/**/*.ts",
     "src/**/*.tsx",

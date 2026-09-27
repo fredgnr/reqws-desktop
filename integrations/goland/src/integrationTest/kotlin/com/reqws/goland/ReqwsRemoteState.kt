@@ -15,6 +15,13 @@ interface ReqwsRemoteState {
   fun getSnapshot(): ReqwsRemoteSnapshot?
   fun getValidatedProjectionDigest(): String?
   fun getLastAppliedDigest(): String?
+  fun getLastError(): ReqwsRemoteError?
+  fun getUserRootCoverage(): Set<String>
+}
+
+@Remote("com.reqws.goland.project.ReqwsProjectError", plugin = "com.reqws.workspace")
+interface ReqwsRemoteError {
+  fun getCode(): String
 }
 
 @Remote("com.reqws.goland.project.ReqwsLifecycleState", plugin = "com.reqws.workspace")
@@ -31,11 +38,20 @@ interface ReqwsRemoteSnapshot {
 interface ReqwsRemoteLoading {
   fun getProject(): ReqwsRemoteProject
   fun getDigest(): String
+  fun getLoadedIds(): Set<String>
 }
 
 @Remote("com.reqws.goland.loading.contract.GoLandProject", plugin = "com.reqws.workspace")
 interface ReqwsRemoteProject {
   fun getRevision(): Long
+  fun getWorkspaceId(): String
+  fun getBindingId(): String
+}
+
+// Only this public read API is used. Trust is changed by real dialog clicks.
+@Remote("com.intellij.ide.trustedProjects.TrustedProjects")
+interface RemoteTrustedProjects {
+  fun isProjectTrusted(project: com.intellij.driver.sdk.Project): Boolean
 }
 
 @Remote("com.intellij.openapi.roots.ProjectFileIndex")
@@ -48,4 +64,23 @@ interface RemoteProjectFileIndex {
 interface RemoteLocalFileSystem {
   fun getInstance(): RemoteLocalFileSystem
   fun findFileByPath(path: String): com.intellij.driver.sdk.VirtualFile?
+}
+
+@Remote("com.intellij.ide.projectView.ProjectView")
+interface RemoteProjectView {
+  fun getInstance(project: com.intellij.driver.sdk.Project): RemoteProjectView
+  fun getCurrentViewId(): String
+  fun isShowExcludedFiles(paneId: String): Boolean
+}
+
+@Remote("com.intellij.openapi.vcs.ProjectLevelVcsManager")
+interface RemoteVcsManager {
+  fun getInstance(project: com.intellij.driver.sdk.Project): RemoteVcsManager
+  fun getDirectoryMappings(): List<RemoteVcsMapping>
+}
+
+@Remote("com.intellij.openapi.vcs.VcsDirectoryMapping")
+interface RemoteVcsMapping {
+  fun getDirectory(): String
+  fun getVcs(): String
 }

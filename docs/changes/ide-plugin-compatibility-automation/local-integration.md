@@ -2,7 +2,7 @@
 title: 本机完整 IDE 自动集成入口
 type: guide
 status: active
-updated: 2026-09-22
+updated: 2026-09-27
 ---
 
 # 本机完整 IDE 自动集成入口
@@ -15,7 +15,7 @@ updated: 2026-09-22
 
 CI 继续运行最低 SDK 的生产/测试编译及 Starter/Driver 宿主编译、单元测试、Light/Heavy 平台测试（包括 `HeavyPlatformTestCase`）、禁用 API、结构/产物策略和跨版本 Verifier。PR、Release、定期以及共享工作流均不启动完整 GoLand，不要求 IDE 授权或 License Server。
 
-仅本机入口调用 Starter/Driver；三个场景组保持自动执行，不改成人工逐步回归。更高版本只增加 API 目标，不增加本机 GUI 矩阵。最低 SDK 是 GO 2026.2，代表环境是 GO 2026.2.1.1，API 集合仍从正式目录冻结，三者相互独立。
+仅本机入口调用 Starter/Driver；原 `legacy` 三组与 Desktop 联动四组均由自动场景执行。更高版本只增加 API 目标，不增加本机 GUI 矩阵。最低 SDK 是 GO 2026.2，代表环境是 GO 2026.2.1.1，API 集合仍从正式目录冻结，三者相互独立。
 
 ## 2. 准备专用授权环境
 
@@ -51,11 +51,43 @@ npm run check:goland:integration -- \
 2. 测试宿主原子写入选择，自动完成 `2 → 1 → 0 → 2`；等待本次 revision、live digest、模型/PFI、树和数量，不直接 refresh。
 3. 完整退出并以新 PID 冷启动，检查空/非空恢复和用户 root；冷启动组重复两次。完整套件要求九个不同进程正常退出。
 
+### Desktop 真实 UI 联动
+
+S4 增加独立套件，沿用同一 profile 锁、候选校验和退出保护：
+
+```bash
+npm run check:goland:desktop -- \
+  --profile "$HOME/.reqws-ide-tests/goland-2026.2.1.1" \
+  --archive /absolute/path/to/candidate.zip \
+  --version 0.1.7
+```
+
+等价入口为 `python3 scripts/run_local_ide.py run --suite desktop ...`。先提交并冻结干净的 Desktop Git 候选；入口在运行前后核对同一 commit 与干净状态，再构建该源码的隔离 Electron 入口并运行真实 UI。插件 ZIP 仍由调用方显式提供，不重建。不要同时编辑源码或运行会覆盖 `.vite/e2e` 的另一轮 Electron 测试。原 S4 三项套件结果见 [S4 记录](../playwright-regression-automation/implementation-2026-09-26.md#s4-本机联动)；当前四项 v7 的两轮正向、故意失败及保留范围见 [V 记录](../playwright-regression-automation/verification-v-2026-09-26.md)，不得沿用旧通过结论。
+
+Driver 通过本轮 UUID 和递增序号请求 Desktop 创建五个普通文本 Git 工作区及保存加载选择。Desktop UI 是成功路径上 manifest/binding 的唯一 writer；初建走真实“保存并打开 GoLand”到 Main/EditorLauncher，只有最后 OS spawn 被隔离 adapter 记录，Starter 使用该次观测的合法 shell。它不证明 LaunchServices。Driver 独立回读文件并观察普通 Project 树、模块根、ProjectFileIndex、加载数量和 live digest。四个场景组要求九个独立、正常退出的 IDE 进程和 32 条逐步投影证据：
+
+- `desktopSelectionAndColdProcesses`：保持 IDE 打开执行 `2→1→0→2`；在承载模块内已有额外用户 root 时再执行 `2→0`，分别验证同进程项目重开、新进程先只读恢复空集合及非空冷启动，保留用户 root 和磁盘文件。G3 切换 Excluded Files 两态并恢复；仅在创建 late 文件前将自有 Desktop 窗口置前，确认测试 IDE 失活后写普通文件，再返回同一 IDE 观察 VFS/PFI/Project。唯一 `focus-external-edit` 请求与三段原始记录绑定本轮身份；G2 的 revision 转换没有焦点、Refresh 或 Sync 补偿。
+- `desktopTrustTransitionUsesRealUi`：实际选择 Safe Mode，确认 ReqWS 未写保护模型，再通过 IDE 信任对话框恢复；不全局自动信任，不调用信任 setter 或同步函数。固定 IDE 的可选 bundled Go Linter 在未信任启动时报错，故仅该 context 通过公开 Starter 配置和本轮临时 `disabled.plugins.file.path` 禁用 `com.ypwang.plugin.go-linter`，记录在 `trust-scenario-options.json` 并回查未加载；不修改持久 profile 插件设置，全部 IDE 错误仍导致失败。Trust 结果须保留此环境限定。
+- `desktopInvalidInputsPreserveUserModel`：在本轮自建 fixture 对 binding 和 manifest 分别注入损坏 JSON/身份不匹配，检查真实 watcher 报错、模型保留和恢复。四次故障分别读取实际 ReqWS Error UI 和稳定码，保留原始记录与组件图。故障文件写入不计作 Desktop 成功链路。
+- `desktopUserCoverageAndUnboundShell`：检查未选 repo-c 由用户 root 覆盖时的普通 Project 可见性、归属说明与不接管语义；独立进程打开无绑定普通项目，验证同名 `.reqws/ide/goland` 文件仍属普通内容。
+
+临时通信不暴露在产品中，也不接收任意路径或命令。任一端失败、取消、超时、skip、缺证据或异常退出都阻止通过。Desktop 项目保留在私有运行目录，不在 IDE 退出状态未确认时删除；两端退出确认不足则保留 active-session 标记。报告的 `suite=desktop` 与原 `suite=legacy` 区分，Desktop 源码身份与插件 ZIP 身份分别记录。只跑 Desktop 协议检查、编译或旧三组套件都不代表联动通过。
+
+同进程重开必须记录目标 Project 已关闭、精确目标路径已从打开集合消失，以及实际欢迎页中的唯一 Recent Projects 项。固定 Driver 的单元格读取器不能读取新版 renderer 文本，宿主改为只读专用 `recentProjects.xml` 并保存原始快照：近期项目全集只能包含精确 fixture 路径及可选的隐藏欢迎项目，实际 UI 只能有一个项目行且显示名称与该记录唯一匹配。点击前再次核对，点击后核对同一 JVM PID 和目标路径；不猜测首行。允许 IDE 自动创建专用 `GoLandWorkspace` 欢迎项目，不能要求所有打开项目为空。任何额外路径、未知身份或 UI 歧义均保留诊断并失败。原始记录的 config 与启动前报告的 profile ID、固定 IDE 和专用身份 marker 交叉核对；重读报告时该 config 与 marker 仍须可读，不读取账号或许可内容。
+
+当前 `acceptanceVersion=7` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张独立组件图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
+
+通过证据使用真实 IDE Swing root pane 的 `printAll` 图像；侧车绑定实际 JVM PID、项目、frame 标题和尺寸，门禁检查完整 PNG chunk/CRC 与有界解压。它不证明 macOS 窗口装饰或遮挡。正常退出和周期全屏采集已关闭，但固定 SDK 在异常或超时时仍可能生成含其他窗口的全屏诊断图。此次用户已明确允许它们仅留私有测试目录；不得上传、展示为 IDE 通过证据或把本次许可当作发布授权。
+
+Starter 的 ZIP reader 需要可写句柄，解包失败时还可能删除输入。因此两个 suite 都先将显式候选按原字节复制到本轮私有 `candidate/plugin.zip`（0600），只把该副本交给 Starter；调用方原 ZIP 可以保持只读。报告分别记录原件和安装副本，安装前后及通过前检查摘要一致，副本丢失/被改写均失败；不重建、重签或修改原候选。
+
 ## 4. 授权复用与业务状态隔离
 
 用户态配置仅复用专用授权 config。授权准备不注入“已接受协议”标志，首次协议由用户在专用环境自行处理。有效试用可作为当次运行的实际授权状态，但不能证明 JetBrains Account 登录或后续授权复用。
 
 profile 下另缓存固定版本的官方 installer/SDK 与测试依赖，使专用 IDE 的二进制路径稳定，便于准备 macOS 权限；该缓存不含业务 fixture 或项目/system 状态，也不引用日常 IDE 安装。每轮创建新的 `reqws-local-ide-*` 私有目录，fixture、`.idea`、system、实际安装的 plugins、日志、XML 全部隔离，不能恢复上轮 sandbox。通过 IDE 运行时属性核对实际 config/system/plugins 位置。
+
+每个 Starter context 优先通过公开安装器接口复用专用缓存中精确的 `GO-262.9437.286`，核对 ProductInfo、build.txt、路径与工厂返回身份，重新创建独立的运行描述。仅缓存路径确实不存在时才下载；现有缓存损坏、链接或身份不符直接失败，不替换缓存。拒绝 JBR override 和工厂可能自动恢复的 JBR backup，避免复用时改写测试运行时。该路径不需要每个场景重复查询在线发布目录，不改变最低 262 或完整 IDE 的执行边界。
 
 Starter 宿主 JVM 的 `user.home` 指向本轮独立 `host-home`，启动时核对路径，防止第三方库访问日常 IDE 的 macOS saved-state。宿主不加载带通用进程扫描/清理逻辑的 `ide-starter-junit5` 扩展；仍使用 JUnit 5 执行用例，由本轮进程句柄负责退出及异常清理。
 
@@ -83,5 +115,7 @@ python3 scripts/run_local_ide.py verify-report \
   --archive /absolute/path/to/final-signed-plugin.zip \
   --version 0.1.5
 ```
+
+核对 S4 联动结果时增加 `--suite desktop`，并处于报告对应的干净 Desktop commit；相同 ZIP 但 Desktop 源码变化也会被拒绝。未指定时只验证原 `legacy` 套件，旧报告不能用于证明新增联动。
 
 CI artifact 标记 `scope=ci-api`，本机报告标记 `scope=local-ide-integration`。CI 的 `localIntegration.status=not-run` 只表示 CI 未运行该层，不读取或覆盖用户的本机结果。Release 继续校验最终签名 ZIP 的 API 证据；CI 绿色、UI job 不存在或旧 skipped 都不能被表述为本机 UI 已通过。

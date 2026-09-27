@@ -37,8 +37,7 @@ describe('Electron build configuration', () => {
     ]);
   });
 
-  it('lets the Vite plugin exclude Gradle sources and outputs from Electron packages', async () => {
-    expect(forgeConfig.packagerConfig?.ignore).toBeUndefined();
+  it('excludes test controls and Gradle artifacts from Electron packages', async () => {
     const vitePlugin = forgeConfig.plugins?.[0] as VitePlugin;
     const resolved = await vitePlugin.resolveForgeConfig({
       packagerConfig: { ...forgeConfig.packagerConfig },
@@ -49,6 +48,10 @@ describe('Electron build configuration', () => {
     if (typeof ignore !== 'function') return;
     expect(ignore('')).toBe(false);
     expect(ignore('/.vite/build/main.js')).toBe(false);
+    expect(ignore('/.vite/renderer/main_window/index.html')).toBe(false);
+    expect(ignore('/.vite/e2e/build/main.js')).toBe(true);
+    expect(ignore('/tests/e2e/fixtures/test-main.ts')).toBe(true);
+    expect(ignore('/.vite/build-other/main.js')).toBe(true);
     expect(ignore('/integrations/goland/build/distributions/plugin.zip'))
       .toBe(true);
     expect(ignore('/integrations/goland/src/main/plugin.xml')).toBe(true);

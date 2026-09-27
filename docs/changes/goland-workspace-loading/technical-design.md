@@ -135,6 +135,8 @@ IDE project basePath 为 `.reqws/ide/goland`，workspaceRoot 从这三个固定�
 
 冷启动不得从持久化 Synced/digest 初始化成功证明；重新读取绑定、ledger、实时模型与 PFI。`.idea` 尚未就绪沿用有限 startup readiness 等待，不能无限创建重试作业，也不由 Desktop/插件清空或强制重写 `.idea`。首次未信任/读取阶段允许暂态入口展示，正常同步完成后才满足隐藏契约。
 
+2026-09-26 的 S4 实跑发现，初始 Workspace Model 缓存可先于 JPS `.iml` 加载恢复；此时新写的根可能被迟到的 JPS 状态覆盖，正常保存也可能因初始加载未完成而跳过。用户已单独批准 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel` 例外：投影先以可取消方式等待初始 JPS 同步，再重新验证 generation、trust 与 binding，之后才能写 journal、变更受管根或发布 shell 隐藏能力。此等待不持有目录锁、读写锁或 NonCancellable 上下文，不等待语言服务。其他内部 API、路径清单重新认领、固定延时和强制写 `.iml` 均不包含在该例外中。
+
 首次 startup 在受信任、project 已 initialized、绑定/最新 generation 仍有效、从未观察到 metadata 且无已有投影记录时，可以通过公开 `Project.scheduleSave()` 请求 IDE 正常保存一次；只在 `.idea` 仍确认为缺失时排队，不手写目录。该请求位于模型事务/目录锁外，仍沿原有界 readiness loop 等待真实落盘；未 initialized 的 tick 不消耗一次性标记。既存或曾被观察后移走的 metadata、所有权冲突、Safe Mode 不触发保存，排队也不是成功证明。
 
 绑定缺失/非法/被替换：冻结受管增删，不将其转为空集合；既有模型保留并报告错误。撤销绑定能力缓存并以 S0 验证的路径使入口排除/树过滤失效；不得把属于新 identity 的目录继续隐藏。只有 selection 内容错误而同一绑定身份仍可信时，可以保留上次有效模型和 shell 适配，但状态必须说明 stale，不报新配置已生效。恢复后自动全链重核，不依赖用户反复 Sync Now。

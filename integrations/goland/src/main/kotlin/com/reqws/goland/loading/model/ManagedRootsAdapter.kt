@@ -50,11 +50,18 @@ internal class ManagedRootsAdapter(
   private val allowed: () -> Boolean,
   private val verifySnapshot: (LoadingSnapshot) -> Unit = LoadingSnapshotReader()::verifyCurrent,
   private val observedMetadata: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+  private val awaitInitialJps: suspend () -> Unit = { project.service<InitialJpsSynchronization>().await() },
 ) {
 
   suspend fun apply(snapshot: LoadingSnapshot): ManagedRootsResult {
     try {
       val candidateContext = currentCoroutineContext()
+      candidateContext.ensureActive()
+      gate(snapshot)
+      // Cached roots can precede native JPS loading. Wait outside all directory/model locks,
+      // then revalidate this candidate before observing ownership or recording any intent.
+      awaitInitialJps()
+      candidateContext.ensureActive()
       gate(snapshot)
       val idea = snapshot.binding.shell.resolve(".idea")
       val ideaIdentity = try { boundDirectory(idea) } catch (failure: NoSuchFileException) {

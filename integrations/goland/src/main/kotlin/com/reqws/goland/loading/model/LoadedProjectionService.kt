@@ -25,10 +25,10 @@ internal class LoadedProjectionService(private val project: Project) {
     reader.verifyCurrent(snapshot)
     val presentation = project.service<ShellPresentationCache>()
     try {
-      presentation.publish(snapshot.binding, allowed)
       val result = ManagedRootsAdapter(project, allowed, observedMetadata = observedMetadata).apply(snapshot)
       reader.verifyCurrent(snapshot)
       if (!allowed()) throw kotlinx.coroutines.CancellationException("Loading candidate is no longer current.")
+      presentation.publish(snapshot.binding, allowed)
       val shellFile = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(snapshot.binding.shell)
         ?: throw ProjectModelApplyException(ProjectModelErrorCode.LIVE_FILE_INDEX_NOT_CONVERGED, "Missing shell in VFS.")
       val excluded = readAction {

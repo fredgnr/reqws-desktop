@@ -2,7 +2,7 @@
 title: IDE 插件开发与测试规范
 type: governance
 status: active
-updated: 2026-09-22
+updated: 2026-09-27
 ---
 
 # IDE 插件开发与测试规范
@@ -39,6 +39,8 @@ manifest 是活动仓库成员关系的唯一业务来源；文件系统/Git 检
 
 只使用项目声明的公开平台 API 基线；禁止生产代码使用 JetBrains `@Internal`、`@Experimental`、反射或私有 API。[兼容与自动化方案](../changes/ide-plugin-compatibility-automation/README.md)规定最低整个 262 系列、没有普通或 strict 上限；编译使用 GO 2026.2，固定集成使用 GO 2026.2.1.1，高版本仅增加自动 API 目标。每次插件相关迭代记录最低版本影响；提高下限必须有证据和用户明确批准。插件身份、GoLand 产品限制和发布授权边界不变。围绕真实 shell capability 变化调用公开 `ProjectRootManagerEx.makeRootsChange(Runnable, RootsChangeRescanningInfo)` 的决策见[实施记录](../changes/goland-workspace-loading/implementation-2026-09-19.md)，不能无条件重复广播。
 
+2026-09-26 用户明确批准唯一例外：通过初始 JPS 同步包装器调用 `WorkspaceModelInternal.awaitSynchronizationWithJpsModel`。该类型标记 Internal，精确方法还标记 Experimental；许可只覆盖这个点名调用。公开 API 或组合无法提供同等屏障；调用必须先于投影模型和 journal 写入，等待可取消，返回后重验 generation、trust 与 binding。源码/JAR/Verifier 门禁只允许该精确调用点及其必要类型引用，其他内部或实验 API 仍禁止；不等待语言服务、不提高 262 下限、不豁免所有权检查。背景和实际验证见 [S4 记录](../changes/playwright-regression-automation/implementation-2026-09-26.md#6-已授权-api-例外)。
+
 ## 4. 成功与失败语义
 
 `Synced` 只表示：有效 manifest 已被消费，插件负责的仓库视图和受管项目范围已同步，且没有该范围内未处理的失败。`Active` 表示对应的存在仓库在活动集合及应有的项目内容范围内，不代表语言模块可用。
@@ -60,7 +62,7 @@ Git mapping 仅对加载且存在的仓库检查缺失/冲突；未加载成员�
 
 基础 fixture 使用本地 Git 仓库与普通文本文件，不需要 Go SDK、Go Modules、外部依赖下载或账号。可增加一个小型对照回归，证明改变 `go.mod` 不改变插件判定；不得因此建立多语言编译矩阵。
 
-自动化替代的开发落点和一次性迁移映射见[开发记录](../changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md)。后续实际执行与环境阻塞见[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)，不能预先删除未获真实证据的旧覆盖；也不要求最高版本真机或 computer use。用户明确要求只开发时，报告未运行项，保留正常 CI/发布门禁。无人值守 IDE 自身仍需合法授权和图形环境，不能复制个人 license。
+自动化替代的初始开发落点见[开发记录](../changes/ide-plugin-compatibility-automation/implementation-2026-09-21.md)，早期执行与环境阻塞见[验证记录](../changes/ide-plugin-compatibility-automation/verification-2026-09-21.md)。真实 Desktop 联动及旧断言的后续替代按 [Playwright V 记录](../changes/playwright-regression-automation/verification-v-2026-09-26.md)和[逐项登记](../changes/playwright-regression-automation/manual-inventory.md)执行；它与 2026-09-19 语言解耦 V 是不同验收。仅撤销已有范围等价、同候选、负向及稳定证据的重复手工步骤；未关闭项与既有平台/API/安全门禁保留，不要求最高版本真机或 computer use。用户明确要求只开发时，报告未运行项，保留正常 CI/发布门禁。无人值守 IDE 自身仍需合法授权和图形环境，不能复制个人 license。
 
 PR、Release、定期工作流不启动 Starter/Driver、不配置 License Server 或 IDE 凭据；`HeavyPlatformTestCase` 仍属于 CI 平台测试。本机使用[专用入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，可交互登录 JetBrains Account，License Server 可选，专用授权 config 与每轮业务状态分开。CI 的 API/平台结果与本机 UI 报告分别记录，`skipped`/未运行/CI 绿色都不是 UI 通过；最终签名 ZIP 不能借用签名前报告。
 
