@@ -71,3 +71,13 @@ Compose 三个生产文件已实现标题 Medium 字重、最多三行的语义�
 独立 Reviewer `/root/native_acceptance_review` 使用经宿主显式参数核验的 `gpt-6-astra/xhigh`（非继承），复核固定代码、原始XML、失败探针、九份API报告及ZIP；未发现本轮源码或本地自动门禁范围内的剩余阻塞。对应[代码CI 36302813633](https://github.com/fredgnr/reqws-desktop/actions/runs/36302813633)已全部成功。后续文档提交不改变这些生产/测试输入；最终PR检查仍以相应HEAD为准。
 
 新 `b86134b` ZIP尚未启动原生验收。下一次获准时段须串行执行完整Compose宿主（包括实际Escape、13/26字号、280px窄栏、全文尾段、滚动和空提示）、legacy三组九进程、Desktop四组九进程，再审查该候选原始报告。不得沿用上述旧ZIP通过片段。S4/G4保持未通过；VoiceOver仍为用户豁免，性能预算不作为门禁。
+
+## 继续验收时的环境阻断
+
+用户于2026-09-27 07:44 UTC重新授权前台时段。同一生产ZIP `b86134b`、文档HEAD `2dafa88` 在 `reqws-compose-host-vi3pndej` 的完整Compose宿主运行结果为3项、2失败、0跳过；4个进程全部退出，生命周期用例通过，专用active-session标记已移除。
+
+原始记录确认基准字号明暗两态的Escape关闭、焦点保留及18字段复制；13→26字号时行高40→54。大字号浅色的“外点关闭”失败经截图确认是测试点击了弹层覆盖下的仓库计数，并非有效外点。测试已改为按实际文字区域加保守24px边距排除弹层覆盖，从候选元素中选择不相交目标并记录边界。该测试修正仅编译通过，尚未重跑。另一个重要缺口是015尾段截图仍显示前半文：真实滚轮是否命中可见滚动区域及完整末尾继续待核实，不能把全文语义或截图存在记为全文可读。自动事件现明确区分 `tooltipText=complete` 和 `tooltipTail=manual-review`；长列表和空提示尚未执行到。
+
+动态启用/禁用动作本身完成，但Installed页面请求 [Marketplace元数据](https://plugins.jetbrains.com/files/34389/1177315/meta.json) 时反复发生 `SSLHandshakeException / EOFException`，随后成为IDE未处理错误，门禁正确判失败。只读SDK审查未找到可可靠停止该详情请求的公开离线开关；不屏蔽IDE错误、不绕过TLS、不用内部API或加载mock替代实际重载。继续该验收需要用户检查当前网络/代理到JetBrains Marketplace的连接。
+
+本轮没有新的生产代码或ZIP变化。修正后的集成测试编译记录为 `/private/tmp/reqws-native-outside-target-compile.log`；原始失败报告、截图与候选均保留。独立Reviewer已核对失败范围及测试修正，未将其判为G4通过。用户协助前保存恢复点并暂停，VoiceOver继续豁免。

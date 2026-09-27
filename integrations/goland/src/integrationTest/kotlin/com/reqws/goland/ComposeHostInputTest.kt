@@ -293,6 +293,7 @@ class ComposeHostInputTest {
         }
         capture("font-$size-$theme-tooltip")
         val tooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
+        record("style-tooltip-bounds", "font=$size dark=$dark bounds=${tooltip.boundsOnScreen}")
         tooltip.moveMouse()
         tooltip.robot.rotateMouseWheel(12)
         waitFor("tooltip remains open after real scrolling", 10.seconds) { tooltip.present() }
@@ -303,7 +304,12 @@ class ComposeHostInputTest {
         node("reqws.repositoryCount").moveMouse()
         node("reqws.diagnostics").moveMouse()
         waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
-        node("reqws.repositoryCount").strictClick()
+        val popupBounds = tooltip.boundsOnScreen.apply { grow(24, 24) }
+        val outsideTag = listOf("reqws.status", "reqws.workspace", "reqws.repositoryCount")
+          .firstOrNull { !popupBounds.intersects(node(it).boundsOnScreen) }
+        assertNotNull(outsideTag, "outside-click target must be outside the actual popup at this font size")
+        record("style-outside-target", "font=$size dark=$dark tag=$outsideTag exclusionMargin=24 popup=$popupBounds target=${node(outsideTag!!).boundsOnScreen}")
+        node(outsideTag).strictClick()
         waitFor("outside click dismisses the actual tooltip", 10.seconds) { !tooltip.present() }
         copyToClipboard("style-first-copy-sentinel")
         node("reqws.copyDiagnostics").strictClick()
@@ -322,7 +328,7 @@ class ComposeHostInputTest {
         copyToClipboard("style-copy-sentinel")
         node("reqws.copyDiagnostics").strictClick()
         waitFor("complete diagnostic copy is repeatable", 10.seconds) { getClipboardText().toString() == fullCopy }
-        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltip=full copy=full actions=3 escape=true outside=true")
+        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltipText=complete tooltipTail=manual-review copy=full actions=3 escape=true outside=true")
         if (largeFont) {
           val manifest = mapper.readTree(originalManifest) as ObjectNode
           val repositories = manifest.withArray("repositories")
