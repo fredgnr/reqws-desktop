@@ -34,7 +34,9 @@ class ComposeContentLifecycleTest {
     }
     host.withIde(context) {
       val reqws = service<ReqwsRemoteService>(singleProject())
-      val window = requireNotNull(service<ComposeLifecycleToolWindowManager>(singleProject()).getToolWindow("ReqWS"))
+      val windows = service<ComposeLifecycleToolWindowManager>(singleProject())
+      waitFor("ReqWS Tool Window is registered without creating its Content", 30.seconds) { windows.getToolWindow("ReqWS") != null }
+      val window = requireNotNull(windows.getToolWindow("ReqWS"))
       host.assertProjection(this, fixture, inspectReqwsContent = false)
       withContext(OnDispatcher.EDT) {
         assertTrue(window.getContentManagerIfCreated()?.getContentCount() in listOf(null, 0))
