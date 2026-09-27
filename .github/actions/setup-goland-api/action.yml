@@ -1,3 +1,4 @@
+# Acceptance-only PR: exercise main-produced caches without changing execution.
 name: Set up Linux API verification caches
 description: One trusted CI producer for shared state/JBR; at most three hot SDK versions.
 inputs:
