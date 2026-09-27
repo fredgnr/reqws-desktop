@@ -33,7 +33,9 @@ defaults:
 jobs:
   api:
     name: API ${{ matrix.target }}
-    runs-on: macos-15
+    # Binary API verification consumes the immutable ZIP; it does not launch an IDE.
+    # Keep scarce macOS slots for native tests, Compose and signed packaging.
+    runs-on: ubuntu-24.04
     timeout-minutes: 110
     strategy:
       fail-fast: false
