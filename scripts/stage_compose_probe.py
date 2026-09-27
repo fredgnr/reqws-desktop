@@ -8,7 +8,9 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = '384894dab0e8dcc7c0040b08802eb3bd167a3c85'
+# This mainline commit has the same archived paths as the original S0 merge
+# baseline and remains reachable when the Compose branch is rebased.
+BASE = 'e90cd310b2250594a22148b877b9a6882e752943'
 PATCH = ROOT / 'tests/fixtures/goland-compose-s0/probe.patch'
 
 

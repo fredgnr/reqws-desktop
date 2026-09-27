@@ -5,7 +5,7 @@
 ## 状态与授权范围
 
 - 方案状态：draft；S0/S1/S2 已 completed，G0/G1/G2 pass，S3/S4 未开始。实际范围分别见 [S0](s0-verification-2026-09-26.md)、[S1](s1-verification-2026-09-27.md) 和 [S2](s2-verification-2026-09-27.md) 验证记录；性能指标不参与验收。
-- 初始调研基线：`main@b50a6b15d50658e067d3dd9283ea062e06aff559`；调研日期：2026-09-26。S0 实际基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85` 加本轮验证补丁。
+- 初始调研基线：`main@b50a6b15d50658e067d3dd9283ea062e06aff559`；调研日期：2026-09-26。S0 实际基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85` 加本轮验证补丁。2026-09-27 rebase 后，重建脚本改用主线可达的 `e90cd310b2250594a22148b877b9a6882e752943`；已通过 Git diff 确认所归档的 `integrations/goland`、`scripts` 与 `package.json` 完全一致，历史验收记录保持原提交身份。
 - 初始文档 PR 只包含方案和索引。2026-09-26 用户授权在 `feat/plugin_rebuild_compose` 执行 S0；S0 使用隔离候选与专用测试 IDE，当时保留正式 Swing UI，不安装日常 IDE、不发布。
 - 2026-09-27 用户授权完成 S1/S2；正式 Factory 已切换生产 Compose 内容，完整界面和状态/宿主验证已通过独立审查，见 [S1 验证记录](s1-verification-2026-09-27.md)与 [S2 验证记录](s2-verification-2026-09-27.md)。S3/S4 不在本轮目标内。
 - 项目处于早期阶段：目标实现不保留旧 Swing 内容层、旧 UI 开关、双实现或向后适配层。IntelliJ 宿主容器、数据安全与声明范围内的依赖/API 正确性仍然需要保留。

@@ -1,6 +1,7 @@
 """The S0 source stager must never apply its patch in a user's existing checkout."""
 
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,13 @@ from test_ci_cache_config import load_yaml
 
 
 class ComposeProbeStagingTests(unittest.TestCase):
+    def test_probe_baseline_is_reachable_from_the_current_branch(self):
+        result = subprocess.run(['git', 'merge-base', '--is-ancestor', probe.BASE, 'HEAD'],
+                                cwd=probe.ROOT, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0,
+                         'The pinned probe tree must survive a fresh clone of this branch: '
+                         + result.stderr)
+
     def test_stages_the_required_runtime_dependency_only_for_compose(self):
         with tempfile.TemporaryDirectory() as temporary:
             for variant in ['compose', 'swing']:
