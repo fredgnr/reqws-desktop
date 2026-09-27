@@ -3,6 +3,13 @@ package com.reqws.goland
 import com.intellij.driver.client.Driver
 import com.intellij.driver.client.Remote
 import com.intellij.driver.client.utility
+import com.intellij.driver.client.service
+import com.intellij.driver.sdk.ui.components.common.ideFrame
+import com.intellij.driver.sdk.ui.remote.SwingHierarchyService
+import java.io.StringReader
+import javax.xml.parsers.DocumentBuilderFactory
+import org.xml.sax.InputSource
+import org.w3c.dom.Element
 import com.intellij.driver.model.OnDispatcher
 import java.awt.Dimension
 import java.awt.Point
@@ -89,3 +96,23 @@ internal interface NativeAccessibleValue {
 internal interface NativeMouseInfo { fun getPointerInfo(): NativePointerInfo }
 @Remote("java.awt.PointerInfo")
 internal interface NativePointerInfo { fun getLocation(): Point }
+
+/** Read the same real Compose attributes used by Driver XPath; Swing text painting omits them. */
+internal fun Driver.composeAttributes(tag: String): Map<String, String> {
+  val xml = service<SwingHierarchyService>().getSwingHierarchyAsDOM(ideFrame().component, true)
+  check(xml.length <= 16 * 1024 * 1024)
+  val factory = DocumentBuilderFactory.newInstance().apply {
+    setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+    setFeature("http://xml.org/sax/features/external-general-entities", false)
+    setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+    isXIncludeAware = false
+    isExpandEntityReferences = false
+  }
+  val nodes = factory.newDocumentBuilder().parse(InputSource(StringReader(xml))).getElementsByTagName("*")
+  val matches = (0 until nodes.length).map { nodes.item(it) as Element }.filter { it.getAttribute("testtag") == tag }
+  check(matches.size <= 1) { "Duplicate production Compose tag: $tag" }
+  return matches.singleOrNull()?.let { node ->
+    mapOf("text" to node.getAttribute("text"), "contentdescription" to node.getAttribute("contentdescription"),
+      "focused" to node.getAttribute("focused"))
+  }.orEmpty()
+}

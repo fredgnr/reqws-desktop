@@ -222,8 +222,9 @@ class DesktopWorkspaceIntegrationTest {
     waitFor("ReqWS visibly reports Error and $errorCode", 30.seconds) {
       desktop.checkAbort()
       if (!panel.present()) false else {
-        statusTexts = panel.getAllTexts { it.text == "Error" }.map { it.text }
-        detailTexts = panel.getAllTexts { it.text == errorCode || it.text.startsWith("$errorCode · ") }.map { it.text }
+        statusTexts = listOfNotNull(composeAttributes("reqws.status")["text"]).filter { it == "Error" }
+        detailTexts = listOfNotNull(composeAttributes("reqws.diagnostics")["text"])
+          .filter { it == errorCode || it.startsWith("$errorCode · ") }
         statusTexts.isNotEmpty() && detailTexts.isNotEmpty()
       }
     }

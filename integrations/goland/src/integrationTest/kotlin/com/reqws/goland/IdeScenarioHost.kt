@@ -206,8 +206,10 @@ internal class IdeScenarioHost {
       for (repository in fixture.userCoveredRepositories) {
         val row = ideFrame().x { byAttribute("testtag", "reqws.repository.${fixture.repositories.getValue(repository)}") }
         waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
-          row.present() && row.getAllTexts().map { it.text }.let { texts ->
-            "Included via User Project Root" in texts && repository in texts
+          row.present() && composeAttributes("reqws.repository.${fixture.repositories.getValue(repository)}").let { attributes ->
+            val description = attributes["contentdescription"].orEmpty()
+            repository in description.lines() && "Included via User Project Root" in description &&
+              "Included via User Project Root" in attributes["text"].orEmpty()
           }
         }
       }
