@@ -1,0 +1,94 @@
+name: Set up Linux API verification caches
+description: One trusted CI producer for shared state/JBR; at most three hot SDK versions.
+inputs:
+  snapshot:
+    required: true
+    description: This run's frozen official target snapshot.
+  target:
+    required: true
+    description: Exact matrix target; never a caller-supplied path.
+  cache-write:
+    default: 'false'
+    description: Request production; script additionally checks event, ref, caller and checkout.
+  source-ref:
+    default: ''
+    description: Nonempty alternate-source requests are always read-only.
+  historical:
+    default: 'false'
+    description: Released candidates never produce caches.
+outputs:
+  shared-write:
+    value: ${{ steps.plan.outputs.shared-write }}
+    description: True only on the sole trusted dependency/JBR producer.
+  sdk-write:
+    value: ${{ steps.plan.outputs.sdk-write }}
+    description: True only on trusted hot SDK producers.
+  sdk-key:
+    value: ${{ steps.plan.outputs.sdk-key }}
+    description: Exact SDK version and build key.
+  sdk-path:
+    value: ${{ steps.plan.outputs.sdk-path }}
+    description: Only this target's raw Maven download directory.
+  jbr-key:
+    value: ${{ steps.plan.outputs.jbr-key }}
+    description: Exact reviewed runtime archive key.
+  jbr-path:
+    value: ${{ steps.plan.outputs.jbr-path }}
+    description: Only the reviewed runtime download directory.
+  sdk-hit:
+    value: ${{ steps.sdk.outputs.cache-hit }}
+    description: Exact SDK hit; empty for uncached targets or misses.
+  jbr-hit:
+    value: ${{ steps.jbr.outputs.cache-hit }}
+    description: Exact JBR hit.
+runs:
+  using: composite
+  steps:
+    - name: Set up Java
+      uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+      with:
+        distribution: temurin
+        java-version: '25'
+    - name: Plan bounded API caches and trusted ownership
+      id: plan
+      shell: bash
+      env:
+        SNAPSHOT: ${{ inputs.snapshot }}
+        TARGET: ${{ inputs.target }}
+        REQUEST_CACHE_WRITE: ${{ inputs.cache-write }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        CACHE_SOURCE_REF: ${{ inputs.source-ref }}
+        CACHE_HISTORICAL: ${{ inputs.historical }}
+      run: python3 scripts/api_cache.py plan --snapshot "$SNAPSHOT" --target "$TARGET"
+    # Restore shared state before raw archives so preexisting directories cannot
+    # disable setup-gradle's restore. Keep only reusable dependency/DSL state;
+    # extracted SDKs, JBR transforms, candidates and reports are not this layer.
+    - name: Set up shared Gradle dependency and DSL state
+      uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      with:
+        cache-read-only: ${{ steps.plan.outputs.shared-write != 'true' }}
+        cache-cleanup: on-success
+        gradle-home-cache-includes: |
+          caches/modules-2
+          caches/*/generated-gradle-jars
+          caches/*/kotlin-dsl
+          caches/*/groovy-dsl
+          caches/jars-*
+          notifications
+        gradle-home-cache-excludes: |
+          caches/modules-2/files-2.1/go/goland
+          caches/modules-2/files-2.1/com.jetbrains.intellij.goland/goland
+          caches/modules-2/files-2.1/com.jetbrains/jbr
+    - name: Restore only this hot SDK download
+      if: steps.plan.outputs.sdk-hot == 'true'
+      id: sdk
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.plan.outputs.sdk-key }}
+        path: ${{ steps.plan.outputs.sdk-path }}
+    - name: Restore the pinned JBR download
+      id: jbr
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.plan.outputs.jbr-key }}
+        path: ${{ steps.plan.outputs.jbr-path }}
