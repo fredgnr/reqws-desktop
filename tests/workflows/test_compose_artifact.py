@@ -8,7 +8,7 @@ import unittest
 from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from check_compose_artifact import HOST_OR_TEST_PACKAGES, S0_TEST_CLASSES, check_compose_artifact
+from check_compose_artifact import HOST_OR_TEST_PACKAGES, COMPOSE_TEST_CLASSES, check_compose_artifact
 import test_prepare_goland_release as fixtures
 
 
@@ -55,8 +55,8 @@ class ComposeArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Bundled host/test class'):
             check_compose_artifact(self.fixture(extra='META-INF/versions/25/kotlin/Runtime.class'), '1.2.3')
 
-    def test_rejects_the_known_s0_control_and_component_test_classes(self):
-        for name in S0_TEST_CLASSES:
+    def test_rejects_the_known_compose_control_and_component_test_classes(self):
+        for name in COMPOSE_TEST_CLASSES:
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'Bundled host/test class'):
                 check_compose_artifact(self.fixture(extra=name + '.class'), '1.2.3')
 

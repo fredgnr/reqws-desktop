@@ -1,4 +1,4 @@
-"""S0 opt-in check for a Compose candidate; does not build, install or launch it."""
+"""Validate runtime and test isolation of an explicit Compose candidate; never builds or launches it."""
 
 import argparse
 import io
@@ -19,6 +19,11 @@ NATIVE_SUFFIXES = ('.dylib', '.so', '.dll')
 S0_TEST_CLASSES = (
     'com/reqws/goland/ComposeHostProbeTest', 'com/reqws/goland/S0',
     'com/reqws/goland/ui/ReqwsComposeProbeLabelTest',
+)
+
+COMPOSE_TEST_CLASSES = S0_TEST_CLASSES + (
+    'com/reqws/goland/ComposeContentLifecycleTest', 'com/reqws/goland/ComposeLifecycle',
+    'com/reqws/goland/ui/ReqwsScreenTest', 'com/reqws/goland/ui/ReqwsTestTheme',
 )
 
 
@@ -43,7 +48,7 @@ def check_compose_artifact(path, version):
                         logical_name = name.split('/', 3)[-1]
                     if logical_name.endswith('.class'):
                         classes += 1
-                        if logical_name.startswith(HOST_OR_TEST_PACKAGES + S0_TEST_CLASSES):
+                        if logical_name.startswith(HOST_OR_TEST_PACKAGES + COMPOSE_TEST_CLASSES):
                             raise ValueError(f'Bundled host/test class: {logical_name}')
                     if name == 'META-INF/plugin.xml':
                         descriptor = ET.fromstring(jar.read(name))

@@ -602,3 +602,26 @@ tasks.register<Test>("composeContentHostTest") {
     systemProperty("user.home", runRoot.resolve("host-home").absolutePath)
   }
 }
+
+
+// Independent S2 component tests use host classes, never a second production runtime.
+val composeUiTestSourceSet = sourceSets.create("composeUiTest")
+composeUiTestSourceSet.compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+composeUiTestSourceSet.runtimeClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+kotlin.target.compilations.getByName("composeUiTest").associateWith(kotlin.target.compilations.getByName("main"))
+dependencies {
+  add(composeUiTestSourceSet.implementationConfigurationName, "junit:junit:4.13.2")
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-junit4-desktop:1.11.0") { isTransitive = false }
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.compose.ui:ui-test-desktop:1.11.0") { isTransitive = false }
+  add(composeUiTestSourceSet.implementationConfigurationName, "org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.10.2") { isTransitive = false }
+  // This stage validates the fixed local macOS arm64 environment. CI graphics are S3.
+  add(composeUiTestSourceSet.runtimeOnlyConfigurationName, "org.jetbrains.skiko:skiko-awt-runtime-macos-arm64:0.144.5") { isTransitive = false }
+}
+tasks.register<Test>("composeUiTest") {
+  testClassesDirs = composeUiTestSourceSet.output.classesDirs
+  classpath = composeUiTestSourceSet.runtimeClasspath
+  systemProperty("java.awt.headless", "false")
+  useJUnit()
+  failOnNoDiscoveredTests = true
+  maxParallelForks = 1
+}
