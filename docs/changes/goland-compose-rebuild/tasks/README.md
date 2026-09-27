@@ -5,8 +5,8 @@
 | 任务文档 | 状态 | 说明 |
 |---|---|---|
 | [S0 技术验证](s0-feasibility.md) | active | S0 已完成、G0 已通过；宿主依赖、真实输入、内容生命周期和测试运行时验证满足后续迁移的前置条件。 |
-| [S1 状态与宿主](s1-state-and-host.md) | draft | 固定状态/操作契约，接入有序订阅与内容生命周期。 |
-| [S2 Compose 界面](s2-compose-ui.md) | draft | 替换完整内容界面并补齐语义、布局与可访问性测试。 |
+| [S1 状态与宿主](s1-state-and-host.md) | active | 固定状态/操作契约，接入有序订阅与内容生命周期。 |
+| [S2 Compose 界面](s2-compose-ui.md) | active | 替换完整内容界面并补齐语义、布局与可访问性测试。 |
 | [S3 自动化集成](s3-test-automation.md) | draft | 接入独立 UI 测试和本机 Driver，验证真实集成而非服务直调。 |
 | [S4 清理与验收](s4-cleanup-and-acceptance.md) | draft | 删除旧代码，复核候选并完成独立审查和运行证据。 |
 
@@ -21,8 +21,8 @@
 | 阶段 | 当前执行状态 | 退出条件 | 未完成验证 |
 |---|---|---|---|
 | S0 | completed | [本轮记录](../s0-verification-2026-09-26.md)：依赖、组件、真实输入与内容生命周期通过，`7ad3387` 独立审查完成；按用户要求取消性能门禁后 G0 pass。 | 无 S0 必需项遗留；后续阶段仍按各自范围验证。 |
-| S1 | planned | G1：共享契约、有序状态与 disposal 有测试。 | CMP-V04/V05/V06 |
-| S2 | planned | G2：完整组件功能和必要语义覆盖。 | CMP-V07/V08/V09 |
+| S1 | completed | [S1 实施记录](../s1-verification-2026-09-27.md)：G1 pass，`cccc3de` 独立审查闭环；共享契约、有序状态和真实 Content 生命周期已验证。 | 无本阶段必需项遗留；V06 的完整卸载/重载仍由 S3 扩充。 |
+| S2 | in-progress | G2：完整组件功能和必要语义覆盖。 | CMP-V07/V08/V09 |
 | S3 | planned | G3：CI 组件测试、本机真实输入与 Project 树集成。 | CMP-V03/V06/V09/V10 |
 | S4 | planned | G4：旧 UI 清理、同候选检查与独立审查闭环。 | 全部必需项，重点 V02/V11/V12 |
 

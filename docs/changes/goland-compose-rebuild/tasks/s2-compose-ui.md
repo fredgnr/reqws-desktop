@@ -1,8 +1,8 @@
 ---
 title: S2 Compose 内容界面实现
 type: technical-design
-status: draft
-updated: 2026-09-26
+status: active
+updated: 2026-09-27
 ---
 
 # S2：实现完整 Compose 内容界面

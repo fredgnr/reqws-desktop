@@ -1,8 +1,8 @@
 ---
 title: S1 展示状态与宿主生命周期重构
 type: technical-design
-status: draft
-updated: 2026-09-26
+status: active
+updated: 2026-09-27
 ---
 
 # S1：固定状态契约和宿主接入
