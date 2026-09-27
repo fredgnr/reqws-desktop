@@ -31,6 +31,7 @@ import groovy.json.JsonSlurper
 
 plugins {
   id("org.jetbrains.kotlin.jvm")
+  id("org.jetbrains.kotlin.plugin.compose")
   id("org.jetbrains.intellij.platform")
 }
 
@@ -198,6 +199,7 @@ dependencies {
       validateSdk(localSdk, "compile")
       local(localSdk)
     }
+    composeUI()
     testFramework(TestFrameworkType.Platform)
     zipSigner("0.1.43")
     pluginVerifier(policy("pluginVerifierVersion"))
@@ -449,6 +451,10 @@ tasks.named("buildPlugin") { dependsOn(verifyCompatibilityDescriptor) }
 
 // Host-side Starter/Driver dependencies never extend production configurations.
 val integrationTestSourceSet = sourceSets.create("integrationTest")
+// The Compose compiler also visits Starter sources; keep its runtime compile-only there.
+integrationTestSourceSet.compileClasspath += configurations.compileClasspath.get().filter {
+  it.name == "intellij.libraries.compose.runtime.desktop.jar"
+}
 dependencies {
   val starterVersion = policy("starterVersion")
   listOf("ide-starter-squashed", "ide-starter-driver", "ide-starter-product-goland").forEach {
