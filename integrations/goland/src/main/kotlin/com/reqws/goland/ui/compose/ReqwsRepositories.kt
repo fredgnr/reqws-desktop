@@ -11,6 +11,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -20,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.reqws.goland.ReqwsBundle
 import com.reqws.goland.ui.state.ReqwsRepositoryUiState
 import org.jetbrains.jewel.foundation.theme.JewelTheme
+import org.jetbrains.jewel.foundation.theme.LocalTextStyle
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.VerticalScrollbar
@@ -32,6 +35,7 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
   var selectedId by remember { mutableStateOf<String?>(null) }
   val ids = repositories.map { it.catalogRepositoryId }
   LaunchedEffect(ids) { if (selectedId !in ids) selectedId = null }
+  val textMeasurer = rememberTextMeasurer()
   val colors = JewelTheme.globalColors
   val listColors = LocalSelectableLazyColumnStyle.current.simpleListItemStyle.colors
   ReqwsCard("reqws.repositories", padding = 0.dp, spacing = 0.dp) {
@@ -66,7 +70,14 @@ internal fun ReqwsRepositories(repositories: List<ReqwsRepositoryUiState>) {
                 .semantics(mergeDescendants = true) { contentDescription = full; stateDescription = status }
                 .testTag(tag)) {
                 BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 5.dp)) {
-                  val statusMaxWidth = (maxWidth - 8.dp) * (2f / 3f)
+                  val available = (maxWidth - 8.dp).coerceAtLeast(0.dp)
+                  val preferredNameWidth = with(LocalDensity.current) {
+                    textMeasurer.measure(repository.name, style = LocalTextStyle.current,
+                      softWrap = false, maxLines = 1).size.width.toDp()
+                  }
+                  // Match Swing's allocation: reserve at most one third for a
+                  // long name, but let a short name leave more room for status.
+                  val statusMaxWidth = available - minOf(preferredNameWidth, available / 3f)
                   Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReqwsLiteralText(repository.name, "$tag.name", modifier = Modifier.weight(1f),

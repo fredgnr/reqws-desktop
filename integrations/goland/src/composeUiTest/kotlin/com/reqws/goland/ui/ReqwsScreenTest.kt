@@ -439,6 +439,25 @@ class ReqwsScreenTest {
     screenshot("legacy-layout-dark")
   }
 
+  @Test fun shortRepositoryNameLeavesRemainingWidthForLongStatus() {
+    state.value = state.value.copy(repositories = listOf(row("root", "r", "repository.userRootCoverage")))
+    mount(width = 432)
+    val completeStatusWidth = node("reqws.repository.root.status", true).fetchSemanticsNode().boundsInRoot.width
+    // Leave only the original body/row padding, gap and the short name around
+    // the measured full status; a fixed two-thirds cap would truncate it here.
+    compose.runOnIdle { widthOverride.value = (completeStatusWidth + 60f).toInt() }
+    assertEquals(completeStatusWidth,
+      node("reqws.repository.root.status", true).fetchSemanticsNode().boundsInRoot.width, 1f)
+    compose.runOnIdle { state.value = state.value.copy(repositories = listOf(
+      row("root", "VeryLongRepositoryName".repeat(20), "repository.userRootCoverage"))) }
+    val row = node("reqws.repository.root").fetchSemanticsNode().boundsInRoot
+    val name = node("reqws.repository.root.name", true).fetchSemanticsNode().boundsInRoot
+    val status = node("reqws.repository.root.status", true).fetchSemanticsNode().boundsInRoot
+    assertTrue("long names retain their own share", name.width >= (row.width - 28f) / 3f - 1f)
+    assertTrue("only a long name reduces the status allocation", status.width < completeStatusWidth)
+    assertTrue(name.right <= status.left)
+  }
+
   private fun screenshot(name: String) {
     val image = node("reqws.screen").captureToImage()
     val directory = Path.of(System.getProperty("reqws.compose.reports", "build/reports/compose-ui"), "screenshots")
