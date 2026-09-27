@@ -69,6 +69,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           HISTORICAL: ${{ inputs.historical }}
+          ORG_GRADLE_PROJECT_reqwsVerificationOnly: 'true'
         run: |
           options=()
           if [[ "$HISTORICAL" == true ]]; then options+=(--historical); fi
