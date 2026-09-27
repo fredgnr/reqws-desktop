@@ -308,7 +308,10 @@ class ComposeHostInputTest {
         node("reqws.repositoryCount").moveMouse()
         node("reqws.diagnostics").moveMouse()
         waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
-        val popupBounds = stableBounds(tooltip).apply { grow(24, 24) }
+        // Driver can cache a detached semantics node while its reused host
+        // panel still reports showing. Reopening requires a fresh selector.
+        val reopenedTooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
+        val popupBounds = stableBounds(reopenedTooltip).apply { grow(24, 24) }
         val outsideTag = listOf("reqws.status", "reqws.workspace", "reqws.repositoryCount")
           .firstOrNull { !popupBounds.intersects(node(it).boundsOnScreen) }
         assertNotNull(outsideTag, "outside-click target must be outside the actual popup at this font size")
