@@ -204,12 +204,26 @@ internal class IdeScenarioHost {
       // Content scenario opts out explicitly while preserving model/PFI/tree checks.
       waitFor("ReqWS loaded count", 30.seconds) { count.present() }
       for (repository in fixture.userCoveredRepositories) {
-        val row = ideFrame().x { byAttribute("testtag", "reqws.repository.${fixture.repositories.getValue(repository)}") }
+        val tag = "reqws.repository.${fixture.repositories.getValue(repository)}"
+        val row = ideFrame().x { byAttribute("testtag", tag) }
+        var lastObservation: Pair<Map<String, String>, Map<String, String>>? = null
         waitFor("ReqWS explains the visible unselected user root", 30.seconds) {
-          row.present() && composeAttributes("reqws.repository.${fixture.repositories.getValue(repository)}").let { attributes ->
+          if (!row.present()) false else {
+            val attributes = composeAttributes(tag)
+            // Status owns a separate merged semantics node; its visible text is
+            // intentionally not merged into the selectable repository row.
+            val status = composeAttributes("$tag.status")
+            val observation = attributes to status
+            if (observation != lastObservation) {
+              Files.writeString(root.resolve("desktop-user-coverage-ui.jsonl"), json.writeValueAsString(mapOf(
+                "project" to fixture.shell.toString(), "revision" to fixture.revision, "tag" to tag,
+                "row" to attributes, "status" to status,
+              )) + "\n", StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+              lastObservation = observation
+            }
             val description = attributes["contentdescription"].orEmpty()
-            repository in description.lines() && "Included via User Project Root" in description &&
-              "Included via User Project Root" in attributes["text"].orEmpty()
+            repository in description.lines() && "Included via User Project Root" in description.lines() &&
+              repository in attributes["text"].orEmpty().split(" || ") && status["text"] == "Included via User Project Root"
           }
         }
       }
