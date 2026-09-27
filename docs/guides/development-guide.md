@@ -309,7 +309,7 @@ P12 导入必须使用 `security import -f pkcs12`；macOS 的自动格式识别
 
 证书有效期核对、P12/PEM 包装密码更新、Secrets 修复和身份迁移使用项目级 [reqws-signing-maintenance](../../.agents/skills/reqws-signing-maintenance/SKILL.md)。既有身份从指定私有备份的明确 commit 临时恢复；不重新建立固定 home/桌面备份。只更新包装密码不改公开 CER 或 pin；续签/换密钥按身份迁移处理，不能预设旧客户端继续接受。完成备份读回恢复后清理本地秘密材料，保留源码公开 CER；技能不自动授权发布或真实安装。
 
-CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。发布脚本回归使用 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
+CI/Release 使用 `-PreleaseVersion` 将插件内嵌版本绑定到项目/tag 版本；无参数本地构建仍保留默认版本。Electron 下载和稳定 GoLand IDE 缓存只用于加速，不能跳过 `npm ci`、`npm run check` 或插件验证。运行发布脚本回归的 CI `project-checks` 与 Release `checks` 各自使用 `fetch-depth: 0`，因为 S0 复现测试需通过 `git archive` 读取固定历史基线；其他 job 的完整 checkout 不能为它们提供 Git 对象。回归命令为 `python3 -m unittest discover -s tests/workflows -p 'test_*.py' -v`；真实 tag 发布及 GUI 验收仍需单独取证，历史版本资产不被改写。
 
 ## 10. 调试与安全操作
 
