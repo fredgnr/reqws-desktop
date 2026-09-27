@@ -164,7 +164,7 @@ def main():
     if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(summary, 'a', encoding='utf-8') as stream:
             stream.write(f"\n### API download cache: {args.target}\n\n")
-            stream.write('| Layer | Exact hit | Stored MiB | Cache eligibility |\n|---|---|---:|---|\n')
+            stream.write('| Layer | Exact hit | Download directory MiB | Cache eligibility |\n|---|---|---:|---|\n')
             for layer, result in (('sdk', sdk), ('jbr', jbr)):
                 hit = report['restore'][layer] == 'true'
                 reason = result['reason'] if layer != 'sdk' or plan['sdk-hot'] == 'true' else 'outside-hot-set'
