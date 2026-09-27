@@ -297,7 +297,7 @@ class ComposeHostInputTest {
         }
         capture("font-$size-$theme-tooltip")
         val tooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
-        val tooltipBounds = stableBounds(tooltip)
+        val tooltipBounds = stableBounds("reqws.diagnostics.tooltip")
         val tooltipRange = nativeVerticalScroll(tooltipBounds, fullDiagnostic)
         wheelToEnd(tooltip, tooltipRange, Point(tooltipBounds.centerX.toInt(), tooltipBounds.centerY.toInt()), "tooltip-$size-$theme")
         waitFor("tooltip remains open after real scrolling", 10.seconds) { tooltip.present() }
@@ -315,8 +315,7 @@ class ComposeHostInputTest {
         waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
         // Driver can cache a detached semantics node while its reused host
         // panel still reports showing. Reopening requires a fresh selector.
-        val reopenedTooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
-        val popupBounds = stableBounds(reopenedTooltip).apply { grow(24, 24) }
+        val popupBounds = stableBounds("reqws.diagnostics.tooltip").apply { grow(24, 24) }
         val outsideTag = listOf("reqws.status", "reqws.workspace", "reqws.repositoryCount")
           .firstOrNull { !popupBounds.intersects(node(it).boundsOnScreen) }
         assertNotNull(outsideTag, "outside-click target must be outside the actual popup at this font size")
@@ -359,20 +358,32 @@ class ComposeHostInputTest {
           // Compose semantics components have no AWT Window ancestor. Move by
           // the Driver's Compose-aware adapter, then wheel at the actual pointer.
           val body = node("reqws.body")
-          val bodyBounds = stableBounds(body)
+          val bodyBounds = stableBounds("reqws.body")
           wheelToEnd(body, nativeVerticalScroll(bodyBounds), Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
           val list = node("reqws.repositoryList")
-          val listBounds = stableBounds(list)
+          val listBounds = stableBounds("reqws.repositoryList")
           val firstY = node("reqws.repository.repo-a").boundsOnScreen.y
           wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme")
+          // Preserve the real font/scroll state even if the geometry assertion
+          // below fails and the outer finally restores the IDE settings.
+          capture("font-$size-$theme-long-list-after-wheel")
+          var previousGeometry = ""
           waitFor("real wheel reveals the complete final row in the actual viewport", 10.seconds) {
             val last = node("reqws.repository.repo-extra-8")
             if (!last.present()) false else {
-              val viewport = list.boundsOnScreen.intersection(node("reqws.body").boundsOnScreen)
+              // Lazy layout may replace semantics nodes while scrolling.
+              // Resolve the viewport again instead of reusing Driver's cache.
+              val viewport = node("reqws.repositoryList").boundsOnScreen.intersection(node("reqws.body").boundsOnScreen)
               val lastBounds = last.boundsOnScreen
               val first = node("reqws.repository.repo-a")
+              val firstBounds = if (first.present()) first.boundsOnScreen else null
+              val geometry = "dark=$dark viewport=$viewport last=$lastBounds firstBefore=$firstY firstAfter=$firstBounds"
+              if (geometry != previousGeometry) {
+                record("style-list-bounds", geometry)
+                previousGeometry = geometry
+              }
               viewport.contains(lastBounds) && lastBounds.height >= 50 &&
-                (!first.present() || first.boundsOnScreen.y < firstY)
+                (firstBounds == null || firstBounds.y < firstY)
             }
           }
           capture("font-$size-$theme-long-list")
@@ -411,11 +422,13 @@ class ComposeHostInputTest {
     }
   }
 
-  private fun Driver.stableBounds(component: UiComponent): Rectangle {
+  private fun Driver.stableBounds(tag: String): Rectangle {
     var previous = Rectangle()
     var since = System.nanoTime()
     waitFor("nonzero stable native layout bounds", 10.seconds) {
-      val next = component.boundsOnScreen
+      // A showing host panel does not prove a cached semantics node is still
+      // attached. Each observation must use the current native hierarchy.
+      val next = ui.x { byAttribute("testtag", tag) }.boundsOnScreen
       if (next != previous) { previous = next; since = System.nanoTime() }
       next.width > 0 && next.height > 0 && System.nanoTime() - since >= 300_000_000
     }
