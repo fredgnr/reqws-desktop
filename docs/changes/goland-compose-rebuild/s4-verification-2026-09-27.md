@@ -36,3 +36,6 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 完整本地门禁已通过：364平台测试、30组件/环境测试及指定失败/空发现探针，332类ZIP隔离、编译/禁用符号和2+7 API。独立Reviewer已核对固定提交、原始报告和同一ZIP，未发现该范围内的阻塞；[代码CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36302813633)成功。候选是 `/private/tmp/reqws-native-final-b86134b.zip`，私有身份文件为 `/private/tmp/reqws-native-final-candidate.json`。
 
 新ZIP已尝试原生Compose验收，但在 `reqws-compose-host-vi3pndej` 发生测试外点定位失败和Marketplace TLS错误，整体未通过；完整tooltip尾段、长列表/空提示以及legacy、Desktop继续待验收，G4未通过。定位修正已编译，未重跑；测试进程全部退出、测试设置已恢复。当前需要用户检查Marketplace网络/代理连接，详细证据见[环境阻断记录](product-design-2026-09-27.md#继续验收时的环境阻断)。恢复入口是现有专用profile与显式候选ZIP，不能重新构建后沿用旧宿主报告。确认、登录、权限或环境事项需要用户协助时，按本会话规则说明恢复点并暂停goal；不自动等待或继续绕过。
+
+
+最新恢复进度见[测试设施修正记录](product-design-2026-09-27.md#网络恢复后的测试设施修正)：同一 ZIP 的 legacy 已通过3项/9进程，Compose最新3项/1失败且重载和20周期通过；Desktop四项因旧Swing采图不支持Compose纹理失败。仅测试侧滚动观测和原生区域采图已修正并编译，25项报告检查通过，尚待真实复测。此前Marketplace阻断没有在本轮重载中再次发生；G4仍未通过。

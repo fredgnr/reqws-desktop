@@ -81,3 +81,16 @@ Compose 三个生产文件已实现标题 Medium 字重、最多三行的语义�
 动态启用/禁用动作本身完成，但Installed页面请求 [Marketplace元数据](https://plugins.jetbrains.com/files/34389/1177315/meta.json) 时反复发生 `SSLHandshakeException / EOFException`，随后成为IDE未处理错误，门禁正确判失败。只读SDK审查未找到可可靠停止该详情请求的公开离线开关；不屏蔽IDE错误、不绕过TLS、不用内部API或加载mock替代实际重载。继续该验收需要用户检查当前网络/代理到JetBrains Marketplace的连接。
 
 本轮没有新的生产代码或ZIP变化。修正后的集成测试编译记录为 `/private/tmp/reqws-native-outside-target-compile.log`；原始失败报告、截图与候选均保留。独立Reviewer已核对失败范围及测试修正，未将其判为G4通过。用户协助前保存恢复点并暂停，VoiceOver继续豁免。
+
+
+## 网络恢复后的测试设施修正
+
+用户提供的元数据与同一 JBR 后台两次成功 HTTPS 响应一致；文件未写入 IDE 缓存，也未绕过 TLS。用户于 08:13 UTC 授权约45分钟前台时段。生产 ZIP 仍为 `b86134b`，测试 HEAD `5cedc7e` 的 CI 已通过。
+
+`reqws-compose-host-dskf8et1` 原始结果为3项、1失败、0跳过，4个进程正常退出。动态重载和20轮 Content 已通过；输入在长列表末行断言失败，015截图仍未显示大字号 tooltip 末尾。独立审查还发现一次重开弹层的 present 早于非零布局，因此不把该零尺寸外点记录当有效几何证据。`reqws-local-ide-2820ykoq` 的 legacy 3项、9进程全部通过；独立 Reviewer 已核对 XML、进程序列与同一 ZIP。
+
+`reqws-local-ide-728zmyqq` 的 Desktop 四项在内容图采集时失败，4个已启动进程均退出。真实 Compose 的 Metal 纹理不能由旧 Swing root pane printAll 绘入 BufferedImage，报 Unsupported graphics configuration。该轮不证明四组联动通过。
+
+本轮仅修正测试设施：滚动观察使用标准 Java Accessibility 的只读纵向范围，等待非零稳定布局，以实际滚轮正/反方向探测位移并验证到达末尾；不调用语义滚动或产品同步。Desktop 采图改为标准 Robot 直接读取专用 IDE root pane 的实际屏幕区域，前后检查 active、几何和项目/PID，绝不为采图调用 focus。v8/schema2 拒绝旧图及缺少身份/active 记录的证据，继续完整 PNG 校验；仍需逐图检查实际内容与遮挡。
+
+集成测试编译和25项报告校验测试已通过，文档检查通过28个索引、128个文件。这些结果不替代修正后的原生执行。没有生产变更、catalog delta、新依赖或 API 例外；最低范围仍为整个262系列。Compose滚动与空提示、Desktop新采图和完整联动继续待复测，G4未通过。

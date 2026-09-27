@@ -490,8 +490,9 @@ class DesktopIdeTests(unittest.TestCase):
         file.write_bytes(CAPTURE_PNG)
         project = project or str(self.root)
         file.with_name(file.name + '.json').write_text(json.dumps({
-            'schemaVersion': 1, 'captureKind': CAPTURE_KIND, 'project': project, 'frameProject': project,
-            'frameTitle': 'Fixture - GoLand', 'pid': pid, 'width': 400, 'height': 300}))
+            'schemaVersion': 2, 'captureKind': CAPTURE_KIND, 'project': project, 'frameProject': project,
+            'frameTitle': 'Fixture - GoLand', 'pid': pid, 'width': 400, 'height': 300,
+            'screenX': 50, 'screenY': 80, 'activeBefore': True, 'activeAfter': True}))
         return str(file)
 
     def test_every_capture_requires_component_provenance_matching_project_pid_and_pixels(self):
@@ -499,7 +500,8 @@ class DesktopIdeTests(unittest.TestCase):
         validate_screenshot(self.root, filename, str(self.root), 100)
         sidecar = Path(filename + '.json')
         original = read_message(sidecar)
-        for key, value in [('schemaVersion', 2), ('captureKind', 'full-screen'), ('pid', 101), ('pid', True),
+        for key, value in [('schemaVersion', 1), ('captureKind', 'swing-root-pane-print-all'), ('captureKind', 'full-screen'),
+                           ('activeBefore', False), ('activeAfter', False), ('activeBefore', 1), ('screenX', True), ('screenY', 1.5), ('pid', 101), ('pid', True),
                            ('project', '/Applications/GoLand.app'), ('frameProject', '/foreign'),
                            ('frameTitle', ''), ('width', 1), ('height', 1)]:
             with self.subTest(field=key, value=value):
@@ -767,7 +769,7 @@ class DesktopIdeTests(unittest.TestCase):
         path.write_text(json.dumps(report))
         with patch('desktop_ide.subprocess.check_output', side_effect=['a' * 40 + '\n', '']):
             verify_report(path, archive, '0.1.7', 'desktop')
-        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('acceptanceVersion', 5), ('acceptanceVersion', 6), ('savedProjectionProofs', 4), ('projectionProofs', 20),
+        for field, value in [('acceptanceVersion', 1), ('acceptanceVersion', 2), ('acceptanceVersion', 3), ('acceptanceVersion', 4), ('acceptanceVersion', 5), ('acceptanceVersion', 6), ('acceptanceVersion', 7), ('savedProjectionProofs', 4), ('projectionProofs', 20),
                              ('projectionProofs', 31), ('tests', 3), ('processes', 6), ('processes', 8)]:
             stale = copy.deepcopy(report); stale['results'][field] = value
             path.write_text(json.dumps(stale))

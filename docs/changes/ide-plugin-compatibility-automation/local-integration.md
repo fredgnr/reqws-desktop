@@ -77,7 +77,7 @@ Driver 通过本轮 UUID 和递增序号请求 Desktop 创建五个普通文本 
 
 当前 `acceptanceVersion=7` 报告还要求 16 个协议请求、五份原生落盘证明及 37 张独立组件图。退出后只读核对各工作区的 `modules.xml`、精确 `.iml` 根与 journal companion marker，拒绝仅 IDE 缓存成功的结果。`verify-report` 重新读取原始 JUnit、协议、逐步投影、保存模型和进程证据；旧版本、缺报告、零执行或跳过均不能通过。
 
-通过证据使用真实 IDE Swing root pane 的 `printAll` 图像；侧车绑定实际 JVM PID、项目、frame 标题和尺寸，门禁检查完整 PNG chunk/CRC 与有界解压。它不证明 macOS 窗口装饰或遮挡。正常退出和周期全屏采集已关闭，但固定 SDK 在异常或超时时仍可能生成含其他窗口的全屏诊断图。此次用户已明确允许它们仅留私有测试目录；不得上传、展示为 IDE 通过证据或把本次许可当作发布授权。
+通过证据采集方式在 Compose 候选上改为标准 JDK Robot 直接读取专用 IDE root pane 的屏幕区域（v8 目标）。旧 Swing printAll 无法绘制宿主 Metal 纹理；不切换渲染后端、不隐藏 Compose。采集前后要求该 IDE 已处于 active 状态、项目/PID/区域坐标与尺寸不变，且不主动激活窗口；不满足就失败，不能用 focus 补偿 G2 的后台刷新。侧车绑定实际 JVM PID、项目、frame 标题、屏幕区域、active 状态和尺寸，门禁继续检查完整 PNG chunk/CRC 与有界解压。原始图仍需检查可见内容与遮挡；active 本身不能证明没有其他窗口覆盖。正常退出和周期全屏采集保持关闭，异常全屏诊断仅留私有测试目录。新方式在本轮实跑前不是通过证据，旧 v7 原始记录保留。
 
 Starter 的 ZIP reader 需要可写句柄，解包失败时还可能删除输入。因此两个 suite 都先将显式候选按原字节复制到本轮私有 `candidate/plugin.zip`（0600），只把该副本交给 Starter；调用方原 ZIP 可以保持只读。报告分别记录原件和安装副本，安装前后及通过前检查摘要一致，副本丢失/被改写均失败；不重建、重签或修改原候选。
 

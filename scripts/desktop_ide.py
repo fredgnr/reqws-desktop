@@ -20,8 +20,8 @@ from ide_compatibility import read_policy
 DESKTOP_TITLE = 'S4 Desktop UI drives the local IDE through an isolated session'
 NAMES = {'selection', 'trust', 'invalid-binding', 'invalid-manifest', 'coverage'}
 REPOSITORIES = {'repo-a', 'repo-b', 'repo-c'}
-ACCEPTANCE_VERSION = 7
-CAPTURE_KIND = 'swing-root-pane-print-all'
+ACCEPTANCE_VERSION = 8
+CAPTURE_KIND = 'active-ide-root-pane-screen-region'
 PROJECTION_PROOFS = 32
 SAVED_PROJECTION_PROOFS = 5
 ERROR_UI_PROOFS = 4
@@ -512,9 +512,11 @@ def validate_screenshot(run_root, filename, project, pid):
     capture = read_message(metadata_path)
     project_path = Path(project)
     if (not isinstance(capture, dict)
-            or set(capture) != {'schemaVersion', 'captureKind', 'project', 'pid', 'frameProject', 'frameTitle', 'width', 'height'}
-            or type(capture.get('schemaVersion')) is not int or capture['schemaVersion'] != 1
+            or set(capture) != {'schemaVersion', 'captureKind', 'project', 'pid', 'frameProject', 'frameTitle', 'width', 'height', 'screenX', 'screenY', 'activeBefore', 'activeAfter'}
+            or type(capture.get('schemaVersion')) is not int or capture['schemaVersion'] != 2
             or capture.get('captureKind') != CAPTURE_KIND
+            or capture.get('activeBefore') is not True or capture.get('activeAfter') is not True
+            or type(capture.get('screenX')) is not int or type(capture.get('screenY')) is not int
             or type(pid) is not int or pid <= 0 or type(capture.get('pid')) is not int or capture['pid'] != pid
             or not project_path.is_absolute() or not project_path.is_relative_to(run_root)
             or not project_path.is_dir() or project_path.resolve() != project_path
@@ -524,7 +526,7 @@ def validate_screenshot(run_root, filename, project, pid):
             or type(capture.get('width')) is not int or type(capture.get('height')) is not int
             or (capture['width'], capture['height']) != (width, height)
             or width < 320 or height < 200 or width * height > 64 * 1024 * 1024):
-        raise ValueError('Screenshot does not identify the actual test IDE Swing content, project and process')
+        raise ValueError('Screenshot does not identify the actual active test IDE content region, project and process')
 
 
 def validate_png(data):

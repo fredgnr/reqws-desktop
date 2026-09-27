@@ -16,7 +16,11 @@ import com.intellij.driver.sdk.singleProject
 import com.intellij.driver.sdk.ui.boundsOnScreen
 import com.intellij.driver.sdk.ui.getClipboardText
 import com.intellij.driver.sdk.ui.copyToClipboard
+import java.awt.Point
+import java.awt.Rectangle
 import java.awt.event.KeyEvent
+import com.intellij.driver.sdk.WaitForException
+import com.intellij.driver.sdk.ui.components.UiComponent
 import com.intellij.driver.sdk.ui.components.common.ideFrame
 import com.intellij.driver.sdk.ui.components.elements.balloon
 import com.intellij.driver.sdk.ui.components.settings.clickOkBtnAndCloseDialog
@@ -293,9 +297,9 @@ class ComposeHostInputTest {
         }
         capture("font-$size-$theme-tooltip")
         val tooltip = ui.x { byAttribute("testtag", "reqws.diagnostics.tooltip") }
-        record("style-tooltip-bounds", "font=$size dark=$dark bounds=${tooltip.boundsOnScreen}")
-        tooltip.moveMouse()
-        tooltip.robot.rotateMouseWheel(12)
+        val tooltipBounds = stableBounds(tooltip)
+        val tooltipRange = nativeVerticalScroll(tooltipBounds, fullDiagnostic)
+        wheelToEnd(tooltip, tooltipRange, Point(tooltipBounds.centerX.toInt(), tooltipBounds.centerY.toInt()), "tooltip-$size-$theme")
         waitFor("tooltip remains open after real scrolling", 10.seconds) { tooltip.present() }
         capture("font-$size-$theme-tooltip-tail")
         node("reqws.copyDiagnostics").keyboard { escape() }
@@ -304,7 +308,7 @@ class ComposeHostInputTest {
         node("reqws.repositoryCount").moveMouse()
         node("reqws.diagnostics").moveMouse()
         waitFor("tooltip reopens before the outside-click check", 10.seconds) { tooltip.present() }
-        val popupBounds = tooltip.boundsOnScreen.apply { grow(24, 24) }
+        val popupBounds = stableBounds(tooltip).apply { grow(24, 24) }
         val outsideTag = listOf("reqws.status", "reqws.workspace", "reqws.repositoryCount")
           .firstOrNull { !popupBounds.intersects(node(it).boundsOnScreen) }
         assertNotNull(outsideTag, "outside-click target must be outside the actual popup at this font size")
@@ -328,7 +332,7 @@ class ComposeHostInputTest {
         copyToClipboard("style-copy-sentinel")
         node("reqws.copyDiagnostics").strictClick()
         waitFor("complete diagnostic copy is repeatable", 10.seconds) { getClipboardText().toString() == fullCopy }
-        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltipText=complete tooltipTail=manual-review copy=full actions=3 escape=true outside=true")
+        record("style-layout", "font=$size dark=$dark width=${screen.width} row=${node("reqws.repository.repo-a").boundsOnScreen.height} tooltipText=complete tooltipScroll=end tooltipTail=manual-review copy=full actions=3 escape=true outside=true")
         if (largeFont) {
           val manifest = mapper.readTree(originalManifest) as ObjectNode
           val repositories = manifest.withArray("repositories")
@@ -346,12 +350,13 @@ class ComposeHostInputTest {
           capture("font-$size-$theme-long-list-before")
           // Compose semantics components have no AWT Window ancestor. Move by
           // the Driver's Compose-aware adapter, then wheel at the actual pointer.
-          node("reqws.workspace").moveMouse()
-          node("reqws.body").robot.rotateMouseWheel(8)
+          val body = node("reqws.body")
+          val bodyBounds = stableBounds(body)
+          wheelToEnd(body, nativeVerticalScroll(bodyBounds), Point(bodyBounds.x + 2, bodyBounds.y + 4), "body-$theme")
           val list = node("reqws.repositoryList")
-          list.moveMouse()
+          val listBounds = stableBounds(list)
           val firstY = node("reqws.repository.repo-a").boundsOnScreen.y
-          list.robot.rotateMouseWheel(8)
+          wheelToEnd(list, nativeVerticalScroll(listBounds), Point(listBounds.centerX.toInt(), listBounds.centerY.toInt()), "list-$theme")
           waitFor("real wheel reveals the complete final row in the actual viewport", 10.seconds) {
             val last = node("reqws.repository.repo-extra-8")
             if (!last.present()) false else {
@@ -396,6 +401,48 @@ class ComposeHostInputTest {
       val delta = originalWidth - node("reqws.screen").boundsOnScreen.width
       withContext(OnDispatcher.EDT) { window.stretchWidth(delta) }
     }
+  }
+
+  private fun Driver.stableBounds(component: UiComponent): Rectangle {
+    var previous = Rectangle()
+    var since = System.nanoTime()
+    waitFor("nonzero stable native layout bounds", 10.seconds) {
+      val next = component.boundsOnScreen
+      if (next != previous) { previous = next; since = System.nanoTime() }
+      next.width > 0 && next.height > 0 && System.nanoTime() - since >= 300_000_000
+    }
+    return Rectangle(previous)
+  }
+
+  private fun Driver.wheelToEnd(component: UiComponent, range: NativeScrollRange, point: Point, label: String) {
+    val initial = range.current()
+    val maximum = range.maximum()
+    record("style-scroll-start", "$label current=$initial max=$maximum bounds=${range.bounds}")
+    if (maximum <= initial + 0.5) return
+    var direction = 0
+    for (step in listOf(8, -8)) {
+      component.robot.moveMouse(point)
+      val actual = utility<NativeMouseInfo>().getPointerInfo().getLocation()
+      check(range.bounds.contains(actual)) { "Actual pointer $actual is outside ${range.bounds}" }
+      if (!label.startsWith("tooltip-")) node("reqws.copyDiagnostics").keyboard { escape() }
+      component.robot.rotateMouseWheel(step)
+      val moved = try {
+        waitFor("real wheel changes $label scroll position", 2.seconds) { range.current() > initial + 0.5 }
+        true
+      } catch (_: WaitForException) { false }
+      record("style-scroll-probe", "$label step=$step pointer=$actual current=${range.current()} max=${range.maximum()}")
+      if (moved) { direction = step; break }
+    }
+    check(direction != 0) { "Neither real wheel direction moved $label" }
+    repeat(12) {
+      if (range.current() < range.maximum() - 0.5) {
+        component.robot.moveMouse(point)
+        if (!label.startsWith("tooltip-")) node("reqws.copyDiagnostics").keyboard { escape() }
+        component.robot.rotateMouseWheel(direction)
+      }
+    }
+    waitFor("real wheel reaches $label scroll end", 10.seconds) { range.current() >= range.maximum() - 0.5 }
+    record("style-scroll-end", "$label current=${range.current()} max=${range.maximum()} direction=$direction")
   }
 
   private fun replaceStyleManifest(path: Path, bytes: ByteArray) {
