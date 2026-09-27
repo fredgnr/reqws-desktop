@@ -161,7 +161,7 @@ python3 "$PROBE/scripts/run_compose_s0.py" \
 
 ### ReqwsToolWindowPanelTest
 
-[实际源码](../../../integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanelTest.kt)。文本、布局与可访问行为；只替换 Swing 类型断言。
+[实际源码](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanelTest.kt)。文本、布局与可访问行为；只替换 Swing 类型断言。
 
 | 旧方法 / 保护意图 | 新类 / 方法及状态 | V-ID |
 |---|---|---|
@@ -191,7 +191,7 @@ python3 "$PROBE/scripts/run_compose_s0.py" \
 
 ### ReqwsToolWindowViewModelTest
 
-[实际源码](../../../integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowViewModelTest.kt)。保留业务状态、投影证明及错误优先级。
+[实际源码](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowViewModelTest.kt)。保留业务状态、投影证明及错误优先级。
 
 | 旧方法 / 保护意图 | 新类 / 方法及状态 | V-ID |
 |---|---|---|
@@ -218,7 +218,7 @@ python3 "$PROBE/scripts/run_compose_s0.py" \
 
 ### LatestOnlyEdtDispatcherTest
 
-[实际源码](../../../integrations/goland/src/test/kotlin/com/reqws/goland/ui/LatestOnlyEdtDispatcherTest.kt)。后到值优先、有序投递及终态拒绝。
+[实际源码](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/test/kotlin/com/reqws/goland/ui/LatestOnlyEdtDispatcherTest.kt)。后到值优先、有序投递及终态拒绝。
 
 | 旧方法 / 保护意图 | 新类 / 方法及状态 | V-ID |
 |---|---|---|

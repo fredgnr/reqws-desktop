@@ -4,7 +4,7 @@
 
 ## 状态与授权范围
 
-- 方案状态：draft；S0/S1/S2 已 completed，G0/G1/G2 pass，S3 in-progress、S4 planned。实际范围分别见 [S0](s0-verification-2026-09-26.md)、[S1](s1-verification-2026-09-27.md) 和 [S2](s2-verification-2026-09-27.md) 验证记录；性能指标不参与验收。
+- 方案状态：draft；S0/S1/S2 已 completed，G0/G1/G2 pass，S3 completed、G3 pass、S4 in-progress。实际范围分别见 [S0](s0-verification-2026-09-26.md)、[S1](s1-verification-2026-09-27.md) 和 [S2](s2-verification-2026-09-27.md) 验证记录；性能指标不参与验收。
 - 初始调研基线：`main@b50a6b15d50658e067d3dd9283ea062e06aff559`；调研日期：2026-09-26。S0 实际基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85` 加本轮验证补丁。2026-09-27 rebase 后，重建脚本改用主线可达的 `e90cd310b2250594a22148b877b9a6882e752943`；已通过 Git diff 确认所归档的 `integrations/goland`、`scripts` 与 `package.json` 完全一致，历史验收记录保持原提交身份。
 - 初始文档 PR 只包含方案和索引。2026-09-26 用户授权在 `feat/plugin_rebuild_compose` 执行 S0；S0 使用隔离候选与专用测试 IDE，当时保留正式 Swing UI，不安装日常 IDE、不发布。
 - 2026-09-27 用户授权完成 S1/S2；正式 Factory 已切换生产 Compose 内容，完整界面和状态/宿主验证已通过独立审查，见 [S1 验证记录](s1-verification-2026-09-27.md)与 [S2 验证记录](s2-verification-2026-09-27.md)。这是此前 S1/S2 的阶段范围。用户随后授权 rebase 主线并在新 goal 会话完成 S3/S4、推送现有 Draft PR 且确保最终 CI 通过；当前进度见 [S3记录](s3-verification-2026-09-27.md)。
@@ -19,7 +19,8 @@
 | [Subagent 协作方案](subagent-plan.md) | draft | 定义按需委派、模型核验、并发文件隔离、任务提示词和集成职责。 |
 | [测试与验收方案](test-plan.md) | draft | 定义分层验证、覆盖迁移、真实交互、生命周期及候选证据要求，性能指标不参与验收。 |
 | [调研依据](research.md) | draft | 区分已核对源码、官方能力、工程决策和仍需 S0 验证的假设。 |
-| [S3 集成记录](s3-verification-2026-09-27.md) | active | 记录独立CI入口、覆盖补齐、真实宿主场景和未完成验收；G3尚未通过。 |
+| [S4 清理记录](s4-verification-2026-09-27.md) | active | 跟踪旧实现删除、最终候选及待完成验收。 |
+| [S3 集成记录](s3-verification-2026-09-27.md) | active | 记录24组件、独立CI、原生输入/主题/重载/20轮资源证据和独立审查，G3 pass。 |
 | [S2 验证记录](s2-verification-2026-09-27.md) | active | 记录完整生产屏幕、18 个组件用例、同候选检查和独立审查，G2 pass。 |
 | [S1 验证记录](s1-verification-2026-09-27.md) | active | 记录生产状态/宿主实现、95 个直接测试、最小宿主与独立审查闭环。 |
 | [S0 验证记录](s0-verification-2026-09-26.md) | active | 记录精确工具链、可复现探针、功能检查、真实输入与内容循环、独立审查和 G0 通过结论。 |

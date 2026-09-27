@@ -15,12 +15,12 @@ updated: 2026-09-27
 
 | 证据 | 核对结果 |
 |---|---|
-| [Panel 源码](../../../integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanel.kt) | Swing 内容集中在单个文件，包含布局、自绘、列表及操作适配。 |
-| [ViewModel 源码](../../../integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowViewModel.kt) | 已有独立状态映射和投影确认逻辑，可保留语义而非整体重写。 |
+| [Panel 源码](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanel.kt) | Swing 内容集中在单个文件，包含布局、自绘、列表及操作适配。 |
+| [ViewModel 源码](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/main/kotlin/com/reqws/goland/ui/ReqwsToolWindowViewModel.kt) | 已有独立状态映射和投影确认逻辑，可保留语义而非整体重写。 |
 | [Publisher 源码](../../../integrations/goland/src/main/kotlin/com/reqws/goland/project/TerminalStatePublisher.kt) | 初始快照、有序投递和终态保护已经实现。 |
 | [构建配置](../../../integrations/goland/build.gradle.kts)与[工具链配置](../../../integrations/goland/settings.gradle.kts) | 当前 Kotlin 2.3.20、JVM 25、Gradle plugin 2.18.1；生产 forbidden-symbol/Verifier 检查存在。 |
 | [兼容政策](../../../integrations/goland/compatibility.properties)与[描述符](../../../integrations/goland/src/main/resources/META-INF/plugin.xml) | 当前编译 2026.2、GUI 代表 2026.2.1.1、最低 262，不代表 Compose 已获验证。 |
-| [现有 UI 测试](../../../integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanelTest.kt) | 同时包含 Swing 细节断言与必须保留的长文本、安全和可访问性意图。 |
+| [现有 UI 测试](https://github.com/fredgnr/reqws-desktop/blob/d56d8f7c5ec3429e9a518cd89b8c86390228914f/integrations/goland/src/test/kotlin/com/reqws/goland/ui/ReqwsToolWindowPanelTest.kt) | 同时包含 Swing 细节断言与必须保留的长文本、安全和可访问性意图。 |
 | [现有自动化入口](../ide-plugin-compatibility-automation/README.md) | 平台/API 检查与本机完整 IDE 场景分离，现有未完成边界不能被本计划清零。 |
 
 ## 官方依据

@@ -1,7 +1,7 @@
 ---
 title: S4 旧 UI 清理与集成验收
 type: technical-design
-status: draft
+status: active
 updated: 2026-09-27
 ---
 

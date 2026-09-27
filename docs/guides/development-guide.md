@@ -207,7 +207,7 @@ Git 子进程必须使用参数数组和 `shell: false`，清理继承的 `GIT_*
 | GoLand unit/platform | Kotlin/JUnit + IntelliJ test framework | 修改 manifest、项目模型、VCS、VFS、trust、Tool Window 或 plugin descriptor 时运行。 |
 | 本机 Desktop→IDE | 真实 Desktop 保存、固定 GoLand 的模型/PFI/Project 与恢复 | 跨进程或图形集成受到影响时，在获准的专用 profile 对显式 ZIP 运行；不进入 CI。 |
 | Plugin compatibility | configuration/structure checks + Plugin Verifier | 最终插件候选保留最低/固定代表目标，并冻结完整正式 API 矩阵；中间子任务按影响验证装配，不重复完整矩阵。 |
-| GoLand Compose | 真实生产屏幕与独立 Jewel 组件测试 | UI 变更补跑 `composeUiTest`；本轮验证本机 JBR/macOS arm64，CI 图形接线仍属 S3。 |
+| GoLand Compose | 真实生产屏幕与独立 Jewel 组件测试 | UI 变更补跑 `composeUiTest`；SDK JBR 图形环境运行，独立CI与失败/空发现探针已接通。 |
 | Full check | 类型、lint、i18n、docs 和全部测试 | Desktop 代码候选交付前在环境支持时运行；不因纯文档改动重复全量测试。 |
 | Documentation / skills | 索引、链接、metadata 和相关 skill 场景 | 文档运行 docs:check；skill 另查参考链接和行为场景，不把静态检查当作模型 eval。 |
 
@@ -231,7 +231,7 @@ npm run package:goland
 
 `buildPlugin` 的本地 ZIP 位于 `integrations/goland/build/distributions/`，消费者读取 `build/release/plugin-archive.txt` 的精确产物路径；Gradle cache、sandbox 和 build output 均不可提交。完整 IDE 使用[本机独占入口](../changes/ide-plugin-compatibility-automation/local-integration.md)，不绕过 profile 与授权保护直接运行。磁盘安装与 Tool Window 操作见[GoLand 插件使用指南](goland-plugin-guide.md)，需要真实安装/重启时仍遵守原授权边界。
 
-生产使用 IDE 的 Compose/Jewel 运行时。Compose 内容目前使用状态 Mapper、Content 级 Presenter 和独立平台动作适配；列表选择不改变 Desktop 加载配置。`composeUiTest` 只使用测试专属主题/渲染依赖，不启动完整 IDE，也不证明系统 VoiceOver 或真实宿主键鼠通过。独立组件及失败/空发现探针由 `python3 scripts/check_compose_ui.py` 运行，`check:goland` 和独立 CI 任务也要求该门禁；CI 不启动完整 IDE。20轮 Content 隐藏/重建及冷恢复验证使用[插件 README](../../integrations/goland/README.md)中的确切 ZIP 入口，真实键鼠/主题/缩放/重载需本轮前台时段并显式添加 `--allow-input`；阶段边界见 [Compose 重构](../changes/goland-compose-rebuild/README.md)。旧 Swing 源码与测试在 S4 清理前保留。
+生产使用 IDE 的 Compose/Jewel 运行时。Compose 内容目前使用状态 Mapper、Content 级 Presenter 和独立平台动作适配；列表选择不改变 Desktop 加载配置。`composeUiTest` 只使用测试专属主题/渲染依赖，不启动完整 IDE，也不证明系统 VoiceOver 或真实宿主键鼠通过。独立组件及失败/空发现探针由 `python3 scripts/check_compose_ui.py` 运行，`check:goland` 和独立 CI 任务也要求该门禁；CI 不启动完整 IDE。20轮 Content 隐藏/重建及冷恢复验证使用[插件 README](../../integrations/goland/README.md)中的确切 ZIP 入口，真实键鼠/主题/缩放/重载需本轮前台时段并显式添加 `--allow-input`；阶段边界见 [Compose 重构](../changes/goland-compose-rebuild/README.md)。旧 Swing 内容、ViewModel 和专属 dispatcher 已清理；领域/安全测试继续保留。
 
 ### 插件开发与验收边界
 

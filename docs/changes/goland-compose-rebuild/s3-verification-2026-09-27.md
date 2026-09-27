@@ -7,7 +7,7 @@ updated: 2026-09-27
 
 # Compose S3 自动化集成
 
-本记录跟踪 rebase 后 S3 的测试接线、覆盖补齐与真实宿主验收；当前 S3 in-progress、G3 尚未通过，S4 尚未开始。
+本记录跟踪 rebase 后 S3 的测试接线、覆盖补齐与真实宿主验收；以下保留执行过程；最终 S3 completed、G3 pass，S4 已进入独立清理验收。
 
 ## 候选与边界
 
@@ -48,3 +48,13 @@ Main 独占实现 checkout、构建输出、专用 IDE profile 与远端写入�
 旧视觉ZIP上的 `t2_33rwc` 与 `h0u65vwc` 均实际完成20轮Content及两个冷进程；后者动态禁用/启用也通过。卸载会清空平台普通Disposable历史，故测试改用公开 `CheckedDisposable` 子标记观察Content/session，未因此修改生产处置链。新增跨测试类共享启动计数和临时禁用清单，避免污染专用授权profile。真实Shift+Tab在旧视觉候选仍失败，新候选加入公开AWT焦点和Compose语义的只读诊断，未用强制聚焦伪造键盘通过。上述报告是调试范围证据，不借给视觉修复后的候选。前台时段已结束，全部测试进程退出，VoiceOver始终未启用。
 
 独立Reviewer `/root/s3_review`（`astra/gpt-6-astra/xhigh`，宿主显式参数核验verified）对固定 `8161e77` 报告4项问题：未打开面板helper矛盾、发布依赖断言未更新、键盘复制借旧反馈、weekly source-ref未冻结。Main已分别修复；Reviewer后续指出禁用状态恢复不能用loaded代替enabled，已将设置隔离到run-root并无条件恢复复选框。修复后的固定提交复核仍待执行。全部248项Python工作流回归在允许读取隔离子进程信息的环境中通过；此前无该权限的3项失败与真实发布断言失败分别保留。
+
+## G3 最终收口
+
+最终生产实现固定为 `c04431d`；宿主修复固定为 `d56d8f7`，二者仅相差两个 integrationTest 文件，生产ZIP字节未变。24组件（0失败/跳过）及刻意失败/空发现探针在干净 `c04431d` 执行，报告为 `run-3huikc76/evidence`。[CI 36293428408](https://github.com/fredgnr/reqws-desktop/actions/runs/36293428408) 的独立组件、平台、工作流、Desktop Electron、打包及7个API目标全部通过；不声称后续测试提交已完成相同远端检查。
+
+本机最终 `v6k6imaf`（私有临时目录 `reqws-compose-host-v6k6imaf`）重新编译最终宿主：3项JUnit通过、0跳过；4个进程均 started→passed→exited，20轮Content成立。真实指针同步/复制、Shift+Tab、Space同步/复制、Enter打开确切manifest、明暗主题×100%/125%缩放、动态禁用/启用及内容销毁、未打开面板2→1→0→2和冷启动恢复均完成。主题/缩放已恢复，VoiceOver未启用。确切S3 ZIP副本在 `/private/tmp/reqws-compose-s3-c04431d.zip`，与原报告字节核对一致。
+
+`s7n2nfut`、`b9ferocw`、`mockoe9s` 保留失败：原生延迟GOROOT提示遮挡输入，或设置helper等待无关Marketplace spinner。最终测试仅实际悬停/关闭提示并等待无遮挡区间；Installed等待真正可操作的ReqWS复选框，保留勾选、加载和销毁断言。不修改Go/通知设置，不用业务服务直调替代输入。布局截图独立记录，主题截图仍严格要求四张。
+
+Main和Reviewer核对同深色、同窗口宽度、同fixture的旧Swing/新Compose真实截图，布局、信息层级和对齐一致，仅有宿主控件的少量纵向度量差异。Reviewer复核固定 `d56d8f7`、原始JUnit/进程/循环/截图与ZIP一致性，确认全部问题闭环、无剩余阻塞，**G3 pass**。不代替清理后S4的最终检查。
