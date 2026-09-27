@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import configure_plugin_publishing as config
 import plugin_signing as signing
 import test_macos_update_release as release_tests
+from test_workflow_telemetry import steps_after_telemetry
 
 
 class ConfigurationSafetyTests(unittest.TestCase):
@@ -119,7 +120,7 @@ class MarketplaceWorkflowTests(unittest.TestCase):
         self.assertIn("'automatic'", job['if'])
         self.assertNotIn('secrets.', json.dumps(job['env']))
         self.assertNotIn('runner.', json.dumps(job['env']))
-        self.assertIn('RUNNER_TEMP', job['steps'][0]['run'])
+        self.assertIn('RUNNER_TEMP', steps_after_telemetry(self, job)[0]['run'])
         steps = job['steps']
         intent = next(i for i, step in enumerate(steps) if step.get('id') == 'intent')
         post = next(i for i, step in enumerate(steps) if 'JETBRAINS_MARKETPLACE_TOKEN' in step.get('env', {}))

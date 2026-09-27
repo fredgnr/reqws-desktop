@@ -15,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from test_workflow_telemetry import steps_after_telemetry
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from ide_ci import aggregate_desktop, classify
@@ -554,7 +556,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertLessEqual(upload['with']['retention-days'], 7)
             self.assertNotIn('/Users/runner', upload['with']['path'])
             self.assertNotIn('continue-on-error', job)
-            self.assertFalse(any(step.get('continue-on-error') for step in job['steps']))
+            self.assertFalse(any(step.get('continue-on-error') for step in steps_after_telemetry(self, job)))
         for forbidden in ('run_local_ide.py', 'runIdeWithDriver', 'JETBRAINS_LICENSE_SERVER', 'secrets.', 'id-token'):
             self.assertNotIn(forbidden, json.dumps(ci))
         config = (ROOT / 'playwright.packaged.config.ts').read_text()
