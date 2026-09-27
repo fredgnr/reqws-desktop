@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -36,6 +37,17 @@ jobs:
       plugin: ${{ steps.impact.outputs.plugin }}
       localIntegrationRecommended: ${{ steps.impact.outputs.localIntegrationRecommended }}
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -50,6 +62,24 @@ jobs:
           path: impact.json
           retention-days: 14
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   docs:
     name: Documentation checks
     needs: impact
@@ -57,6 +87,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -65,6 +106,24 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
       - run: npm run docs:check
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
 
   project-checks:
     needs: impact
@@ -76,6 +135,17 @@ jobs:
       CI: 'true'
 
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,6 +185,24 @@ jobs:
       - name: Run project checks
         run: npm run check
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   desktop-e2e:
     name: Desktop Electron regression
     needs: impact
@@ -125,6 +213,17 @@ jobs:
       CI: 'true'
       REQWS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -151,6 +250,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   macos-package:
     needs: impact
     if: ${{ needs.impact.outputs.docsOnly != 'true' }}
@@ -162,6 +279,17 @@ jobs:
       REQWS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -191,6 +319,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   # Preserve the existing required check name. Neither a failed nor a cancelled
   # dependency may become a green aggregate; all original checks still run.
   checks:
@@ -203,6 +349,17 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -250,6 +407,24 @@ jobs:
               ('checks', 'CHECK_RESULT'), ('package', 'PACKAGE_RESULT'), ('e2e', 'E2E_RESULT')]}))
           PYTHON
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-targets:
     name: Freeze official GoLand targets
     needs: impact
@@ -259,6 +434,17 @@ jobs:
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -272,6 +458,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-build:
     name: Baseline GoLand tests and candidate
     needs: impact
@@ -281,6 +485,17 @@ jobs:
     env:
       CI: 'true'
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -323,6 +538,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7
+
   plugin-compose:
     needs: impact
     if: ${{ needs.impact.outputs.plugin == 'true' }}
@@ -345,6 +578,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Collect workflow telemetry
+        uses: ycfreeman/workflow-telemetry-action@72ec425db8a31670fdc4419966940a6d980a0b49 # v3.0.2
+        continue-on-error: true
+        with:
+          github_token: ${{ github.token }}
+          metric_frequency: '5'
+          comment_on_pr: 'false'
+          job_summary: 'true'
+          proc_trace_chart_show: 'false'
+          proc_trace_table_show: 'false'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -366,3 +610,21 @@ jobs:
               ('build', 'BUILD_RESULT'), ('verification', 'VERIFICATION_RESULT'), ('compose', 'COMPOSE_RESULT')]}))
           PYTHON
           echo "Local IDE integration: not run by CI; see the separate candidate-bound local report." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export workflow telemetry
+        id: telemetry-export
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: python3 scripts/export_workflow_telemetry.py
+      - name: Upload workflow telemetry
+        if: ${{ always() && steps.telemetry-export.outputs.file != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.telemetry-export.outputs.artifact }}
+          path: ${{ steps.telemetry-export.outputs.file }}
+          if-no-files-found: error
+          retention-days: 7

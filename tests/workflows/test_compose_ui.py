@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from check_compose_ui import check_reports, PROBE_CLASS, PROBE_NAME, MARKER
 from check_compose_host_reports import check_host_reports, check_input_probe_reports
 from test_ide_compatibility import load_yaml
+from test_workflow_telemetry import steps_after_telemetry
 
 
 class ComposeReportsTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class ComposeReportsTests(unittest.TestCase):
         ci = load_yaml('.github/workflows/ci.yml')['jobs']
         self.assertIn('plugin-compose', ci['goland-plugin']['needs'])
         self.assertEqual(ci['plugin-compose']['uses'], './.github/workflows/goland-compose.yml')
-        self.assertIn('COMPOSE_RESULT', ci['goland-plugin']['steps'][-1]['env'])
+        self.assertIn('COMPOSE_RESULT', steps_after_telemetry(self, ci['goland-plugin'])[-1]['env'])
         workflow = load_yaml('.github/workflows/goland-compose.yml')['jobs']['components']
         self.assertEqual(workflow['env']['CI'], 'true')
         self.assertIn('check_compose_ui.py', json.dumps(workflow))
@@ -65,7 +66,7 @@ class ComposeReportsTests(unittest.TestCase):
         weekly = load_yaml('.github/workflows/goland-weekly.yml')['jobs']['plugin-compose']
         self.assertEqual(weekly['needs'], 'targets')
         self.assertEqual(weekly['with']['source-ref'], '${{ needs.targets.outputs.revision }}')
-        self.assertEqual(workflow['steps'][0]['with']['ref'], '${{ inputs.source-ref }}')
+        self.assertEqual(steps_after_telemetry(self, workflow)[0]['with']['ref'], '${{ inputs.source-ref }}')
 
 
 class ComposeHostReportsTests(unittest.TestCase):

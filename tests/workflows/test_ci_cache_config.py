@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+from test_workflow_telemetry import steps_after_telemetry
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 SPEC = importlib.util.spec_from_file_location('ci_cache_config', ROOT / 'scripts/ci-cache-config.py')
@@ -18,8 +20,7 @@ SPEC.loader.exec_module(CACHE)
 
 class CacheConfigTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / '.nvmrc').write_text('24\n')
         self.lock = {'version': '1.0.0', 'lockfileVersion': 3, 'packages': {
@@ -126,7 +127,7 @@ class CacheConfigTests(unittest.TestCase):
         before = CACHE.goland_keys(self.root)['goland-version']
         self.policy.write_text(self.policy.read_text().replace('uiTestIdeVersion=2026.2.1.1', 'uiTestIdeVersion=2026.2.2')
                                .replace('regressionVersions=', 'regressionVersions=GO:2026.2.0.1'))
-        self.assertEqual(CACHE.goland_keys(self.root)['goland-version'], before)
+        self.assertEqual(before, CACHE.goland_keys(self.root)['goland-version'])
 
     def test_duplicate_dynamic_or_wrong_product_policy_fails_closed(self):
         original = self.policy.read_text()
@@ -236,7 +237,7 @@ class CacheWorkflowTests(unittest.TestCase):
         self.assertEqual(gate['name'], 'Checks and macOS package smoke')
         self.assertEqual(gate['if'], '${{ always() }}')
         self.assertEqual(set(gate['needs']), {'impact', 'docs', 'project-checks', 'macos-package', 'desktop-e2e'})
-        run = gate['steps'][-1]['run']
+        run = steps_after_telemetry(self, gate)[-1]['run']
         for left in ['success', 'failure', 'cancelled', 'skipped']:
             for right in ['success', 'failure', 'cancelled', 'skipped']:
                 result = subprocess.run(['bash', '-e', '-c', run], cwd=ROOT, capture_output=True,

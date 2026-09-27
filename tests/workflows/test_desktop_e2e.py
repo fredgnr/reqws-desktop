@@ -15,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from test_workflow_telemetry import steps_after_telemetry
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from ide_ci import aggregate_desktop, classify
@@ -525,7 +527,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(gate['name'], 'Checks and macOS package smoke')
         self.assertEqual(gate['if'], '${{ always() }}')
         self.assertIn('desktop-e2e', gate['needs'])
-        script = gate['steps'][-1]['run']
+        script = steps_after_telemetry(self, gate)[-1]['run']
         environment = {**os.environ, 'DOCS_ONLY': 'false', 'DESKTOP_REQUIRED': 'true', 'DOCS_RESULT': 'skipped',
                        'IMPACT_RESULT': 'success', 'CHECK_RESULT': 'success', 'PACKAGE_RESULT': 'success', 'E2E_RESULT': 'success'}
         passing = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT, env=environment, capture_output=True)
@@ -549,12 +551,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(smoke, package_runs)
         self.assertLess(next(index for index, step in enumerate(package_runs) if 'package:macos' in step), package_runs.index(smoke))
         for job in (source, packaged):
-            upload = job['steps'][-1]
+            upload = steps_after_telemetry(self, job)[-1]
             self.assertEqual(upload['if'], '${{ always() }}')
             self.assertLessEqual(upload['with']['retention-days'], 7)
             self.assertNotIn('/Users/runner', upload['with']['path'])
             self.assertNotIn('continue-on-error', job)
-            self.assertFalse(any(step.get('continue-on-error') for step in job['steps']))
+            self.assertFalse(any(step.get('continue-on-error') for step in steps_after_telemetry(self, job)))
         for forbidden in ('run_local_ide.py', 'runIdeWithDriver', 'JETBRAINS_LICENSE_SERVER', 'secrets.', 'id-token'):
             self.assertNotIn(forbidden, json.dumps(ci))
         config = (ROOT / 'playwright.packaged.config.ts').read_text()

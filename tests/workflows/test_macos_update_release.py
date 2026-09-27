@@ -122,7 +122,7 @@ class UpdateWorkflowTests(unittest.TestCase):
 
     def test_secrets_only_reach_the_protected_signing_step(self):
         workflow = self.workflow('release.yml')
-        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        self.assertEqual(workflow['permissions'], {'contents': 'read', 'actions': 'read'})
         self.assertNotIn('pull_request_target', workflow['on'])
         package = workflow['jobs']['package']
         self.assertEqual(package['environment'], 'macos-release')
@@ -145,7 +145,7 @@ class UpdateWorkflowTests(unittest.TestCase):
         workflow = self.workflow('release.yml')
         publish = workflow['jobs']['publish']
         self.assertEqual(set(publish['needs']), {'validate', 'checks', 'package', 'goland-plugin', 'plugin-verification', 'plugin-compose'})
-        self.assertEqual(publish['permissions'], {'contents': 'write'})
+        self.assertEqual(publish['permissions'], {'contents': 'write', 'actions': 'read'})
         self.assertNotIn('MAC_SIGNING_P12', json.dumps(publish))
         run = next(step['run'] for step in publish['steps'] if 'gh release create' in step.get('run', ''))
         self.assertIn('latest-mac.yml', run)
