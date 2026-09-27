@@ -4,10 +4,10 @@
 
 ## 状态与授权范围
 
-- 方案状态：draft；S0 功能、依赖、真实输入与内容生命周期验证通过，独立审查已完成；2026-09-27 用户取消性能门禁后，G0 为 pass、S0 为 completed，S1 已 completed、G1 pass，S2 实施中，S3/S4 未开始，见[本轮验证记录](s0-verification-2026-09-26.md)。
+- 方案状态：draft；S0/S1/S2 已 completed，G0/G1/G2 pass，S3/S4 未开始。实际范围分别见 [S0](s0-verification-2026-09-26.md)、[S1](s1-verification-2026-09-27.md) 和 [S2](s2-verification-2026-09-27.md) 验证记录；性能指标不参与验收。
 - 初始调研基线：`main@b50a6b15d50658e067d3dd9283ea062e06aff559`；调研日期：2026-09-26。S0 实际基线为 `384894dab0e8dcc7c0040b08802eb3bd167a3c85` 加本轮验证补丁。
-- 初始文档 PR 只包含方案和索引。2026-09-26 用户授权在 `feat/plugin_rebuild_compose` 执行 S0；本轮使用隔离候选与专用测试 IDE，保留正式 Swing UI，不安装日常 IDE、不发布。
-- 2026-09-27 用户授权完成 S1/S2；正式 Factory 已切换生产 Compose 内容入口，S1 验证与独立审查通过，见 [S1 验证记录](s1-verification-2026-09-27.md)。S3/S4 不在本轮目标内。
+- 初始文档 PR 只包含方案和索引。2026-09-26 用户授权在 `feat/plugin_rebuild_compose` 执行 S0；S0 使用隔离候选与专用测试 IDE，当时保留正式 Swing UI，不安装日常 IDE、不发布。
+- 2026-09-27 用户授权完成 S1/S2；正式 Factory 已切换生产 Compose 内容，完整界面和状态/宿主验证已通过独立审查，见 [S1 验证记录](s1-verification-2026-09-27.md)与 [S2 验证记录](s2-verification-2026-09-27.md)。S3/S4 不在本轮目标内。
 - 项目处于早期阶段：目标实现不保留旧 Swing 内容层、旧 UI 开关、双实现或向后适配层。IntelliJ 宿主容器、数据安全与声明范围内的依赖/API 正确性仍然需要保留。
 
 ## 文档导航
@@ -19,6 +19,7 @@
 | [Subagent 协作方案](subagent-plan.md) | draft | 定义按需委派、模型核验、并发文件隔离、任务提示词和集成职责。 |
 | [测试与验收方案](test-plan.md) | draft | 定义分层验证、覆盖迁移、真实交互、生命周期及候选证据要求，性能指标不参与验收。 |
 | [调研依据](research.md) | draft | 区分已核对源码、官方能力、工程决策和仍需 S0 验证的假设。 |
+| [S2 验证记录](s2-verification-2026-09-27.md) | active | 记录完整生产屏幕、18 个组件用例、同候选检查和独立审查，G2 pass。 |
 | [S1 验证记录](s1-verification-2026-09-27.md) | active | 记录生产状态/宿主实现、95 个直接测试、最小宿主与独立审查闭环。 |
 | [S0 验证记录](s0-verification-2026-09-26.md) | active | 记录精确工具链、可复现探针、功能检查、真实输入与内容循环、独立审查和 G0 通过结论。 |
 

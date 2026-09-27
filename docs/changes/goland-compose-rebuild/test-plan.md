@@ -60,7 +60,7 @@ IDE 中的文件存在性使用 Project 面板目录/文件节点，不使用 Fi
 
 当前已有命令为 `npm run docs:check`、`npm run check:goland`、`npm run package:goland`，以及兼容性方案中的[本机集成入口](../ide-plugin-compatibility-automation/local-integration.md)。本机入口必须按其实际 CLI 传入候选 ZIP，不在本文编造未验证参数。
 
-`composeUiTest` 是计划新增的 Gradle 任务名，S0 验证后才能写入当前开发指南；尚不能把它当作已有命令。S3 接入 CI 后要求非零测试发现、失败正确传播、报告归档和负例自检。它使用单独 source set/runtime，不污染现有平台测试 classpath，也不进入生产 ZIP。
+`composeUiTest` 已在 S2 加入正式 Gradle 构建；本轮本机 JBR/macOS arm64 使用独立 source set/runtime 运行生产屏幕组件测试，不污染平台测试 classpath 或生产 ZIP。S3 仍负责 CI 图形环境接线、非零测试发现/失败传播/报告归档与负例自检；本机通过不能标为 CI 已完成。S1 的 `scripts/run_compose_content.py` 仅验证确切 ZIP 的最小 Content 生命周期，不替代既有三组/九进程集成入口。
 
 中间任务只跑直接影响的类/方法、编译和必要负例；最终集成候选运行保留的 `check:goland` 与新增测试。测试 harness 变化、依赖/SDK 改变、清理生产调用方之后必须重跑对应证据。只改本需求包时不跑 Gradle、不构建或启动 IDE。
 
