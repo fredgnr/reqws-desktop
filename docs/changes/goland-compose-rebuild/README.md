@@ -14,13 +14,13 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| [Product Design 原型与实施](product-design-2026-09-27.md) | active | 记录旧版基线上的诊断、字重与字号适配优化及本轮证据。 |
+| [Product Design 原型与实施](product-design-2026-09-27.md) | active | 记录原型、真实字号和全文交互修复、当前候选证据与原生复验缺口。 |
 | [技术方案](technical-design.md) | draft | 定义范围、宿主依赖、展示状态、线程、生命周期和旧代码清理边界。 |
 | [分阶段任务](tasks/README.md) | draft | 按 S0–S4 拆分可执行子任务、依赖、所有权和阶段验收条件。 |
 | [Subagent 协作方案](subagent-plan.md) | draft | 定义按需委派、模型核验、并发文件隔离、任务提示词和集成职责。 |
 | [测试与验收方案](test-plan.md) | draft | 定义分层验证、覆盖迁移、真实交互、生命周期及候选证据要求，性能指标不参与验收。 |
 | [调研依据](research.md) | draft | 区分已核对源码、官方能力、工程决策和仍需 S0 验证的假设。 |
-| [S4 清理记录](s4-verification-2026-09-27.md) | active | 跟踪旧实现删除、最终候选及待完成验收。 |
+| [S4 清理记录](s4-verification-2026-09-27.md) | active | 跟踪旧实现删除、新候选自动门禁与待完成的三套原生验收。 |
 | [S3 集成记录](s3-verification-2026-09-27.md) | active | 记录24组件、独立CI、原生输入/主题/重载/20轮资源证据和独立审查，G3 pass。 |
 | [S2 验证记录](s2-verification-2026-09-27.md) | active | 记录完整生产屏幕、18 个组件用例、同候选检查和独立审查，G2 pass。 |
 | [S1 验证记录](s1-verification-2026-09-27.md) | active | 记录生产状态/宿主实现、95 个直接测试、最小宿主与独立审查闭环。 |

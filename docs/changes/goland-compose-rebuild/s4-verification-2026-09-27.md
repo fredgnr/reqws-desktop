@@ -28,3 +28,11 @@ S3/G3已由 `d56d8f7` 独立审查收口；S4 in-progress，G4尚未通过。最
 ## 后续 Product Design 迭代
 
 用户随后要求先完成可见原型再改造UI，并允许适度美观性/可用性调整、不追求一比一复刻。新范围与当前证据见[Product Design记录](product-design-2026-09-27.md)。上面的 `3c305f6` 仅代表清理候选；新UI改变后的ZIP需重新绑定自动检查和本机证据，G4继续未通过。
+
+## 当前冻结候选与剩余原生验收
+
+当前生产与测试候选为 `b86134b`。本轮真实IDE发现的大字号行高不增长、长tooltip无法移入滚动及Escape关闭问题已实施修复，阶段失败、实际修复范围和证据边界见[Product Design后续记录](product-design-2026-09-27.md#后台键盘修复与本轮恢复点)。
+
+完整本地门禁已通过：364平台测试、30组件/环境测试及指定失败/空发现探针，332类ZIP隔离、编译/禁用符号和2+7 API。独立Reviewer已核对固定提交、原始报告和同一ZIP，未发现该范围内的阻塞；[代码CI](https://github.com/fredgnr/reqws-desktop/actions/runs/36302813633)成功。候选是 `/private/tmp/reqws-native-final-b86134b.zip`，私有身份文件为 `/private/tmp/reqws-native-final-candidate.json`。
+
+新ZIP的原生Compose、legacy和Desktop联动仍未运行，G4未通过。前台时段已经结束且测试进程全部退出、测试设置已恢复；继续前须获得新的前台确认。恢复入口是现有专用profile与显式候选ZIP，不能重新构建后沿用旧宿主报告。确认、登录、权限或环境事项需要用户协助时，按本会话规则说明恢复点并暂停goal；不自动等待或继续绕过。

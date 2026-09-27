@@ -59,3 +59,15 @@ Compose 三个生产文件已实现标题 Medium 字重、最多三行的语义�
 测试侧现补充280px窄栏、真实13/26字号、明暗主题、完整18字段诊断复制、tooltip真实滚轮尾段截图、8行列表的实际视口与滚动位移、同字号700px/280px空提示高度对照。专用fixture原字节与测试设置在finally恢复。原生首轮错误定位合并语义子节点、Compose虚拟组件无AWT Window祖先的滚轮错误和已失败的原始报告均保留，未作为产品通过证据。动态重载期间固定IDE可能临时注销Islands编辑器配色并报错；该独立场景改在内置浅色主题执行，仍保留全部IDE错误门禁，并在finally恢复原主题。
 
 这份后续修复候选尚待完整自动检查、最终原生三套验收与固定提交独立审查；S4/G4继续未通过。VoiceOver仍为用户豁免，性能预算不作为门禁。
+
+## 后台键盘修复与本轮恢复点
+
+生产提交 `3548d9c` 的新弹层在 `reqws-compose-host-s9g503mr` 已能接受真实指针进入及滚轮，基准字号尾段截图可见完整结尾，但复制操作被尚未关闭的弹层遮挡；该轮另有 Marketplace TLS EOF，整体失败。测试提交 `1116219` 增加 Escape、外点、焦点和新鲜剪贴板断言；`reqws-compose-host-nwhd_ipr` 随后确认真实 Escape 未关闭弹层。该轮生命周期和动态重载通过，但输入失败，不能记为完整原生通过。四个进程已退出，专用 active-session 标记已清除；约60分钟前台时段于2026-09-27 07:14 UTC结束，此后没有再启动原生IDE。
+
+后台修复固定为 `b86134b`：Screen 内的 tooltip 控制器只在内部焦点收到 KeyDown Escape 且确有可见弹层时消费按键；关闭前清除登记，销毁时按 owner 释放，避免旧回调影响新弹层。保留公开宿主 Popup 的外点和键盘关闭路径。新增组件回归验证复制按钮焦点保留、无弹层时 Escape 继续传播及禁用后的登记清理。它不证明编辑器等 ReqWS 外部焦点场景，也不替代真实宿主复验。
+
+干净 `b86134b` 的完整 `check:goland` 已退出0：39类364项平台测试，29组件加1环境共30项，均0失败/错误/跳过；指定断言与空发现探针按预期失败。生产/测试/集成编译、332类产物隔离、禁用符号、descriptor、最低/代表版2目标和完整7个API目标全部通过。日志为 `/private/tmp/reqws-native-final-check.log`，组件原始报告 `run-91ehucmh/evidence`，API私有目录 `reqws-api-_s5wku_c`。固定候选保存为 `/private/tmp/reqws-native-final-b86134b.zip`，身份记录 `/private/tmp/reqws-native-final-candidate.json`；保留ZIP、构建ZIP和九份API报告身份一致。
+
+独立 Reviewer `/root/native_acceptance_review` 使用经宿主显式参数核验的 `gpt-6-astra/xhigh`（非继承），复核固定代码、原始XML、失败探针、九份API报告及ZIP；未发现本轮源码或本地自动门禁范围内的剩余阻塞。对应[代码CI 36302813633](https://github.com/fredgnr/reqws-desktop/actions/runs/36302813633)已全部成功。后续文档提交不改变这些生产/测试输入；最终PR检查仍以相应HEAD为准。
+
+新 `b86134b` ZIP尚未启动原生验收。下一次获准时段须串行执行完整Compose宿主（包括实际Escape、13/26字号、280px窄栏、全文尾段、滚动和空提示）、legacy三组九进程、Desktop四组九进程，再审查该候选原始报告。不得沿用上述旧ZIP通过片段。S4/G4保持未通过；VoiceOver仍为用户豁免，性能预算不作为门禁。
