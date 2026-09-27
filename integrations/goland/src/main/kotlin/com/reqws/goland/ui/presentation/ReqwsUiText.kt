@@ -22,4 +22,3 @@ internal fun formatDetailsText(model: ReqwsUiState): String? = when {
   !model.visible -> ReqwsBundle.message("message.noManifest")
   else -> null
 }
-
