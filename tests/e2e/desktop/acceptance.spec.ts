@@ -127,7 +127,9 @@ test('D02 D04 V settings preserve existing business data and separate defaults s
   await navigate(desktop, 'Settings');
   await desktop.control({ directories: [parentDefault, fileDefault] });
   await desktop.page.getByRole('button', { name: 'Choose a folder for Default workspace parent folder', exact: true }).click();
+  await expect(desktop.page.getByLabel('Default workspace parent folder', { exact: true })).toHaveValue(parentDefault);
   await desktop.page.getByRole('button', { name: 'Choose a folder for .code-workspace file folder', exact: true }).click();
+  await expect(desktop.page.getByLabel('.code-workspace file folder', { exact: true })).toHaveValue(fileDefault);
   await desktop.page.getByRole('button', { name: 'Save settings', exact: true }).click();
   const settings = { localePreference: 'system', workspaceParentDirectory: parentDefault, workspaceFileDirectory: fileDefault };
   await expect.poll(async () => (await desktop.state()).settings).toEqual(settings);
@@ -402,6 +404,7 @@ test('D02 D04 V invalid and deleted directory defaults warn per field and recove
   await navigate(desktop, 'Settings');
   await desktop.control({ directories: [notDirectory] });
   await desktop.page.getByRole('button', { name: 'Choose a folder for Default workspace parent folder', exact: true }).click();
+  await expect(desktop.page.getByLabel('Default workspace parent folder', { exact: true })).toHaveValue(notDirectory);
   await desktop.page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await expect(desktop.page.getByRole('alert')).toContainText('SETTINGS_DIRECTORY_NOT_DIRECTORY');
   await expect(desktop.page.getByRole('alert')).toContainText('The selected path is not a folder.');
@@ -413,7 +416,9 @@ test('D02 D04 V invalid and deleted directory defaults warn per field and recove
   await mkdir(staleFiles, { mode: 0o700 });
   await desktop.control({ directories: [staleParent, staleFiles] });
   await desktop.page.getByRole('button', { name: 'Choose a folder for Default workspace parent folder', exact: true }).click();
+  await expect(desktop.page.getByLabel('Default workspace parent folder', { exact: true })).toHaveValue(staleParent);
   await desktop.page.getByRole('button', { name: 'Choose a folder for .code-workspace file folder', exact: true }).click();
+  await expect(desktop.page.getByLabel('.code-workspace file folder', { exact: true })).toHaveValue(staleFiles);
   await desktop.page.getByRole('button', { name: 'Save settings', exact: true }).click();
   const settings = { localePreference: 'system', workspaceParentDirectory: staleParent, workspaceFileDirectory: staleFiles };
   await expect.poll(async () => (await desktop.state()).settings).toEqual(settings);

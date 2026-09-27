@@ -11,6 +11,8 @@ test('D02 settings and language survive a cold process restart @smoke', async ({
   await chooseParent.click();
   await expect(page.getByLabel('Default workspace parent folder', { exact: true })).toHaveValue(isolation.workspaceRoot);
   await page.getByRole('button', { name: 'Choose a folder for .code-workspace file folder', exact: true }).click();
+  // A recorded native dialog call does not mean its IPC result has rendered.
+  await expect(page.getByLabel('.code-workspace file folder', { exact: true })).toHaveValue(isolation.outputRoot);
   expect(await desktop.app.evaluate(() => globalThis.__reqwsE2E.dialogCalls)).toEqual([
     expect.objectContaining({ properties: ['openDirectory', 'createDirectory'] }),
     expect.objectContaining({ properties: ['openDirectory', 'createDirectory'] }),
