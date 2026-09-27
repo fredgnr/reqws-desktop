@@ -67,9 +67,9 @@ class ComposeContentLifecycleTest {
         reqws.getState().getSnapshot()?.getLoading()?.getProject()?.getRevision() == fixture.revision &&
           reqws.getState().getValidatedProjectionDigest() != null
       }
+      withContext(OnDispatcher.EDT) { utility<ComposeLifecycleAppIcon>().getInstance().requestFocus() }
       openToolWindow("ReqWS")
-      val status = ideFrame().x { byAttribute("testtag", "reqws.status") }
-      waitFor("production Compose content", 30.seconds) { status.present() }
+      waitFor("production Compose content", 30.seconds) { ideFrame().x { byAttribute("testtag", "reqws.status") }.present() }
       repeat(3) {
         val owner = withContext(OnDispatcher.EDT) {
           assertEquals(1, window.getContentManager().getContentCount())
@@ -83,7 +83,7 @@ class ComposeContentLifecycleTest {
           owner
         }
         openToolWindow("ReqWS")
-        waitFor("production composition resumes after hide", 10.seconds) { status.present() }
+        waitFor("production composition resumes after hide", 10.seconds) { ideFrame().x { byAttribute("testtag", "reqws.status") }.present() }
         withContext(OnDispatcher.EDT) {
           window.getContentManager().removeAllContents(true)
           assertTrue(owner.isDisposed())
@@ -99,7 +99,7 @@ class ComposeContentLifecycleTest {
           assertFalse(window.getContentManager().getContents().single().getDisposer().isDisposed())
         }
         openToolWindow("ReqWS")
-        waitFor("recreated production composition", 10.seconds) { status.present() }
+        waitFor("recreated production composition", 10.seconds) { ideFrame().x { byAttribute("testtag", "reqws.status") }.present() }
       }
       fixture.assertDiskPreserved()
     }
@@ -204,3 +204,9 @@ interface ComposeLifecycleFactory { fun createToolWindowContent(project: Project
 interface ComposeLifecycleContent { fun getDisposer(): ComposeLifecycleOwner }
 @Remote("com.reqws.goland.ui.platform.ReqwsContentSession", plugin = "com.reqws.workspace")
 interface ComposeLifecycleOwner { fun isDisposed(): Boolean }
+
+@Remote("com.intellij.ui.AppIcon")
+interface ComposeLifecycleAppIcon {
+  fun getInstance(): ComposeLifecycleAppIcon
+  fun requestFocus()
+}
