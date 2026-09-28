@@ -1,3 +1,4 @@
+# Acceptance-only: consume the post-PR-36 default-branch caches without changing behavior.
 name: Set up Linux API verification caches
 description: One trusted CI producer for shared state/JBR; at most three hot SDK versions.
 inputs:
