@@ -1,6 +1,7 @@
 """Self-update asset and workflow boundaries use disposable local bytes only."""
 
 import base64
+import fnmatch
 import hashlib
 import importlib.util
 import json
@@ -47,6 +48,42 @@ class UpdateReleaseTests(unittest.TestCase):
         self.public_assets()
         MODULE.verify_release_assets(self.directory, '1.2.3')
         self.assertEqual(len((self.directory / 'SHA256SUMS').read_text().splitlines()), 3)
+
+    def test_publish_downloads_stage_only_release_packages_when_reports_share_the_prefix(self):
+        workflow = UpdateWorkflowTests.workflow('release.yml')
+        publish = workflow['jobs']['publish']
+        downloads = [step for step in publish['steps']
+                     if step.get('uses', '').startswith('actions/download-artifact@')
+                     and step.get('with', {}).get('path') == 'dist/release']
+        desktop_files = [self.desktop, self.desktop + '.sha256', 'latest-mac.yml', 'latest-mac.yml.sha256']
+        plugin_files = [self.plugin, self.plugin + '.sha256']
+        artifacts = {
+            'release-arm64': {name: (self.directory / name).read_bytes() for name in desktop_files},
+            'release-goland-plugin': {name: (self.directory / name).read_bytes() for name in plugin_files},
+            'release-goland-baseline': {'test-results/test/TEST-plugin.xml': b'<testsuite/>',
+                                       'reports/api-baseline/result.json': b'{}'},
+            'release-future-diagnostics': {'diagnostics.txt': b'not a release asset'},
+        }
+        selected = []
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            for step in downloads:
+                options = step['with']
+                matches = ([options['name']] if 'name' in options else
+                           fnmatch.filter(artifacts, options.get('pattern', '*')))
+                for artifact in matches:
+                    selected.append(artifact)
+                    for name, content in artifacts[artifact].items():
+                        target = stage / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(content)
+            MODULE.verify_release_assets(stage, '1.2.3', True)
+            self.assertTrue((stage / 'SHA256SUMS').is_file())
+        self.assertCountEqual(selected, ['release-arm64', 'release-goland-plugin'])
+        # A missing named package must fail in download-artifact itself, not be
+        # silently omitted by a wildcard match.
+        self.assertTrue(all('name' in step['with'] and not step.get('continue-on-error')
+                            for step in downloads))
 
     def test_reject_changed_draft_bytes_and_manifest(self):
         self.public_assets()

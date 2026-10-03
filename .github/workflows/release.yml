@@ -501,12 +501,19 @@ jobs:
       - name: Log release job context
         run: python3 scripts/log-release-context.py
 
-      - name: Download release files
+      # Reports such as release-goland-baseline share the release- prefix.
+      # Download each package by name so reports cannot enter the asset set.
+      - name: Download Desktop release files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-*
+          name: release-arm64
           path: dist/release
-          merge-multiple: true
+
+      - name: Download GoLand plugin release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-goland-plugin
+          path: dist/release
 
       - name: Verify release files and checksums
         run: python3 scripts/verify-release-assets.py --stage --directory dist/release --version "$VERSION"
