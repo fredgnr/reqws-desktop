@@ -2,5 +2,5 @@ package com.reqws.goland
 
 internal object ReqwsPlugin {
   const val ID = "com.reqws.workspace"
-  const val VERSION = "0.1.7"
+  const val VERSION = "0.2.0"
 }

@@ -2,7 +2,7 @@
 title: ReqWS 开发指南
 type: guide
 status: active
-updated: 2026-09-27
+updated: 2026-10-03
 ---
 
 # ReqWS 开发指南
@@ -288,6 +288,8 @@ npm run package:macos -- --skip-ci --skip-check
 ```
 
 产物位于 `out/ReqWS-darwin-<arch>/ReqWS.app`。脚手架校验 bundle ID、版本、Mach-O 架构和 codesign 结构。不要提交 `out/` 或 `.vite/`。
+
+Desktop 的打包图标由 `forge.config.ts` 指向 `build/icons/reqws.icns`；源图、尺寸和替换步骤见[图标资产说明](../../build/icons/README.md)。修改图标后需重新打包，已安装的旧 App 不会随源码更新。
 
 默认 `REQWS_BUILD_PROFILE=local` 保持 ad-hoc 签名，不复制更新 feed，并拒绝覆盖带更新配置的目标 App。`personal-release` 需要持久公开 DER 证书、匹配 pin、签名身份与钥匙串，缺项立即失败；正式包仅支持 arm64。生产更新服务、Settings 手动更新、安装活动互斥和 Release 工作流已接入；长期身份和 GitHub Environment 已配置，公开 CER 已放入实施工作树，真实 CI 签名及 Release 两版本验收仍待完成，见[实施记录](../changes/macos-self-update/implementation-2026-09-19.md)。
 

@@ -12,6 +12,7 @@ const config: ForgeConfig = {
     appBundleId: 'com.reqws.desktop',
     appCategoryType: 'public.app-category.developer-tools',
     name: 'ReqWS',
+    icon: path.join(repositoryRoot, 'build/icons/reqws.icns'),
     // Only production outputs may enter an app, even if source-E2E artifacts
     // exist alongside them. Do not rely solely on Forge's prePackage cleanup.
     ignore: (file) => file !== '' && file !== '/.vite'
